@@ -79,11 +79,11 @@ docker compose -f "$COMPOSE_FILE" up -d
 
 # --- post-deploy smoke check ---
 
-step "Waiting for API to become healthy"
-HOST_API_PORT=$(grep -E '^HOST_API_PORT=' "$ENV_FILE" | head -n1 | cut -d= -f2- | tr -d '"' || true)
-HOST_API_PORT=${HOST_API_PORT:-3000}
+step "Waiting for API to become healthy (via nginx)"
+NGINX_HOST_PORT=$(grep -E '^NGINX_HOST_PORT=' "$ENV_FILE" | head -n1 | cut -d= -f2- | tr -d '"' || true)
+NGINX_HOST_PORT=${NGINX_HOST_PORT:-80}
 
-URL="http://127.0.0.1:${HOST_API_PORT}/api/health/liveness"
+URL="http://127.0.0.1:${NGINX_HOST_PORT}/api/health/liveness"
 for i in $(seq 1 30); do
   if curl -sf "$URL" >/dev/null; then
     printf '\n[OK] Deploy succeeded. API healthy at %s\n' "$URL"
