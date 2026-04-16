@@ -23,7 +23,15 @@ export interface AppConfig {
     ttlMs: number;
     limit: number;
   };
+  trustProxy: boolean | number | string;
 }
+
+const parseTrustProxy = (raw: string): boolean | number | string => {
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  if (/^\d+$/.test(raw)) return parseInt(raw, 10);
+  return raw;
+};
 
 export default (): AppConfig => ({
   nodeEnv: (process.env.NODE_ENV as AppConfig['nodeEnv']) ?? 'development',
@@ -50,4 +58,5 @@ export default (): AppConfig => ({
     ttlMs: parseInt(process.env.THROTTLE_TTL_MS ?? '60000', 10),
     limit: parseInt(process.env.THROTTLE_LIMIT ?? '100', 10),
   },
+  trustProxy: parseTrustProxy(process.env.TRUST_PROXY ?? 'false'),
 });

@@ -40,4 +40,14 @@ export const envValidationSchema = Joi.object({
 
   THROTTLE_TTL_MS: Joi.number().integer().min(1000).default(60_000),
   THROTTLE_LIMIT: Joi.number().integer().min(1).default(100),
+
+  TRUST_PROXY: Joi.string()
+    .default('false')
+    .description(
+      'Express trust proxy setting. "false" = direct exposure (default), ' +
+        '"true" = trust all (unsafe — allows X-Forwarded-For spoofing), ' +
+        'a number = trust N hops, or a comma-separated list of IPs/CIDRs/' +
+        'keywords (e.g. "loopback,10.0.0.0/8"). Set to "1" when running ' +
+        'behind a single nginx/ALB hop.',
+    ),
 });
