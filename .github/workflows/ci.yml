@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: Lint, build, test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18.3
+        env:
+          POSTGRES_USER: nestjs
+          POSTGRES_PASSWORD: ci-postgres-password
+          POSTGRES_DB: nestjs_local
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nestjs"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NODE_ENV: test
+      PORT: 3001
+      SERVICE_NAME: nestjs
+      DB_USER: nestjs
+      DB_PASSWORD: ci-postgres-password
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_NAME: nestjs_test
+      DATABASE_URL: postgresql://nestjs:ci-postgres-password@localhost:5432/nestjs_test?schema=public
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ci-redis-password-not-actually-used
+      REDIS_URL: redis://default:ci-redis-password-not-actually-used@localhost:6379
+      JWT_SECRET: ci-jwt-secret-not-for-production-use-only-for-testing
+      JWT_EXPIRES_IN: 1h
+      CORS_ORIGIN: '*'
+      THROTTLE_TTL_MS: 60000
+      THROTTLE_LIMIT: 100
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: yarn prisma:generate
+
+      - name: Lint
+        run: yarn lint
+
+      - name: Build
+        run: yarn build
+
+      - name: Unit tests
+        run: yarn test --passWithNoTests
+
+      - name: E2E tests
+        run: yarn test:e2e
