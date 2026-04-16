@@ -41,11 +41,7 @@ export class AuthService {
   private buildLoginResponse(
     user: Awaited<ReturnType<UsersService['findById']>>,
   ): LoginResponse {
-    const payload: JwtPayload = {
-      sub: user.id,
-      email: user.email,
-      role: user.role,
-    };
+    const payload: JwtPayload = { sub: user.id };
     return {
       accessToken: this.jwtService.sign(payload),
       user: new UserResponseDto(user),
