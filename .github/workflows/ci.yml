@@ -58,7 +58,11 @@ jobs:
           cache: yarn
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: yarn install --frozen-lockfile --silent
+        env:
+          # Suppress Node deprecation warnings emitted by yarn 1.x itself
+          # (DEP0169 url.parse — yarn-internal, no fix available upstream).
+          NODE_OPTIONS: --no-deprecation
 
       - name: Generate Prisma client
         run: yarn prisma:generate

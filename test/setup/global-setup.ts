@@ -34,7 +34,7 @@ export default async function globalSetup(): Promise<void> {
     await client.end();
   }
 
-  execSync('npx prisma migrate deploy', {
+  execSync('prisma migrate deploy', {
     stdio: 'inherit',
     env: process.env,
   });
