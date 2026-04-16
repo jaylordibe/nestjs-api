@@ -1,5 +1,5 @@
 export interface AppConfig {
-  nodeEnv: 'development' | 'test' | 'staging' | 'production';
+  nodeEnv: 'development' | 'test' | 'production';
   serviceName: string;
   port: number;
   database: {
@@ -19,7 +19,6 @@ export interface AppConfig {
   cors: {
     origin: string;
   };
-  trustProxy: string;
   throttle: {
     ttlMs: number;
     limit: number;
@@ -47,7 +46,6 @@ export default (): AppConfig => ({
   cors: {
     origin: process.env.CORS_ORIGIN ?? '*',
   },
-  trustProxy: process.env.TRUST_PROXY ?? '',
   throttle: {
     ttlMs: parseInt(process.env.THROTTLE_TTL_MS ?? '60000', 10),
     limit: parseInt(process.env.THROTTLE_LIMIT ?? '100', 10),
