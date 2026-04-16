@@ -30,7 +30,7 @@ First-time setup: `docker compose up -d`, copy `.env.example` → `.env` (the de
 ## Docker
 
 - `docker-compose.yml` runs **only Postgres** so dev keeps using `yarn start:dev` for hot reload against the dockerized DB on `localhost:5432`. POSTGRES_USER/PASSWORD/DB/PORT can be overridden via env or shell vars.
-- `Dockerfile` is a 3-stage production build (`deps` → `build` → `runtime`). The `build` stage runs `prisma generate` + `nest build` then prunes to prod deps; `runtime` is `node:20-alpine` + `tini`, runs as non-root `app` user, ships `dist/`, `node_modules/`, and `prisma/` (so `prisma migrate deploy` is available at deploy time). Run migrations as a separate step (init container, deploy hook, etc.) — the entrypoint is just `node dist/main.js`.
+- `Dockerfile` is a 3-stage production build (`deps` → `build` → `runtime`). The `build` stage runs `prisma generate` + `nest build` then prunes to prod deps; `runtime` is `node:24-alpine` + `tini`, runs as non-root `app` user, ships `dist/`, `node_modules/`, and `prisma/` (so `prisma migrate deploy` is available at deploy time). Run migrations as a separate step (init container, deploy hook, etc.) — the entrypoint is just `node dist/main.js`.
 - `.dockerignore` excludes `node_modules`, `dist`, `.env*` (except `.env.example`), tests, IDE files.
 
 ## Architecture

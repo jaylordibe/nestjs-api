@@ -20,7 +20,7 @@ All endpoints are mounted under `/api`.
 
 ## First-time setup
 
-Requires Node 20+, Yarn, and Docker.
+Requires Node 22+ (LTS — Prisma 7 needs ≥22; CI and Docker run Node 24), Yarn, and Docker.
 
 ```bash
 # 1. start Postgres
