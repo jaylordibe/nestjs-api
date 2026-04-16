@@ -2,7 +2,7 @@ import * as Joi from 'joi';
 
 export const envValidationSchema = Joi.object({
   NODE_ENV: Joi.string()
-    .valid('development', 'test', 'production')
+    .valid('development', 'test', 'staging', 'production')
     .default('development'),
   PORT: Joi.number().default(3000),
 
@@ -37,6 +37,13 @@ export const envValidationSchema = Joi.object({
   JWT_EXPIRES_IN: Joi.string().default('1d'),
 
   CORS_ORIGIN: Joi.string().default('*'),
+
+  // Express "trust proxy" setting. Required when running behind a reverse
+  // proxy (nginx, Caddy, ALB) so req.ip resolves to the real client IP
+  // (used by throttler) instead of the proxy's IP.
+  // Common values: 'loopback' (nginx on same host), '1' (one upstream proxy),
+  // 'uniquelocal'. Leave empty for direct internet exposure.
+  TRUST_PROXY: Joi.string().allow('').default(''),
 
   THROTTLE_TTL_MS: Joi.number().integer().min(1000).default(60_000),
   THROTTLE_LIMIT: Joi.number().integer().min(1).default(100),

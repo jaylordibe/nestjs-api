@@ -96,6 +96,10 @@ docker run --rm -p 3000:3000 --env-file .env my-api
 
 The image runs `node dist/main.js` as a non-root user. Migrations are intentionally **not** run on container start — invoke `prisma migrate deploy` from an init container or deploy hook.
 
+## Deployment
+
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for the full staging deployment runbook (VPS setup, Docker Compose, nginx + TLS, deploy script, common operations, rollback).
+
 ## License
 
 UNLICENSED — adjust `package.json` and add a `LICENSE` file when you spin up a new project from this template.

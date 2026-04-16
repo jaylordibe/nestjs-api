@@ -9,7 +9,7 @@ WORKDIR /app
 RUN apk add --no-cache openssl
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json yarn.lock ./
-COPY tsconfig*.json nest-cli.json ./
+COPY tsconfig*.json nest-cli.json prisma.config.ts ./
 COPY prisma ./prisma
 COPY src ./src
 RUN yarn prisma generate \
