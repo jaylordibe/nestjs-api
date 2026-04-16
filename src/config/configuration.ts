@@ -1,5 +1,5 @@
 export interface AppConfig {
-  nodeEnv: 'development' | 'test' | 'production';
+  nodeEnv: 'development' | 'test' | 'staging' | 'production';
   serviceName: string;
   port: number;
   database: {
