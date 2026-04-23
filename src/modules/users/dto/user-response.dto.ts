@@ -24,6 +24,9 @@ export class UserResponseDto {
   timezone!: string | null;
 
   @Exclude() password!: string;
+  @Exclude() passwordChangedAt!: Date | null;
+  @Exclude() failedLoginCount!: number;
+  @Exclude() lockedUntil!: Date | null;
   @Exclude() otpHash!: string | null;
   @Exclude() otpPurpose!: string | null;
   @Exclude() otpExpiresAt!: Date | null;

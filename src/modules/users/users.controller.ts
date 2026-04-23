@@ -14,6 +14,7 @@ import {
   UseGuards,
   forwardRef,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -48,6 +49,7 @@ export class UsersController {
 
   @Post('sign-up')
   @Public()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   signUp(@Body() dto: SignUpDto): Promise<LoginResponse> {
     return this.authService.register(dto);
   }

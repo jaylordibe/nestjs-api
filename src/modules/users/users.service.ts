@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -16,7 +17,9 @@ import { UpdateAuthUserInfoDto } from './dto/update-auth-user-info.dto';
 import { UpdateAuthUserPasswordDto } from './dto/update-auth-user-password.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 
-const BCRYPT_ROUNDS = 10;
+// OWASP 2024+ guidance. Bumping this is safe — existing hashes already
+// encode their own cost factor and continue to verify correctly.
+const BCRYPT_ROUNDS = 12;
 
 @Injectable()
 export class UsersService {
@@ -29,6 +32,7 @@ export class UsersService {
         email: dto.email.toLowerCase(),
         username: dto.username?.toLowerCase(),
         password: passwordHash,
+        passwordChangedAt: new Date(),
         firstName: dto.firstName,
         middleName: dto.middleName,
         lastName: dto.lastName,
@@ -115,6 +119,7 @@ export class UsersService {
 
     if (dto.password) {
       data.password = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
+      data.passwordChangedAt = new Date();
     }
 
     return this.prisma.user.update({ where: { id }, data });
@@ -205,7 +210,11 @@ export class UsersService {
     const passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
     return this.prisma.user.update({
       where: { id: userId },
-      data: { password: passwordHash, updatedBy: actorId },
+      data: {
+        password: passwordHash,
+        passwordChangedAt: new Date(),
+        updatedBy: actorId,
+      },
     });
   }
 
@@ -214,11 +223,23 @@ export class UsersService {
     newPassword: string,
     actorId: string,
   ): Promise<User> {
+    // Refuse self-target: admins changing their own password must use
+    // /me/password, which requires the current password. Prevents a
+    // hijacked admin session from becoming a permanent account takeover.
+    if (userId === actorId) {
+      throw new ForbiddenException(
+        'Use /users/me/password to change your own password',
+      );
+    }
     await this.findById(userId);
     const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
     return this.prisma.user.update({
       where: { id: userId },
-      data: { password: passwordHash, updatedBy: actorId },
+      data: {
+        password: passwordHash,
+        passwordChangedAt: new Date(),
+        updatedBy: actorId,
+      },
     });
   }
 

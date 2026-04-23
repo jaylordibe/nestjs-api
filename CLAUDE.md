@@ -85,6 +85,8 @@ model Order {
 }
 ```
 
+The `User` model additionally carries auth-specific columns (`passwordChangedAt`, `failedLoginCount`, `lockedUntil`) — see **Security model** below.
+
 - `id` — UUID, always. Never use integer PKs.
 - `createdAt` / `updatedAt` — Prisma-managed timestamps.
 - `createdBy` / `updatedBy` — nullable UUIDs of the acting user. Nullable because system-created rows and unauthenticated creates (e.g. registration) have no actor. **Wiring them is the service's job — see "Audit fields" below.**
@@ -263,6 +265,26 @@ Required for every resource. Create `test/<resource>.e2e-spec.ts` — see "Addin
 - **APP_FILTER ordering**: global filters are LIFO — the **last** registered is tried first. `PrismaExceptionFilter` must be registered after `AllExceptionsFilter` so the specific filter gets first crack at Prisma errors before the catch-all runs. `app.module.ts` already does this.
 - **Config access**: `configService.getOrThrow<T>('jwt.secret')` etc. — keys are dot-paths into `configuration.ts`. Don't read `process.env` directly outside `configuration.ts`.
 - **`SERVICE_NAME` is the single source of truth** for the service identifier. It's exposed at `configService.get('serviceName')` and used to derive `DB_NAME` (which defaults to `${SERVICE_NAME}_local` via dotenv-expand — the `_local` suffix keeps the dev DB visually distinct from any same-named DB on a shared host). `DB_NAME` then drives the Postgres database name in compose and the `${DB_NAME}` slot in `DATABASE_URL`. Change `SERVICE_NAME` → DB name and URL follow automatically; override `DB_NAME` explicitly if you ever need the DB name to diverge (e.g., a parallel branch DB or a non-`_local` env). The compose container name uses `SERVICE_NAME` directly. `db.name` is also exposed at `configService.get('database.name')` for app-level use. Both `@nestjs/config` (`expandVariables: true`) and the Prisma CLI support `${VAR}` expansion in `.env`; modern docker-compose (v2+) interpolates variables within `.env` too.
+
+### Security model
+
+The template ships with a specific set of hardening decisions. Know these before relaxing any of them — each was a deliberate fix for a realistic attack.
+
+- **`JWT_SECRET` is required and validated** (`env.validation.ts`): Joi `.min(32).required().invalid(...)`. The `invalid()` clause rejects the exact string that once shipped in `.env.example` so an existing clone can't silently deploy with the template default. Regenerate per environment: `openssl rand -hex 48`.
+- **`JWT_EXPIRES_IN` defaults to `30d`** — matches consumer-app norms for booking/social/content apps. The security model relies on `passwordChangedAt`-based invalidation (below) rather than short expiry to limit the blast radius of token theft. For higher-value apps (banking, healthcare, admin consoles), drop to `1h` and layer on a refresh-token flow.
+- **JWT `issuer` + `audience` are bound to `SERVICE_NAME`** on both signing (`auth.module.ts`) and verification (`jwt.strategy.ts`). Tokens from one service can't be replayed against another even if they share a secret.
+- **Token invalidation on password change**: `User.passwordChangedAt` is written on create and every password update. `JwtStrategy.validate` rejects tokens whose `iat` is in a strictly earlier second than `passwordChangedAt`. Stolen tokens stop working the moment the real user rotates their password. Sub-second tolerance is built in so a freshly-issued token from the same login doesn't false-reject itself.
+- **Admin self-target on `PATCH /users/:id/password` is refused**: `UsersService.updatePasswordAsAdmin` throws 403 when `userId === actorId`. Admins must use `/me/password` (which requires the current password) to change their own — blocks session-hijack → permanent account takeover.
+- **Account lockout on failed logins**: 5 failed attempts → `lockedUntil = now + 15m`; successful login clears the counter. Tracked in `User.failedLoginCount` + `User.lockedUntil`. Combined with the per-IP throttle (10/min on `/auth/login`), distributed brute force is constrained.
+- **Login timing normalized**: when the email isn't registered, `AuthService.login` still runs a bcrypt compare against a lazy-computed dummy hash so wall-clock time doesn't distinguish "unknown user" from "wrong password". Closes the email enumeration vector.
+- **bcrypt cost = 12** (`users.service.ts:BCRYPT_ROUNDS`). OWASP 2024 guidance.
+- **Password policy**: `@MinLength(12)` + `@MaxLength(72)` (bcrypt truncation guard) + regex requiring at least one letter and one digit. Applied on create/sign-up and every "new password" field (not `currentPassword` fields, which must accept legacy values for re-auth).
+- **Sign-up rate-limited**: `@Throttle({ limit: 5, ttl: 60_000 })` on `POST /users/sign-up` (same as `/auth/register`). Prevents mass-account creation per IP.
+- **`@Public()` decorator**: `src/common/decorators/public.decorator.ts` + handled in `JwtAuthGuard`. Use sparingly — currently only `sign-up`. Any public endpoint that accepts user-controlled input needs its own `@Throttle(...)` too; the global 100/min is too loose for public endpoints.
+- **Generic 500 responses**: `AllExceptionsFilter` returns `"Internal server error"` for non-`HttpException` errors; the real message is logged server-side. Prevents leaking Prisma/Node internals (hostnames, file paths) to clients.
+- **Password, OTP hash, `passwordChangedAt`, `failedLoginCount`, `lockedUntil`** are all `@Exclude()`-marked in `UserResponseDto`. Never build a response that serializes these directly — always go through the DTO.
+
+When adding a new resource that stores user-facing secrets (API keys, tokens, etc.), mirror this pattern: never store in plaintext (hash or encrypt), `@Exclude()` from the response DTO, map per-field uniqueness errors through the global Prisma filter.
 
 ### Decorator-typed parameters and `isolatedModules`
 

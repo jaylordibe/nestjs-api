@@ -13,6 +13,12 @@ import {
   MinLength,
 } from 'class-validator';
 
+// 12+ chars, at least one letter and one digit. Composed with MaxLength(72)
+// to prevent bcrypt's silent 72-byte truncation.
+const PASSWORD_PATTERN = /^(?=.*[A-Za-z])(?=.*\d).+$/;
+const PASSWORD_MESSAGE =
+  'password must be at least 12 characters and contain a letter and a digit';
+
 export class CreateUserDto {
   @IsEmail()
   email!: string;
@@ -28,8 +34,9 @@ export class CreateUserDto {
   username?: string;
 
   @IsString()
-  @MinLength(8)
+  @MinLength(12)
   @MaxLength(72)
+  @Matches(PASSWORD_PATTERN, { message: PASSWORD_MESSAGE })
   password!: string;
 
   @IsString()

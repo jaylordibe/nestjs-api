@@ -4,7 +4,7 @@ import { App } from 'supertest/types';
 import { createTestApp } from './setup/test-app';
 import { truncateAll } from './setup/db';
 
-const VALID_PASSWORD = 'correct-horse-battery';
+const VALID_PASSWORD = 'correct-horse-battery-1';
 
 describe('Auth (e2e)', () => {
   let app: INestApplication<App>;
@@ -166,6 +166,20 @@ describe('Auth (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/auth/login')
         .send({ email: 'nope@example.com', password: VALID_PASSWORD })
+        .expect(401);
+    });
+
+    it('locks the account after 5 failed attempts (M6)', async () => {
+      for (let i = 0; i < 5; i++) {
+        await request(app.getHttpServer())
+          .post('/api/auth/login')
+          .send({ email: 'bob@example.com', password: 'wrong-password-1' })
+          .expect(401);
+      }
+      // Correct password is now rejected until lockout expires.
+      await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: 'bob@example.com', password: VALID_PASSWORD })
         .expect(401);
     });
   });

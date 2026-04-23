@@ -39,9 +39,11 @@ export class AllExceptionsFilter implements ExceptionFilter {
         message = body.message ?? exception.message;
         error = body.error;
       }
-    } else if (exception instanceof Error) {
-      message = exception.message;
     }
+    // Non-HttpException errors (Prisma connection loss, unexpected runtime
+    // errors) keep the generic "Internal server error" message — returning
+    // `exception.message` to clients leaks internal hostnames, file paths,
+    // and ORM internals. The real error is still logged below for ops.
 
     const body: ErrorResponseBody = {
       statusCode: status,

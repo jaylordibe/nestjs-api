@@ -6,7 +6,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { createTestApp } from './setup/test-app';
 import { truncateAll } from './setup/db';
 
-const PASSWORD = 'correct-horse-battery';
+const PASSWORD = 'correct-horse-battery-1';
 
 async function loginAs(
   app: INestApplication<App>,
@@ -482,6 +482,30 @@ describe('Users (e2e)', () => {
         .set('Authorization', `Bearer ${adminToken}`);
       expect(refetched.body.firstName).toBe('Patched');
       expect(refetched.body.isActive).toBe(false);
+    });
+
+    it('PATCH /api/users/:id/password refuses admin self-target (H3)', async () => {
+      await request(app.getHttpServer())
+        .patch(`/api/users/${adminId}/password`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ newPassword: 'new-admin-password-1' })
+        .expect(403);
+    });
+
+    it('old token is rejected after password change (H2)', async () => {
+      const { token } = await registerAndToken(app, 'rotate@example.com');
+      // Wait past a full second boundary so passwordChangedAt lands in a
+      // strictly later second than the token's iat.
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await request(app.getHttpServer())
+        .patch('/api/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: PASSWORD, newPassword: 'rotated-password-1' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .get('/api/users/me')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(401);
     });
 
     it('PATCH /api/users/:id/password lets admin reset without current password', async () => {

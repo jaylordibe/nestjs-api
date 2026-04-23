@@ -33,8 +33,20 @@ export const envValidationSchema = Joi.object({
     .uri({ scheme: ['redis', 'rediss'] })
     .required(),
 
-  JWT_SECRET: Joi.string().min(16).required(),
-  JWT_EXPIRES_IN: Joi.string().default('1d'),
+  JWT_SECRET: Joi.string()
+    .min(32)
+    .required()
+    .invalid(
+      // Reject the exact value that shipped in earlier versions of
+      // .env.example so existing checkouts can't silently deploy with the
+      // template default.
+      '136542716fe8f487721f5e2a3b48574cc3282c086487f28600bda8057f37c92e96c58e64ebe347d29517a2862c6694e2',
+    )
+    .messages({
+      'any.invalid':
+        'JWT_SECRET is the template default — regenerate with `openssl rand -hex 48`.',
+    }),
+  JWT_EXPIRES_IN: Joi.string().default('30d'),
 
   CORS_ORIGIN: Joi.string().default('*'),
 

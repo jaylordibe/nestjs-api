@@ -14,14 +14,21 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (configService: ConfigService): JwtModuleOptions => ({
-        secret: configService.getOrThrow<string>('jwt.secret'),
-        signOptions: {
-          expiresIn: configService.getOrThrow<string>(
-            'jwt.expiresIn',
-          ) as unknown as number,
-        },
-      }),
+      useFactory: (configService: ConfigService): JwtModuleOptions => {
+        const serviceName = configService.getOrThrow<string>('serviceName');
+        return {
+          secret: configService.getOrThrow<string>('jwt.secret'),
+          signOptions: {
+            expiresIn: configService.getOrThrow<string>(
+              'jwt.expiresIn',
+            ) as unknown as number,
+            // Bind tokens to this service so they can't be replayed against
+            // any other service that happens to share the same JWT_SECRET.
+            issuer: serviceName,
+            audience: serviceName,
+          },
+        };
+      },
     }),
   ],
   controllers: [AuthController],
