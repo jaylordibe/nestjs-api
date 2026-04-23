@@ -37,9 +37,6 @@ export const envValidationSchema = Joi.object({
     .min(32)
     .required()
     .invalid(
-      // Reject the exact value that shipped in earlier versions of
-      // .env.example so existing checkouts can't silently deploy with the
-      // template default.
       '136542716fe8f487721f5e2a3b48574cc3282c086487f28600bda8057f37c92e96c58e64ebe347d29517a2862c6694e2',
     )
     .messages({

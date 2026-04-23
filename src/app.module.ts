@@ -57,10 +57,6 @@ import { UsersModule } from './modules/users/users.module';
       }),
     },
     { provide: APP_INTERCEPTOR, useClass: ClassSerializerInterceptor },
-    // APP_FILTER is evaluated LIFO — the *last* registered filter is tried
-    // first. Put the catch-all first and the specific filter last so Prisma
-    // errors are picked up by PrismaExceptionFilter before falling through
-    // to AllExceptionsFilter.
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
     { provide: APP_FILTER, useClass: PrismaExceptionFilter },
   ],

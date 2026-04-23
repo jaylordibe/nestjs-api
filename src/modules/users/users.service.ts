@@ -223,9 +223,6 @@ export class UsersService {
     newPassword: string,
     actorId: string,
   ): Promise<User> {
-    // Refuse self-target: admins changing their own password must use
-    // /me/password, which requires the current password. Prevents a
-    // hijacked admin session from becoming a permanent account takeover.
     if (userId === actorId) {
       throw new ForbiddenException(
         'Use /users/me/password to change your own password',
