@@ -20,12 +20,23 @@ RUN yarn prisma generate \
 FROM node:24-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+# Strip npm/npx/corepack from the runtime image. We run `node dist/main.js`
+# directly, so npm isn't invoked at runtime. Leaving it in ships a bundled
+# copy of picomatch (CVE-2026-33671 et al.) and other npm-internal
+# dependencies that Trivy flags even though our own yarn resolutions
+# control the app's real dependency tree. Removing also trims ~15MB.
 RUN apk add --no-cache openssl tini \
+ && rm -rf /usr/local/lib/node_modules/npm \
+           /usr/local/lib/node_modules/corepack \
+           /usr/local/bin/npm \
+           /usr/local/bin/npx \
+           /usr/local/bin/corepack \
  && addgroup -S app && adduser -S app -G app
 COPY --from=build --chown=app:app /app/node_modules ./node_modules
 COPY --from=build --chown=app:app /app/dist ./dist
 COPY --from=build --chown=app:app /app/prisma ./prisma
 COPY --from=build --chown=app:app /app/package.json ./package.json
+COPY --from=build --chown=app:app /app/yarn.lock ./yarn.lock
 USER app
 EXPOSE 3000
 ENTRYPOINT ["/sbin/tini", "--"]
