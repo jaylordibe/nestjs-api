@@ -44,7 +44,7 @@ src/
   config/              # configuration.ts (typed factory), env.validation.ts (Joi schema)
   prisma/              # @Global() PrismaModule + PrismaService (extends PrismaClient, OnModuleInit/Destroy)
   common/
-    decorators/        # Roles, CurrentUser (+ AuthenticatedUser type)
+    decorators/        # Roles, CurrentUser (+ AuthenticatedUser type), Public (skips JwtAuthGuard)
     guards/            # RolesGuard (Reflector-based, reads ROLES_KEY metadata)
     filters/           # AllExceptionsFilter (normalizes to { statusCode, message, error?, path, timestamp })
     dto/               # PaginationQueryDto, PaginatedResponseDto<T>, PaginationMeta (shared by every list endpoint)
@@ -58,13 +58,10 @@ prisma/schema.prisma   # PostgreSQL datasource; User model
 
 Endpoints (all under `/api`):
 - **Auth** — `POST /auth/register`, `POST /auth/login`, `GET /auth/me` (JwtAuthGuard). Login + register override the global throttle with stricter per-route limits (10/min and 5/min) to slow brute-force attempts.
-- **Users** (all admin-only via `@Roles(Role.ADMIN)` at the controller):
-  - `POST /users` — create
-  - `GET /users` — paginated list (`?page=1&perPage=20`, max perPage 100)
-  - `GET /users/all` — full unpaginated list
-  - `GET /users/:id` — single user
-  - `PATCH /users/:id` — partial update
-  - `DELETE /users/:id` — hard delete (204)
+- **Users** — the class has `@UseGuards(JwtAuthGuard, RolesGuard)`; each handler declares its own `@Roles(...)` (or `@Public()` for `sign-up`). Split:
+  - **Public**: `POST /users/sign-up` — delegates to `AuthService.register`; returns `{ accessToken, user }`.
+  - **Self-service** (any authenticated user; no `@Roles`): `GET /users/me`, `PATCH /users/me` (profile fields only), `DELETE /users/me` (soft delete — flips `isActive`), `PATCH /users/me/username`, `PATCH /users/me/email` (requires `currentPassword`; resets `emailVerifiedAt`), `PATCH /users/me/password` (requires `currentPassword`), `PATCH /users/me/profile-image`, `POST /users/verify-email` (consumes OTP — issuance endpoint is a TODO).
+  - **Admin** (`@Roles(Role.ADMIN)`): `POST /users`, `GET /users` (paginated, `?page=1&perPage=20`, max 100), `GET /users/all`, `GET /users/:id`, `PATCH /users/:id`, `PATCH /users/:id/password` (no current-password check), `DELETE /users/:id` (hard delete, 204).
 - **Health** — `GET /health/liveness` (process memory heap < 512MB — for k8s liveness; must NOT depend on DB), `GET /health/readiness` (DB `SELECT 1` — for readiness/LB probes; returns 503 if DB is down).
 
 ## Generating a new resource
@@ -259,7 +256,8 @@ Required for every resource. Create `test/<resource>.e2e-spec.ts` — see "Addin
 - **Validation is global**: `ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true, transformOptions: { enableImplicitConversion: true } })` is registered as `APP_PIPE` in `app.module.ts`. Add a DTO for every request body/query — extra fields → 400. Query-string numbers (`?page=2`) auto-convert to `number` thanks to `enableImplicitConversion`.
 - **Response serialization**: global `ClassSerializerInterceptor` (`APP_INTERCEPTOR` in `app.module.ts`). Controllers return DTO instances (`new <Resource>ResponseDto(row)`); `@Exclude()`-marked fields are stripped before JSON. Never return raw Prisma rows.
 - **Auth payload shape**: JWT carries `{ sub, email, role }`. `JwtStrategy.validate` re-fetches the user **by `sub`** via `UsersService.findByIdOrNull` (non-throwing, so a missing user surfaces as 401, not 404), checks `isActive`, and returns `AuthenticatedUser` (the `request.user` shape). Use `@CurrentUser()` to read it; it returns `AuthenticatedUser`, NOT a full `User`. If you need the full row in a handler, call `usersService.findById(currentUser.id)`.
-- **Role-based access**: `@UseGuards(JwtAuthGuard, RolesGuard) @Roles(Role.ADMIN)` on the handler/controller. `RolesGuard` allows when no `@Roles()` is set, so `JwtAuthGuard` alone = "any authenticated user". Role values in the DB are lowercase (`'admin'`, `'user'`) per the enum-style convention above.
+- **Role-based access**: `@UseGuards(JwtAuthGuard, RolesGuard)` at the class, then either `@Roles(Role.ADMIN)` on handlers that need admin, or no `@Roles` on handlers any authenticated user can hit. `RolesGuard` is a no-op when `@Roles()` is absent, so the handler-level decorator is what actually gates access. For mixed public/private within one controller, use `@Public()` on the public handlers — the `JwtAuthGuard` honors it and skips authentication. Role values in the DB are lowercase (`'admin'`, `'user'`) per the enum-style convention above.
+- **Cross-module forward refs**: when a controller needs a service from a module that already imports back (e.g. `UsersController` needs `AuthService`, and `AuthModule` imports `UsersModule`), break the cycle with `forwardRef` in both `imports` and the `@Inject` constructor parameter. See `users.module.ts` ↔ `auth.module.ts` + `UsersController`.
 - **Prisma access** goes through `PrismaService` (DI-injected). The module is `@Global()` — no need to re-import.
 - **Unique-constraint violations** are mapped to `ConflictException` via a `mapKnownError` helper that checks `err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'` and reads `err.meta.target` to name the violated field. See `users.service.ts`.
 - **Config access**: `configService.getOrThrow<T>('jwt.secret')` etc. — keys are dot-paths into `configuration.ts`. Don't read `process.env` directly outside `configuration.ts`.

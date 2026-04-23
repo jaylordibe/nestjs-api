@@ -52,6 +52,21 @@ async function registerUser(
   return res.body.accessToken as string;
 }
 
+async function registerAndToken(
+  app: INestApplication<App>,
+  email = 'user@example.com',
+): Promise<{ id: string; token: string }> {
+  const res = await request(app.getHttpServer())
+    .post('/api/auth/register')
+    .send({
+      email,
+      password: PASSWORD,
+      firstName: 'Regular',
+      lastName: 'User',
+    });
+  return { id: res.body.user.id, token: res.body.accessToken };
+}
+
 describe('Users (e2e)', () => {
   let app: INestApplication<App>;
 
@@ -78,6 +93,191 @@ describe('Users (e2e)', () => {
         .get('/api/users')
         .set('Authorization', `Bearer ${token}`)
         .expect(403);
+    });
+  });
+
+  describe('sign-up and self-service', () => {
+    it('POST /api/users/sign-up creates a user and returns a token', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/users/sign-up')
+        .send({
+          email: 'newbie@example.com',
+          password: PASSWORD,
+          firstName: 'New',
+          lastName: 'Bie',
+        })
+        .expect(201);
+      expect(res.body.accessToken).toEqual(expect.any(String));
+      expect(res.body.user.email).toBe('newbie@example.com');
+      expect(res.body.user.role).toBe('user');
+    });
+
+    it('GET /api/users/me returns the authenticated user', async () => {
+      const { token } = await registerAndToken(app, 'me@example.com');
+      const res = await request(app.getHttpServer())
+        .get('/api/users/me')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+      expect(res.body.email).toBe('me@example.com');
+      expect(res.body).not.toHaveProperty('password');
+    });
+
+    it('GET /api/users/me rejects unauthenticated with 401', async () => {
+      await request(app.getHttpServer()).get('/api/users/me').expect(401);
+    });
+
+    it('PATCH /api/users/me updates allowed profile fields only', async () => {
+      const { token } = await registerAndToken(app);
+      const res = await request(app.getHttpServer())
+        .patch('/api/users/me')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ firstName: 'Renamed', timezone: 'Asia/Manila' })
+        .expect(200);
+      expect(res.body.firstName).toBe('Renamed');
+      expect(res.body.timezone).toBe('Asia/Manila');
+
+      // Disallowed fields (role, email) rejected by the whitelist.
+      await request(app.getHttpServer())
+        .patch('/api/users/me')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ role: 'admin' })
+        .expect(400);
+    });
+
+    it('DELETE /api/users/me soft-deletes (isActive=false)', async () => {
+      const { id, token } = await registerAndToken(app);
+      await request(app.getHttpServer())
+        .delete('/api/users/me')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(204);
+
+      const prisma = app.get(PrismaService);
+      const row = await prisma.user.findUniqueOrThrow({ where: { id } });
+      expect(row.isActive).toBe(false);
+    });
+
+    it('PATCH /api/users/me/username changes username', async () => {
+      const { token } = await registerAndToken(app);
+      const res = await request(app.getHttpServer())
+        .patch('/api/users/me/username')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ username: 'Handle_01' })
+        .expect(200);
+      expect(res.body.username).toBe('handle_01');
+    });
+
+    it('PATCH /api/users/me/username returns 409 on duplicate', async () => {
+      const a = await registerAndToken(app, 'a@example.com');
+      await request(app.getHttpServer())
+        .patch('/api/users/me/username')
+        .set('Authorization', `Bearer ${a.token}`)
+        .send({ username: 'taken' })
+        .expect(200);
+
+      const b = await registerAndToken(app, 'b@example.com');
+      await request(app.getHttpServer())
+        .patch('/api/users/me/username')
+        .set('Authorization', `Bearer ${b.token}`)
+        .send({ username: 'taken' })
+        .expect(409);
+    });
+
+    it('PATCH /api/users/me/email updates email and resets emailVerifiedAt', async () => {
+      const { id, token } = await registerAndToken(app, 'old@example.com');
+      // Pre-set emailVerifiedAt so we can assert it's cleared.
+      const prisma = app.get(PrismaService);
+      await prisma.user.update({
+        where: { id },
+        data: { emailVerifiedAt: new Date() },
+      });
+
+      const res = await request(app.getHttpServer())
+        .patch('/api/users/me/email')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ newEmail: 'new@example.com', currentPassword: PASSWORD })
+        .expect(200);
+      expect(res.body.email).toBe('new@example.com');
+      expect(res.body.emailVerifiedAt).toBeNull();
+    });
+
+    it('PATCH /api/users/me/email rejects wrong current password with 401', async () => {
+      const { token } = await registerAndToken(app);
+      await request(app.getHttpServer())
+        .patch('/api/users/me/email')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          newEmail: 'x@example.com',
+          currentPassword: 'wrong-password-1',
+        })
+        .expect(401);
+    });
+
+    it('PATCH /api/users/me/password requires current password', async () => {
+      const { token } = await registerAndToken(app, 'pw@example.com');
+      await request(app.getHttpServer())
+        .patch('/api/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          currentPassword: 'wrong-password-1',
+          newPassword: 'new-password-1',
+        })
+        .expect(401);
+
+      await request(app.getHttpServer())
+        .patch('/api/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: PASSWORD, newPassword: 'new-password-1' })
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: 'pw@example.com', password: 'new-password-1' })
+        .expect(200);
+    });
+
+    it('PATCH /api/users/me/profile-image updates the URL', async () => {
+      const { token } = await registerAndToken(app);
+      const res = await request(app.getHttpServer())
+        .patch('/api/users/me/profile-image')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ profileImageUrl: 'https://cdn.example.com/me.jpg' })
+        .expect(200);
+      expect(res.body.profileImageUrl).toBe('https://cdn.example.com/me.jpg');
+    });
+
+    it('POST /api/users/verify-email returns 400 when no OTP is in progress', async () => {
+      const { token } = await registerAndToken(app);
+      await request(app.getHttpServer())
+        .post('/api/users/verify-email')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ otp: '123456' })
+        .expect(400);
+    });
+
+    it('POST /api/users/verify-email succeeds when OTP matches', async () => {
+      const { id, token } = await registerAndToken(app, 'verify@example.com');
+      const prisma = app.get(PrismaService);
+      const otp = '123456';
+      await prisma.user.update({
+        where: { id },
+        data: {
+          otpHash: await bcrypt.hash(otp, 10),
+          otpPurpose: 'email_verify',
+          otpExpiresAt: new Date(Date.now() + 10 * 60_000),
+        },
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/users/verify-email')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ otp })
+        .expect(200);
+      expect(res.body.emailVerifiedAt).not.toBeNull();
+
+      const row = await prisma.user.findUniqueOrThrow({ where: { id } });
+      expect(row.otpHash).toBeNull();
+      expect(row.otpPurpose).toBeNull();
+      expect(row.otpExpiresAt).toBeNull();
     });
   });
 
@@ -282,6 +482,20 @@ describe('Users (e2e)', () => {
         .set('Authorization', `Bearer ${adminToken}`);
       expect(refetched.body.firstName).toBe('Patched');
       expect(refetched.body.isActive).toBe(false);
+    });
+
+    it('PATCH /api/users/:id/password lets admin reset without current password', async () => {
+      const target = await registerAndToken(app, 'target@example.com');
+      await request(app.getHttpServer())
+        .patch(`/api/users/${target.id}/password`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ newPassword: 'admin-reset-1' })
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: 'target@example.com', password: 'admin-reset-1' })
+        .expect(200);
     });
 
     it('DELETE /api/users/:id removes the user', async () => {
