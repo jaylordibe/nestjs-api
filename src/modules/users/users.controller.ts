@@ -37,11 +37,6 @@ import { UserResponseDto } from './dto/user-response.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { UsersService } from './users.service';
 
-// Class-level JwtAuthGuard runs on every handler; `@Public()` skips it for
-// signUp. RolesGuard runs too but is a no-op unless `@Roles(...)` is also set
-// on the handler — admin-only endpoints declare `@Roles(Role.ADMIN)`
-// individually; self-service endpoints (under /me) don't, which means any
-// authenticated user can hit them.
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class UsersController {
@@ -49,20 +44,14 @@ export class UsersController {
     private readonly usersService: UsersService,
     @Inject(forwardRef(() => AuthService))
     private readonly authService: AuthService,
-  ) {}
-
-  // --- Public -----------------------------------------------------------------
+  ) {
+  }
 
   @Post('sign-up')
   @Public()
   signUp(@Body() dto: SignUpDto): Promise<LoginResponse> {
     return this.authService.register(dto);
   }
-
-  // --- Self-service (any authenticated user) ---------------------------------
-  // All /me and /me/* routes must be declared before @Get(':id') / @Patch(':id')
-  // below — NestJS matches by declaration order, otherwise these get captured
-  // as UUID params and fail in ParseUUIDPipe with a 400.
 
   @Post('verify-email')
   @HttpCode(HttpStatus.OK)
@@ -154,8 +143,6 @@ export class UsersController {
     );
     return new UserResponseDto(user);
   }
-
-  // --- Admin ------------------------------------------------------------------
 
   @Post()
   @Roles(Role.ADMIN)
