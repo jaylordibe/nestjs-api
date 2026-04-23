@@ -41,6 +41,24 @@ CREATE TABLE "audit_logs" (
     CONSTRAINT "audit_logs_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE "app_versions" (
+    "id" UUID NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+    "createdBy" UUID,
+    "updatedBy" UUID,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "version" TEXT NOT NULL,
+    "description" TEXT,
+    "platform" TEXT NOT NULL,
+    "releaseDate" TIMESTAMP(3) NOT NULL,
+    "downloadUrl" TEXT,
+    "forceUpdate" BOOLEAN NOT NULL DEFAULT false,
+
+    CONSTRAINT "app_versions_pkey" PRIMARY KEY ("id")
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
 
@@ -52,3 +70,9 @@ CREATE INDEX "audit_logs_actorId_createdAt_idx" ON "audit_logs"("actorId", "crea
 
 -- CreateIndex
 CREATE INDEX "audit_logs_targetUserId_createdAt_idx" ON "audit_logs"("targetUserId", "createdAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "app_versions_platform_version_key" ON "app_versions"("platform", "version");
+
+-- CreateIndex
+CREATE INDEX "app_versions_platform_releaseDate_idx" ON "app_versions"("platform", "releaseDate");

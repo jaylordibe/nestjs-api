@@ -18,6 +18,7 @@ import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter'
 import configuration from './config/configuration';
 import { envValidationSchema } from './config/env.validation';
 import { PrismaModule } from './prisma/prisma.module';
+import { AppVersionsModule } from './modules/app-versions/app-versions.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
 import { UsersModule } from './modules/users/users.module';
@@ -101,6 +102,7 @@ import { UsersModule } from './modules/users/users.module';
     AuditModule,
     AuthModule,
     UsersModule,
+    AppVersionsModule,
     HealthModule,
   ],
   providers: [
