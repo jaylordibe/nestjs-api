@@ -30,7 +30,7 @@ async function seedAdmin(
       password: await bcrypt.hash(PASSWORD, 10),
       firstName: 'Admin',
       lastName: 'User',
-      role: 'ADMIN',
+      role: 'admin',
     },
   });
   return loginAs(app, email, PASSWORD);
@@ -95,7 +95,7 @@ describe('Users (e2e)', () => {
       expect(res.body).toHaveLength(1);
       expect(res.body[0]).toMatchObject({
         email: 'admin@example.com',
-        role: 'ADMIN',
+        role: 'admin',
       });
       expect(res.body[0]).not.toHaveProperty('password');
     });
@@ -109,12 +109,12 @@ describe('Users (e2e)', () => {
           password: PASSWORD,
           firstName: 'New',
           lastName: 'Person',
-          role: 'USER',
+          role: 'user',
         })
         .expect(201);
       expect(res.body).toMatchObject({
         email: 'new@example.com',
-        role: 'USER',
+        role: 'user',
         isActive: true,
       });
       expect(res.body).not.toHaveProperty('password');

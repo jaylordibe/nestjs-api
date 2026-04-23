@@ -39,7 +39,7 @@ describe('Auth (e2e)', () => {
           email: 'alice@example.com',
           firstName: 'Alice',
           lastName: 'Smith',
-          role: 'USER',
+          role: 'user',
           isActive: true,
         },
       });
@@ -108,7 +108,7 @@ describe('Auth (e2e)', () => {
           password: VALID_PASSWORD,
           firstName: 'X',
           lastName: 'Y',
-          role: 'ADMIN',
+          role: 'admin',
           isActive: false,
         })
         .expect(400);
@@ -179,7 +179,7 @@ describe('Auth (e2e)', () => {
       expect(res.body).toMatchObject({
         email: 'carol@example.com',
         firstName: 'Carol',
-        role: 'USER',
+        role: 'user',
         isActive: true,
       });
       expect(res.body).not.toHaveProperty('password');

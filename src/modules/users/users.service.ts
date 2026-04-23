@@ -21,20 +21,21 @@ export class UsersService {
       return await this.prisma.user.create({
         data: {
           email: dto.email.toLowerCase(),
+          username: dto.username?.toLowerCase(),
           password: passwordHash,
           firstName: dto.firstName,
+          middleName: dto.middleName,
           lastName: dto.lastName,
+          phoneNumber: dto.phoneNumber,
+          gender: dto.gender,
+          birthday: dto.birthday,
+          timezone: dto.timezone,
+          profileImageUrl: dto.profileImageUrl,
           role: dto.role,
         },
       });
     } catch (err) {
-      if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === 'P2002'
-      ) {
-        throw new ConflictException('Email already in use');
-      }
-      throw err;
+      throw this.mapKnownError(err);
     }
   }
 
@@ -65,8 +66,15 @@ export class UsersService {
 
     const data: Prisma.UserUpdateInput = {
       email: dto.email?.toLowerCase(),
+      username: dto.username?.toLowerCase(),
       firstName: dto.firstName,
+      middleName: dto.middleName,
       lastName: dto.lastName,
+      phoneNumber: dto.phoneNumber,
+      gender: dto.gender,
+      birthday: dto.birthday,
+      timezone: dto.timezone,
+      profileImageUrl: dto.profileImageUrl,
       role: dto.role,
       isActive: dto.isActive,
     };
@@ -78,18 +86,27 @@ export class UsersService {
     try {
       return await this.prisma.user.update({ where: { id }, data });
     } catch (err) {
-      if (
-        err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === 'P2002'
-      ) {
-        throw new ConflictException('Email already in use');
-      }
-      throw err;
+      throw this.mapKnownError(err);
     }
   }
 
   async remove(id: string): Promise<void> {
     await this.findById(id);
     await this.prisma.user.delete({ where: { id } });
+  }
+
+  private mapKnownError(err: unknown): unknown {
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === 'P2002'
+    ) {
+      const target = err.meta?.target;
+      const fields = Array.isArray(target) ? target : target ? [target] : [];
+      if (fields.includes('username')) {
+        return new ConflictException('Username already in use');
+      }
+      return new ConflictException('Email already in use');
+    }
+    return err;
   }
 }

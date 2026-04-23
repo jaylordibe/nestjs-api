@@ -1,20 +1,33 @@
--- CreateEnum
-CREATE TYPE "Role" AS ENUM ('ADMIN', 'USER');
-
 -- CreateTable
 CREATE TABLE "users" (
     "id" UUID NOT NULL,
-    "email" TEXT NOT NULL,
-    "password" TEXT NOT NULL,
-    "firstName" TEXT NOT NULL,
-    "lastName" TEXT NOT NULL,
-    "role" "Role" NOT NULL DEFAULT 'USER',
-    "isActive" BOOLEAN NOT NULL DEFAULT true,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
+    "createdBy" UUID,
+    "updatedBy" UUID,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "firstName" TEXT NOT NULL,
+    "middleName" TEXT,
+    "lastName" TEXT NOT NULL,
+    "username" TEXT,
+    "email" TEXT NOT NULL,
+    "password" TEXT NOT NULL,
+    "role" TEXT NOT NULL DEFAULT 'user',
+    "otpHash" TEXT,
+    "otpPurpose" TEXT,
+    "otpExpiresAt" TIMESTAMP(3),
+    "emailVerifiedAt" TIMESTAMP(3),
+    "phoneNumber" TEXT,
+    "gender" TEXT,
+    "profileImageUrl" TEXT,
+    "birthday" DATE,
+    "timezone" TEXT,
 
     CONSTRAINT "users_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
 CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "users_username_key" ON "users"("username");

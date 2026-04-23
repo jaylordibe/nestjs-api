@@ -6,21 +6,29 @@ datasource db {
   provider = "postgresql"
 }
 
-enum Role {
-  ADMIN
-  USER
-}
-
 model User {
-  id        String   @id @default(uuid()) @db.Uuid
-  email     String   @unique
-  password  String
-  firstName String
-  lastName  String
-  role      Role     @default(USER)
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              String    @id @default(uuid()) @db.Uuid
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  createdBy       String?   @db.Uuid
+  updatedBy       String?   @db.Uuid
+  isActive        Boolean   @default(true)
+  firstName       String
+  middleName      String?
+  lastName        String
+  username        String?   @unique
+  email           String    @unique
+  password        String
+  role            String    @default("user")
+  otpHash         String?
+  otpPurpose      String?
+  otpExpiresAt    DateTime?
+  emailVerifiedAt DateTime?
+  phoneNumber     String?
+  gender          String?
+  profileImageUrl String?
+  birthday        DateTime? @db.Date
+  timezone        String?
 
   @@map("users")
 }
