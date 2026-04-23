@@ -7,6 +7,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
 import configuration from './config/configuration';
 import { envValidationSchema } from './config/env.validation';
 import { PrismaModule } from './prisma/prisma.module';
@@ -56,7 +57,12 @@ import { UsersModule } from './modules/users/users.module';
       }),
     },
     { provide: APP_INTERCEPTOR, useClass: ClassSerializerInterceptor },
+    // APP_FILTER is evaluated LIFO — the *last* registered filter is tried
+    // first. Put the catch-all first and the specific filter last so Prisma
+    // errors are picked up by PrismaExceptionFilter before falling through
+    // to AllExceptionsFilter.
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
+    { provide: APP_FILTER, useClass: PrismaExceptionFilter },
   ],
 })
 export class AppModule {}

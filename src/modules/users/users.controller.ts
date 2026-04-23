@@ -44,8 +44,7 @@ export class UsersController {
     private readonly usersService: UsersService,
     @Inject(forwardRef(() => AuthService))
     private readonly authService: AuthService,
-  ) {
-  }
+  ) {}
 
   @Post('sign-up')
   @Public()

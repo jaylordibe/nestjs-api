@@ -46,7 +46,7 @@ src/
   common/
     decorators/        # Roles, CurrentUser (+ AuthenticatedUser type), Public (skips JwtAuthGuard)
     guards/            # RolesGuard (Reflector-based, reads ROLES_KEY metadata)
-    filters/           # AllExceptionsFilter (normalizes to { statusCode, message, error?, path, timestamp })
+    filters/           # AllExceptionsFilter (catch-all) + PrismaExceptionFilter (translates P2002/P2025 to 409/404)
     dto/               # PaginationQueryDto, PaginatedResponseDto<T>, PaginationMeta (shared by every list endpoint)
     enums/             # Role, Gender, OtpPurpose — TS-only enums (no DB enums — see "Generating a new resource")
   modules/
@@ -206,7 +206,7 @@ export class OrdersController {
 - `findById(id)` — throws `NotFoundException` when missing. Pair with `findByIdOrNull(id)` for non-throwing lookups (JwtStrategy needs the non-throwing form to return 401 instead of 404).
 - `update(id, dto, actorId)` — set `updatedBy: actorId`. Don't touch `createdBy`. Re-check existence first so a missing row throws 404, not a Prisma P2025.
 - `remove(id)` — hard delete via `prisma.<model>.delete` after existence check. For soft delete, `update({ isActive: false })` instead and document it.
-- **Map `PrismaClientKnownRequestError` P2002 → `ConflictException`** via a `mapKnownError` helper (see `users.service.ts`). When a table has multiple unique columns, disambiguate the message using `err.meta.target`.
+- **Don't try/catch Prisma errors in services.** `PrismaExceptionFilter` (global, registered in `app.module.ts`) catches `PrismaClientKnownRequestError` and translates `P2002 → 409 Conflict` (message derived from `err.meta.target`, e.g. "Email already in use"), `P2025 → 404 Not Found`, and anything else → 500. Let the errors bubble up.
 
 ### Audit fields
 
@@ -259,7 +259,8 @@ Required for every resource. Create `test/<resource>.e2e-spec.ts` — see "Addin
 - **Role-based access**: `@UseGuards(JwtAuthGuard, RolesGuard)` at the class, then either `@Roles(Role.ADMIN)` on handlers that need admin, or no `@Roles` on handlers any authenticated user can hit. `RolesGuard` is a no-op when `@Roles()` is absent, so the handler-level decorator is what actually gates access. For mixed public/private within one controller, use `@Public()` on the public handlers — the `JwtAuthGuard` honors it and skips authentication. Role values in the DB are lowercase (`'admin'`, `'user'`) per the enum-style convention above.
 - **Cross-module forward refs**: when a controller needs a service from a module that already imports back (e.g. `UsersController` needs `AuthService`, and `AuthModule` imports `UsersModule`), break the cycle with `forwardRef` in both `imports` and the `@Inject` constructor parameter. See `users.module.ts` ↔ `auth.module.ts` + `UsersController`.
 - **Prisma access** goes through `PrismaService` (DI-injected). The module is `@Global()` — no need to re-import.
-- **Unique-constraint violations** are mapped to `ConflictException` via a `mapKnownError` helper that checks `err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'` and reads `err.meta.target` to name the violated field. See `users.service.ts`.
+- **Unique-constraint violations & not-found errors** are translated by the global `PrismaExceptionFilter` — P2002 → 409 Conflict with a field-aware message (`"Email already in use"` / `"Username already in use"` / generic fallback), P2025 → 404. Services should not wrap Prisma calls in try/catch for these; the filter handles them uniformly across every resource. Custom message per field is handled inside the filter by dispatching on `err.meta.target`.
+- **APP_FILTER ordering**: global filters are LIFO — the **last** registered is tried first. `PrismaExceptionFilter` must be registered after `AllExceptionsFilter` so the specific filter gets first crack at Prisma errors before the catch-all runs. `app.module.ts` already does this.
 - **Config access**: `configService.getOrThrow<T>('jwt.secret')` etc. — keys are dot-paths into `configuration.ts`. Don't read `process.env` directly outside `configuration.ts`.
 - **`SERVICE_NAME` is the single source of truth** for the service identifier. It's exposed at `configService.get('serviceName')` and used to derive `DB_NAME` (which defaults to `${SERVICE_NAME}_local` via dotenv-expand — the `_local` suffix keeps the dev DB visually distinct from any same-named DB on a shared host). `DB_NAME` then drives the Postgres database name in compose and the `${DB_NAME}` slot in `DATABASE_URL`. Change `SERVICE_NAME` → DB name and URL follow automatically; override `DB_NAME` explicitly if you ever need the DB name to diverge (e.g., a parallel branch DB or a non-`_local` env). The compose container name uses `SERVICE_NAME` directly. `db.name` is also exposed at `configService.get('database.name')` for app-level use. Both `@nestjs/config` (`expandVariables: true`) and the Prisma CLI support `${VAR}` expansion in `.env`; modern docker-compose (v2+) interpolates variables within `.env` too.
 

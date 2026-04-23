@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ConflictException,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -25,28 +24,24 @@ export class UsersService {
 
   async create(dto: CreateUserDto, actorId: string | null): Promise<User> {
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
-    try {
-      return await this.prisma.user.create({
-        data: {
-          email: dto.email.toLowerCase(),
-          username: dto.username?.toLowerCase(),
-          password: passwordHash,
-          firstName: dto.firstName,
-          middleName: dto.middleName,
-          lastName: dto.lastName,
-          phoneNumber: dto.phoneNumber,
-          gender: dto.gender,
-          birthday: dto.birthday,
-          timezone: dto.timezone,
-          profileImageUrl: dto.profileImageUrl,
-          role: dto.role,
-          createdBy: actorId,
-          updatedBy: actorId,
-        },
-      });
-    } catch (err) {
-      throw this.mapKnownError(err);
-    }
+    return this.prisma.user.create({
+      data: {
+        email: dto.email.toLowerCase(),
+        username: dto.username?.toLowerCase(),
+        password: passwordHash,
+        firstName: dto.firstName,
+        middleName: dto.middleName,
+        lastName: dto.lastName,
+        phoneNumber: dto.phoneNumber,
+        gender: dto.gender,
+        birthday: dto.birthday,
+        timezone: dto.timezone,
+        profileImageUrl: dto.profileImageUrl,
+        role: dto.role,
+        createdBy: actorId,
+        updatedBy: actorId,
+      },
+    });
   }
 
   findAll(): Promise<User[]> {
@@ -122,11 +117,7 @@ export class UsersService {
       data.password = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
     }
 
-    try {
-      return await this.prisma.user.update({ where: { id }, data });
-    } catch (err) {
-      throw this.mapKnownError(err);
-    }
+    return this.prisma.user.update({ where: { id }, data });
   }
 
   async remove(id: string): Promise<void> {
@@ -169,14 +160,10 @@ export class UsersService {
     actorId: string,
   ): Promise<User> {
     await this.findById(userId);
-    try {
-      return await this.prisma.user.update({
-        where: { id: userId },
-        data: { username: username.toLowerCase(), updatedBy: actorId },
-      });
-    } catch (err) {
-      throw this.mapKnownError(err);
-    }
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { username: username.toLowerCase(), updatedBy: actorId },
+    });
   }
 
   async updateEmail(
@@ -192,18 +179,14 @@ export class UsersService {
     if (!passwordMatches) {
       throw new UnauthorizedException('Current password is incorrect');
     }
-    try {
-      return await this.prisma.user.update({
-        where: { id: userId },
-        data: {
-          email: dto.newEmail.toLowerCase(),
-          emailVerifiedAt: null,
-          updatedBy: actorId,
-        },
-      });
-    } catch (err) {
-      throw this.mapKnownError(err);
-    }
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        email: dto.newEmail.toLowerCase(),
+        emailVerifiedAt: null,
+        updatedBy: actorId,
+      },
+    });
   }
 
   async updateOwnPassword(
@@ -277,20 +260,5 @@ export class UsersService {
         updatedBy: userId,
       },
     });
-  }
-
-  private mapKnownError(err: unknown): unknown {
-    if (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === 'P2002'
-    ) {
-      const target = err.meta?.target;
-      const fields = Array.isArray(target) ? target : target ? [target] : [];
-      if (fields.includes('username')) {
-        return new ConflictException('Username already in use');
-      }
-      return new ConflictException('Email already in use');
-    }
-    return err;
   }
 }
