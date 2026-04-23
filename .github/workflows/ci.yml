@@ -77,12 +77,17 @@ jobs:
       - name: E2E tests
         run: yarn test:e2e
 
-      # Dependency vulnerability audit. Fails the build on moderate+ issues.
-      # If a true-positive warrants a temporary ignore, use `yarn audit --level high`
-      # with a linked issue — don't just lower this.
-      - name: Dependency audit
-        run: yarn npm audit --severity moderate --recursive || yarn audit --level moderate
-        continue-on-error: true
+      # Dependency vulnerability audit. Two-step: surface every moderate+
+      # finding as an informational log (never blocks), then gate the build
+      # on high+ only. Raising the floor to moderate means one unfixed
+      # transitive in a dev tool can red-light CI for days — not worth it.
+      # If a specific moderate finding matters, address it directly (yarn
+      # resolution, dep bump, or remove the package).
+      - name: Dependency audit (informational)
+        run: yarn audit --level moderate || true
+
+      - name: Dependency audit (blocks on high+)
+        run: yarn audit --level high
 
   docker:
     name: Build & scan container image
