@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-NestJS API template — NestJS 11 (TypeScript, Express) + Prisma 6 + PostgreSQL. JWT auth with role-based access control (`ADMIN`, `USER`). Intended as a GitHub template: spin up a new repo, set `SERVICE_NAME` in `.env`, and start adding feature modules. URLs are unversioned (`/api/...`) — add Nest URI versioning later if/when a v2 becomes necessary.
+NestJS API template — NestJS 11 (TypeScript, Express) + Prisma 7 + PostgreSQL. JWT auth with role-based access control (`ADMIN`, `USER`). Intended as a GitHub template: spin up a new repo, set `SERVICE_NAME` in `.env`, and start adding feature modules. URLs are unversioned (`/api/...`) — add Nest URI versioning later if/when a v2 becomes necessary.
 
 ## Commands
 
@@ -29,7 +29,7 @@ First-time setup: `docker compose up -d`, copy `.env.example` → `.env` (the de
 
 ## Docker
 
-- `docker-compose.yml` runs **only Postgres** so dev keeps using `yarn start:dev` for hot reload against the dockerized DB on `localhost:5432`. POSTGRES_USER/PASSWORD/DB/PORT can be overridden via env or shell vars.
+- `docker-compose.yml` runs Postgres + Redis so dev keeps using `yarn start:dev` for hot reload against the dockerized services.
 - `Dockerfile` is a 3-stage production build (`deps` → `build` → `runtime`). The `build` stage runs `prisma generate` + `nest build` then prunes to prod deps; `runtime` is `node:24-alpine` + `tini`, runs as non-root `app` user, ships `dist/`, `node_modules/`, and `prisma/` (so `prisma migrate deploy` is available at deploy time). Run migrations as a separate step (init container, deploy hook, etc.) — the entrypoint is just `node dist/main.js`.
 - `.dockerignore` excludes `node_modules`, `dist`, `.env*` (except `.env.example`), tests, IDE files.
 
@@ -37,41 +37,236 @@ First-time setup: `docker compose up -d`, copy `.env.example` → `.env` (the de
 
 ```
 src/
-  main.ts              # bootstrap: helmet, prefix /api, ValidationPipe, ClassSerializerInterceptor, AllExceptionsFilter, CORS
-  app.module.ts        # ConfigModule (global, Joi-validated) + ThrottlerModule (global APP_GUARD) + PrismaModule + feature modules
+  main.ts              # bootstrap: helmet, prefix /api, trust proxy, CORS, shutdown hooks
+  app.module.ts        # ConfigModule + ThrottlerModule + PrismaModule + feature modules;
+                       # registers global APP_PIPE (ValidationPipe), APP_INTERCEPTOR (ClassSerializerInterceptor),
+                       # APP_FILTER (AllExceptionsFilter), APP_GUARD (ThrottlerGuard)
   config/              # configuration.ts (typed factory), env.validation.ts (Joi schema)
   prisma/              # @Global() PrismaModule + PrismaService (extends PrismaClient, OnModuleInit/Destroy)
   common/
     decorators/        # Roles, CurrentUser (+ AuthenticatedUser type)
     guards/            # RolesGuard (Reflector-based, reads ROLES_KEY metadata)
     filters/           # AllExceptionsFilter (normalizes to { statusCode, message, error?, path, timestamp })
+    dto/               # PaginationQueryDto, PaginatedResponseDto<T>, PaginationMeta (shared by every list endpoint)
+    enums/             # Role, Gender, OtpPurpose — TS-only enums (no DB enums — see "Generating a new resource")
   modules/
     auth/              # AuthService, AuthController, JwtStrategy, JwtAuthGuard, login/register DTOs (per-route stricter throttle)
-    users/             # UsersService (bcrypt hashing, P2002→Conflict), controller, DTOs (Create/Update/Response)
+    users/             # UsersService, controller, DTOs (Create/Update/Response) — canonical resource pattern
     health/            # @nestjs/terminus: GET /health/liveness (memory) + GET /health/readiness (DB ping via PrismaHealthIndicator)
-prisma/schema.prisma   # User model + Role enum, PostgreSQL datasource
+prisma/schema.prisma   # PostgreSQL datasource; User model
 ```
 
 Endpoints (all under `/api`):
-- `POST /auth/register`, `POST /auth/login`, `GET /auth/me` (JwtAuthGuard) — auth-related, including the canonical "who am I?". Login + register override the global throttle with stricter per-route limits (10/min and 5/min respectively) to slow brute-force attempts.
-- `GET|POST /users`, `GET|PATCH|DELETE /users/:id` — `JwtAuthGuard + RolesGuard + @Roles(ADMIN)` (the `@Roles` is on the controller, so every endpoint is admin-only)
-- `GET /health/liveness` — process-only check (memory heap < 512MB). For k8s liveness probes — should NOT depend on the DB, otherwise a DB blip restarts every pod.
-- `GET /health/readiness` — DB reachability check via `SELECT 1`. For k8s readiness probes / load balancer health checks — returns 503 if DB is down so traffic stops being routed.
+- **Auth** — `POST /auth/register`, `POST /auth/login`, `GET /auth/me` (JwtAuthGuard). Login + register override the global throttle with stricter per-route limits (10/min and 5/min) to slow brute-force attempts.
+- **Users** (all admin-only via `@Roles(Role.ADMIN)` at the controller):
+  - `POST /users` — create
+  - `GET /users` — paginated list (`?page=1&perPage=20`, max perPage 100)
+  - `GET /users/all` — full unpaginated list
+  - `GET /users/:id` — single user
+  - `PATCH /users/:id` — partial update
+  - `DELETE /users/:id` — hard delete (204)
+- **Health** — `GET /health/liveness` (process memory heap < 512MB — for k8s liveness; must NOT depend on DB), `GET /health/readiness` (DB `SELECT 1` — for readiness/LB probes; returns 503 if DB is down).
 
-### Cross-cutting conventions
+## Generating a new resource
+
+Every new resource (`orders`, `products`, etc.) follows the users pattern *exactly*. When scaffolding, produce all of the following without being asked.
+
+### Required schema columns
+
+Every table has these columns, in this physical order, before resource-specific fields:
+
+```prisma
+model Order {
+  id              String    @id @default(uuid()) @db.Uuid
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  createdBy       String?   @db.Uuid
+  updatedBy       String?   @db.Uuid
+  isActive        Boolean   @default(true)
+  // resource-specific fields below this line
+  @@map("orders")
+}
+```
+
+- `id` — UUID, always. Never use integer PKs.
+- `createdAt` / `updatedAt` — Prisma-managed timestamps.
+- `createdBy` / `updatedBy` — nullable UUIDs of the acting user. Nullable because system-created rows and unauthenticated creates (e.g. registration) have no actor. **Wiring them is the service's job — see "Audit fields" below.**
+- `isActive` — soft-delete / toggle flag. Prefer `isActive = false` over hard delete for user-visible resources so the audit trail is preserved. Hard delete only for truly ephemeral data.
+
+### No DB enums
+
+Enum-like columns (status, type, role, gender) are stored as `String`. Constrain values with a TS enum in `src/common/enums/<name>.enum.ts` and validate inputs with `@IsEnum(MyEnum)` on the DTO. Reason: enum values are the most likely thing to grow; changing a DB enum requires a migration, changing a TS enum doesn't.
+
+**Enum style** — UPPER_SNAKE keys, lowercase_snake string values:
+
+```ts
+export enum OrderStatus {
+  PENDING = 'pending',
+  IN_PROGRESS = 'in_progress',
+  COMPLETED = 'completed',
+  CANCELED = 'canceled',
+}
+```
+
+The DB stores the lowercase form (`'in_progress'`); TS code uses the enum (`OrderStatus.IN_PROGRESS`). At the DB→app boundary (e.g. JWT strategy reading `user.role`), cast: `user.role as Role`.
+
+### Module layout
+
+```
+src/modules/<resource>/
+  dto/
+    create-<resource>.dto.ts     # class-validator annotations; no audit/system fields
+    update-<resource>.dto.ts     # extends PartialType(Create<Resource>Dto); optionally adds isActive
+    <resource>-response.dto.ts   # shape sent to clients; @Exclude() sensitive cols
+  <resource>.module.ts
+  <resource>.service.ts
+  <resource>.controller.ts
+```
+
+Register the module in `app.module.ts` imports. `PrismaModule` is `@Global()`, so the new module doesn't need to import it.
+
+### Standard endpoints (always these six, in this order)
+
+| Verb   | Path                | Method          | Returns                                        |
+|--------|---------------------|-----------------|------------------------------------------------|
+| POST   | `/<resource>`       | `create`        | `<Resource>ResponseDto`                        |
+| GET    | `/<resource>`       | `findPaginated` | `PaginatedResponseDto<<Resource>ResponseDto>`  |
+| GET    | `/<resource>/all`   | `findAll`       | `<Resource>ResponseDto[]`                      |
+| GET    | `/<resource>/:id`   | `findOne`       | `<Resource>ResponseDto`                        |
+| PATCH  | `/<resource>/:id`   | `update`        | `<Resource>ResponseDto`                        |
+| DELETE | `/<resource>/:id`   | `remove`        | `void` (204)                                   |
+
+Rules:
+
+- **Declaration order matters.** NestJS (Express) matches routes in declaration order, so `@Get('all')` must appear before `@Get(':id')` — otherwise `/all` gets captured by the UUID param and fails in `ParseUUIDPipe` with 400. Any future static path (`/search`, `/stats`) needs the same treatment.
+- **Paginated list** uses `PaginationQueryDto` from `src/common/dto/` and wraps results in `PaginatedResponseDto<T>`. Defaults: `page=1`, `perPage=20`, max `perPage=100`. Query-param pair is `page` + `perPage` (matching GitHub's `per_page` style); the matching meta shape is `{ page, perPage, total, totalPages }`.
+- **`/all` is unpaginated** — fine for dropdowns, exports, tables under a few thousand rows. If a resource can grow past that, document which endpoint callers should prefer, or add a hard cap inside the service. Callers who want more than 100 rows at a time should prefer `/all` over raising the `perPage` cap.
+- **PATCH, not PUT.** `Update<Resource>Dto = PartialType(Create<Resource>Dto)` — all fields optional, matching partial-update semantics. PUT's "replace entire resource" would need a separate DTO with required non-nullable fields and explicit null-ing of omitted ones; not worth it for CRUD.
+- **DELETE returns 204** via `@HttpCode(HttpStatus.NO_CONTENT)`. For soft delete, the endpoint stays `DELETE` and the service flips `isActive` instead of calling `prisma.<model>.delete`.
+- **UUID params** use `@Param('id', new ParseUUIDPipe())`.
+
+### Controller skeleton
+
+```ts
+@Controller('orders')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.ADMIN)                       // or specific roles; omit @Roles for "any authenticated user"
+export class OrdersController {
+  constructor(private readonly ordersService: OrdersService) {}
+
+  @Post()
+  async create(
+    @Body() dto: CreateOrderDto,
+    @CurrentUser() current: AuthenticatedUser,
+  ): Promise<OrderResponseDto> {
+    return new OrderResponseDto(await this.ordersService.create(dto, current.id));
+  }
+
+  @Get()
+  async findPaginated(
+    @Query() query: PaginationQueryDto,
+  ): Promise<PaginatedResponseDto<OrderResponseDto>> {
+    const { data, meta } = await this.ordersService.findPaginated(query);
+    return { data: data.map((r) => new OrderResponseDto(r)), meta };
+  }
+
+  // Must be before @Get(':id'). See "Declaration order matters" above.
+  @Get('all')
+  async findAll(): Promise<OrderResponseDto[]> {
+    const rows = await this.ordersService.findAll();
+    return rows.map((r) => new OrderResponseDto(r));
+  }
+
+  @Get(':id')
+  async findOne(
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ): Promise<OrderResponseDto> {
+    return new OrderResponseDto(await this.ordersService.findById(id));
+  }
+
+  @Patch(':id')
+  async update(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdateOrderDto,
+    @CurrentUser() current: AuthenticatedUser,
+  ): Promise<OrderResponseDto> {
+    return new OrderResponseDto(await this.ordersService.update(id, dto, current.id));
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async remove(@Param('id', new ParseUUIDPipe()) id: string): Promise<void> {
+    await this.ordersService.remove(id);
+  }
+}
+```
+
+### Service skeleton
+
+- `create(dto, actorId)` — set `createdBy: actorId, updatedBy: actorId`.
+- `findAll()` — `orderBy: { createdAt: 'desc' }`, no pagination, no filters.
+- `findPaginated(query)` — `findMany({ skip, take, orderBy })` + `count()` inside **one** `prisma.$transaction([...])` so the total matches the page.
+- `findById(id)` — throws `NotFoundException` when missing. Pair with `findByIdOrNull(id)` for non-throwing lookups (JwtStrategy needs the non-throwing form to return 401 instead of 404).
+- `update(id, dto, actorId)` — set `updatedBy: actorId`. Don't touch `createdBy`. Re-check existence first so a missing row throws 404, not a Prisma P2025.
+- `remove(id)` — hard delete via `prisma.<model>.delete` after existence check. For soft delete, `update({ isActive: false })` instead and document it.
+- **Map `PrismaClientKnownRequestError` P2002 → `ConflictException`** via a `mapKnownError` helper (see `users.service.ts`). When a table has multiple unique columns, disambiguate the message using `err.meta.target`.
+
+### Audit fields
+
+`createdBy` / `updatedBy` do **not** auto-populate — every mutating service method takes `actorId: string | null` and writes it:
+
+```ts
+create(dto: CreateOrderDto, actorId: string | null) {
+  return this.prisma.order.create({
+    data: { ...dto, createdBy: actorId, updatedBy: actorId },
+  });
+}
+```
+
+Controllers pass `@CurrentUser().id`. For unauthenticated creates (registration via `AuthService.register`) pass `null`. The users module follows this convention (see `UsersController.create`/`update` and `AuthService.register`). A request-scoped Prisma extension that sets these automatically across every model is a possible future improvement, but the explicit-arg pattern is deliberately chosen for now — it makes the actor visible at every callsite.
+
+### Response DTO
+
+Mirror the schema's column order: `id, createdAt, updatedAt, createdBy, updatedBy, isActive, ...resource fields`. Always construct via `new <Resource>ResponseDto(row)`; the global `ClassSerializerInterceptor` then strips `@Exclude()`-marked fields automatically. **Never return raw Prisma rows from a controller** — secrets (passwords, OTP hashes, tokens) leak otherwise.
+
+```ts
+export class OrderResponseDto {
+  id!: string;
+  createdAt!: Date;
+  updatedAt!: Date;
+  createdBy!: string | null;
+  updatedBy!: string | null;
+  isActive!: boolean;
+  // resource-specific fields
+  @Exclude() secretColumn!: string | null;
+  constructor(row: Order) { Object.assign(this, row); }
+}
+```
+
+### Migration
+
+Edit `prisma/schema.prisma`, then `yarn prisma:migrate dev --name add_<resource>`. **Until any deployed environment (staging/prod) has applied migrations, feel free to edit migration files in place** — collapse, reorder, rewrite. After the first real deploy, stop: Prisma records each applied migration's checksum in `_prisma_migrations` and drift-errors if an existing file changes. From that point on, only add new migrations.
+
+### E2E test
+
+Required for every resource. Create `test/<resource>.e2e-spec.ts` — see "Adding a new e2e spec" below. Minimum coverage: each of the six endpoints + access-control (401 unauthenticated, 403 wrong role if applicable) + pagination (meta shape, invalid params → 400).
+
+## Cross-cutting conventions
+
 - **Security headers**: `helmet()` is wired in `main.ts` before any route handler, applying the standard set of OWASP-recommended HTTP headers (CSP, HSTS, X-Frame-Options, etc.). Don't disable without a reason.
 - **Rate limiting**: `@nestjs/throttler` is registered globally as an `APP_GUARD` in `app.module.ts`, configured from `THROTTLE_TTL_MS` / `THROTTLE_LIMIT` env vars (default: 100 req / 60s / IP). Override per-route with `@Throttle({ default: { limit, ttl } })` — auth endpoints already do this. Disable per-route with `@SkipThrottle()` (used on `/health/*` so probes never get rate-limited).
 - **Trust proxy**: `main.ts` calls `app.set('trust proxy', config.trustProxy)` from the `TRUST_PROXY` env var. Default is `"false"` (direct exposure). When deploying behind nginx/ALB/Cloudflare/k8s ingress, set it to `"1"` (single hop) or a comma-separated CIDR list — otherwise `req.ip` is the proxy's IP and per-IP throttling collapses into one global bucket. Never set to `"true"` in prod (lets clients spoof `X-Forwarded-For`).
-- **Validation is global**: `ValidationPipe({ whitelist, forbidNonWhitelisted, transform, transformOptions: { enableImplicitConversion } })`. Add a DTO for every request body — extra fields → 400.
-- **Password is never returned**: `UserResponseDto` uses `@Exclude()` and is constructed via `new UserResponseDto(user)`. The global `ClassSerializerInterceptor` strips it. When adding endpoints that return a `User`, wrap it in `UserResponseDto` — don't return raw Prisma rows.
+- **Validation is global**: `ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true, transformOptions: { enableImplicitConversion: true } })` is registered as `APP_PIPE` in `app.module.ts`. Add a DTO for every request body/query — extra fields → 400. Query-string numbers (`?page=2`) auto-convert to `number` thanks to `enableImplicitConversion`.
+- **Response serialization**: global `ClassSerializerInterceptor` (`APP_INTERCEPTOR` in `app.module.ts`). Controllers return DTO instances (`new <Resource>ResponseDto(row)`); `@Exclude()`-marked fields are stripped before JSON. Never return raw Prisma rows.
 - **Auth payload shape**: JWT carries `{ sub, email, role }`. `JwtStrategy.validate` re-fetches the user **by `sub`** via `UsersService.findByIdOrNull` (non-throwing, so a missing user surfaces as 401, not 404), checks `isActive`, and returns `AuthenticatedUser` (the `request.user` shape). Use `@CurrentUser()` to read it; it returns `AuthenticatedUser`, NOT a full `User`. If you need the full row in a handler, call `usersService.findById(currentUser.id)`.
-- **Role-based access**: `@UseGuards(JwtAuthGuard, RolesGuard) @Roles(Role.ADMIN)` on the handler/controller. `RolesGuard` allows when no `@Roles()` is set, so `JwtAuthGuard` alone = "any authenticated user".
+- **Role-based access**: `@UseGuards(JwtAuthGuard, RolesGuard) @Roles(Role.ADMIN)` on the handler/controller. `RolesGuard` allows when no `@Roles()` is set, so `JwtAuthGuard` alone = "any authenticated user". Role values in the DB are lowercase (`'admin'`, `'user'`) per the enum-style convention above.
 - **Prisma access** goes through `PrismaService` (DI-injected). The module is `@Global()` — no need to re-import.
-- **Unique-constraint violations** in user mutations should be mapped to `ConflictException` by checking `err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'` (see `users.service.ts` for the pattern).
+- **Unique-constraint violations** are mapped to `ConflictException` via a `mapKnownError` helper that checks `err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'` and reads `err.meta.target` to name the violated field. See `users.service.ts`.
 - **Config access**: `configService.getOrThrow<T>('jwt.secret')` etc. — keys are dot-paths into `configuration.ts`. Don't read `process.env` directly outside `configuration.ts`.
 - **`SERVICE_NAME` is the single source of truth** for the service identifier. It's exposed at `configService.get('serviceName')` and used to derive `DB_NAME` (which defaults to `${SERVICE_NAME}_local` via dotenv-expand — the `_local` suffix keeps the dev DB visually distinct from any same-named DB on a shared host). `DB_NAME` then drives the Postgres database name in compose and the `${DB_NAME}` slot in `DATABASE_URL`. Change `SERVICE_NAME` → DB name and URL follow automatically; override `DB_NAME` explicitly if you ever need the DB name to diverge (e.g., a parallel branch DB or a non-`_local` env). The compose container name uses `SERVICE_NAME` directly. `db.name` is also exposed at `configService.get('database.name')` for app-level use. Both `@nestjs/config` (`expandVariables: true`) and the Prisma CLI support `${VAR}` expansion in `.env`; modern docker-compose (v2+) interpolates variables within `.env` too.
 
 ### Decorator-typed parameters and `isolatedModules`
+
 TypeScript here has `isolatedModules: true` + `emitDecoratorMetadata: true`. Types referenced in **decorated** function signatures (e.g. `@CurrentUser() current: AuthenticatedUser`) must be imported via `import type` (or a separate type-only import line) — combining a value + type import in one statement breaks the build with TS1272. Pattern used in this repo:
 ```ts
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -79,6 +274,7 @@ import type { AuthenticatedUser } from '../../common/decorators/current-user.dec
 ```
 
 ### `@nestjs/jwt` `expiresIn` typing quirk
+
 `JwtModuleOptions.signOptions.expiresIn` is typed as `number | StringValue` (a literal-template type from `ms`). Passing a runtime `string` from `ConfigService` requires `as unknown as number` (see `auth.module.ts`). If you change the cast, you'll re-introduce a TS error.
 
 ## Testing
@@ -89,9 +285,9 @@ import type { AuthenticatedUser } from '../../common/decorators/current-user.dec
 
 ### Test harness (`test/setup/`)
 
-- **`global-setup.ts`** — runs once before the test suite. Loads `.env.test`, connects to the `postgres` admin DB on the same Postgres container, **terminates any lingering connections**, **drops and re-creates** `${SERVICE_NAME}_test` (e.g. `nestjs_test`), then runs `prisma migrate deploy` against the fresh DB. So **every `yarn test:e2e` invocation starts from zero** — guaranteed schema parity with the migration history, no stale state from a previous run, and an implicit "do migrations work from empty?" gate on every run. Cost: ~2–3 seconds per run today, scales linearly with migration count.
+- **`global-setup.ts`** — runs once before the test suite. Loads `.env.test`, connects to the `postgres` admin DB on the same Postgres container, **terminates any lingering connections**, **drops and re-creates** `${SERVICE_NAME}_test` (e.g. `nestjs_test`), then runs `prisma migrate deploy` against the fresh DB. So **every `yarn test:e2e` invocation starts from zero** — guaranteed schema parity with the migration history, no stale state from a previous run, and an implicit "do migrations work from empty?" gate on every run.
 - **`load-env.ts`** — runs at the start of each test process (Jest `setupFiles`). Loads `.env.test` with `dotenv` + `dotenv-expand`. Uses `override: false` (dotenv default) so CI's `env:` block always wins.
-- **`test-app.ts`** — `createTestApp()` boots the full `AppModule` and applies the same global setup as `main.ts` (helmet, prefix `/api`, ValidationPipe, ClassSerializerInterceptor, AllExceptionsFilter). Tests should call this in `beforeAll`, not import individual modules — the goal is parity with prod.
+- **`test-app.ts`** — `createTestApp()` boots the full `AppModule` and applies the same global setup as `main.ts` (helmet, prefix `/api`). All other globals (ValidationPipe, ClassSerializerInterceptor, AllExceptionsFilter) are wired via `APP_*` providers and therefore apply automatically. Tests should call `createTestApp()` in `beforeAll`, not import individual modules — the goal is parity with prod.
 - **`db.ts`** — `truncateAll(app)` runs `TRUNCATE ... RESTART IDENTITY CASCADE` on every public-schema table (skipping `_prisma_migrations`). Call it in `beforeEach` for test isolation.
 
 ### Running locally
@@ -109,7 +305,7 @@ yarn test:e2e                   # globalSetup creates nestjs_test on first run
 2. `beforeAll`: `app = await createTestApp()`. `afterAll`: `await app.close()`.
 3. `beforeEach`: `await truncateAll(app)`.
 4. Use `request(app.getHttpServer()).post(...).send(...).expect(...)` — full path including `/api` prefix.
-5. To seed an `ADMIN`, write directly via `app.get(PrismaService).user.create({ ... role: 'ADMIN' })` then log in via `POST /api/auth/login` to get a token (the `register` endpoint always creates `USER` role — see `RegisterDto`).
+5. To seed an `ADMIN`, write directly via `app.get(PrismaService).user.create({ ... role: 'admin' })` then log in via `POST /api/auth/login` to get a token (the `register` endpoint always creates role `'user'` — see `RegisterDto`). Role values are lowercase — the TS enum `Role.ADMIN = 'admin'` is the source of truth.
 
 ### CI
 
@@ -133,6 +329,6 @@ This scaffold runs on **Prisma 7** with the **`@prisma/adapter-pg`** driver adap
 
 - **`prisma/schema.prisma`** has only `provider = "postgresql"` in its `datasource` block — no `url`. The connection URL lives in `prisma.config.ts` (loaded by the Prisma CLI for `migrate`/`generate`/`studio`) and is passed to the runtime client via the adapter constructor in `src/prisma/prisma.service.ts`.
 - **`prisma.config.ts`** loads `.env` (with `dotenv-expand` so `DATABASE_URL` interpolation works) and exposes `{ schema, migrations.path, datasource.url }` to the CLI. The Prisma CLI auto-discovers this file at the repo root.
-- **`PrismaService`** now has a constructor that injects `ConfigService`, builds a `PrismaPg({ connectionString })` adapter, and passes it to `super({ adapter })`. The `extends PrismaClient` pattern still holds; the only change vs. Prisma 6 is the constructor.
+- **`PrismaService`** has a constructor that injects `ConfigService`, builds a `PrismaPg({ connectionString })` adapter, and passes it to `super({ adapter })`. The `extends PrismaClient` pattern still holds; the only change vs. Prisma 6 is the constructor.
 
 The `pg` package is a **runtime dependency** (the adapter wraps a `pg.Pool`), not just a test devDep. Bumping the adapter or `pg` should be done together to avoid version skew.

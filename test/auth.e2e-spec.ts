@@ -46,6 +46,20 @@ describe('Auth (e2e)', () => {
       expect(res.body.user).not.toHaveProperty('password');
     });
 
+    it('leaves createdBy and updatedBy null (unauthenticated create)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/auth/register')
+        .send({
+          email: 'noactor@example.com',
+          password: VALID_PASSWORD,
+          firstName: 'No',
+          lastName: 'Actor',
+        })
+        .expect(201);
+      expect(res.body.user.createdBy).toBeNull();
+      expect(res.body.user.updatedBy).toBeNull();
+    });
+
     it('lowercases the email on storage', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/auth/register')

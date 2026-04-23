@@ -22,9 +22,9 @@ async function loginAs(
 async function seedAdmin(
   app: INestApplication<App>,
   email = 'admin@example.com',
-): Promise<string> {
+): Promise<{ id: string; token: string }> {
   const prisma = app.get(PrismaService);
-  await prisma.user.create({
+  const admin = await prisma.user.create({
     data: {
       email,
       password: await bcrypt.hash(PASSWORD, 10),
@@ -33,7 +33,8 @@ async function seedAdmin(
       role: 'admin',
     },
   });
-  return loginAs(app, email, PASSWORD);
+  const token = await loginAs(app, email, PASSWORD);
+  return { id: admin.id, token };
 }
 
 async function registerUser(
@@ -82,22 +83,88 @@ describe('Users (e2e)', () => {
 
   describe('as ADMIN', () => {
     let adminToken: string;
+    let adminId: string;
 
     beforeEach(async () => {
-      adminToken = await seedAdmin(app);
+      ({ id: adminId, token: adminToken } = await seedAdmin(app));
     });
 
-    it('GET /api/users returns the list', async () => {
+    it('GET /api/users returns a paginated list', async () => {
       const res = await request(app.getHttpServer())
         .get('/api/users')
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(200);
-      expect(res.body).toHaveLength(1);
-      expect(res.body[0]).toMatchObject({
+      expect(res.body).toMatchObject({
+        meta: { page: 1, perPage: 20, total: 1, totalPages: 1 },
+      });
+      expect(res.body.data).toHaveLength(1);
+      expect(res.body.data[0]).toMatchObject({
         email: 'admin@example.com',
         role: 'admin',
       });
+      expect(res.body.data[0]).not.toHaveProperty('password');
+    });
+
+    it('GET /api/users honors page and perPage query params', async () => {
+      await request(app.getHttpServer())
+        .post('/api/users')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          email: 'second@example.com',
+          password: PASSWORD,
+          firstName: 'Second',
+          lastName: 'User',
+        });
+
+      const page1 = await request(app.getHttpServer())
+        .get('/api/users?page=1&perPage=1')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+      expect(page1.body.meta).toEqual({
+        page: 1,
+        perPage: 1,
+        total: 2,
+        totalPages: 2,
+      });
+      expect(page1.body.data).toHaveLength(1);
+
+      const page2 = await request(app.getHttpServer())
+        .get('/api/users?page=2&perPage=1')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+      expect(page2.body.data).toHaveLength(1);
+      expect(page2.body.data[0].id).not.toBe(page1.body.data[0].id);
+    });
+
+    it('GET /api/users/all returns the full unpaginated list', async () => {
+      await request(app.getHttpServer())
+        .post('/api/users')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          email: 'second@example.com',
+          password: PASSWORD,
+          firstName: 'Second',
+          lastName: 'User',
+        });
+
+      const res = await request(app.getHttpServer())
+        .get('/api/users/all')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body).toHaveLength(2);
       expect(res.body[0]).not.toHaveProperty('password');
+    });
+
+    it('GET /api/users rejects invalid pagination params with 400', async () => {
+      await request(app.getHttpServer())
+        .get('/api/users?page=0')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(400);
+      await request(app.getHttpServer())
+        .get('/api/users?perPage=9999')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(400);
     });
 
     it('POST /api/users creates a user', async () => {
@@ -118,6 +185,43 @@ describe('Users (e2e)', () => {
         isActive: true,
       });
       expect(res.body).not.toHaveProperty('password');
+    });
+
+    it('POST /api/users sets createdBy and updatedBy to the acting admin', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/users')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          email: 'audited@example.com',
+          password: PASSWORD,
+          firstName: 'Audited',
+          lastName: 'User',
+        })
+        .expect(201);
+      expect(res.body.createdBy).toBe(adminId);
+      expect(res.body.updatedBy).toBe(adminId);
+    });
+
+    it('PATCH /api/users/:id updates updatedBy but leaves createdBy intact', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/users')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          email: 'audit-patch@example.com',
+          password: PASSWORD,
+          firstName: 'Audit',
+          lastName: 'Patch',
+        });
+      const createdBy = created.body.createdBy;
+
+      const other = await seedAdmin(app, 'other-admin@example.com');
+      const patched = await request(app.getHttpServer())
+        .patch(`/api/users/${created.body.id}`)
+        .set('Authorization', `Bearer ${other.token}`)
+        .send({ firstName: 'Renamed' })
+        .expect(200);
+      expect(patched.body.createdBy).toBe(createdBy);
+      expect(patched.body.updatedBy).toBe(other.id);
     });
 
     it('GET /api/users/:id returns a user', async () => {

@@ -5,6 +5,8 @@ import {
 } from '@nestjs/common';
 import { Prisma, User } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { PaginationMeta } from '../../common/dto/paginated-response.dto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -15,7 +17,7 @@ const BCRYPT_ROUNDS = 10;
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: CreateUserDto): Promise<User> {
+  async create(dto: CreateUserDto, actorId: string | null): Promise<User> {
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
     try {
       return await this.prisma.user.create({
@@ -32,6 +34,8 @@ export class UsersService {
           timezone: dto.timezone,
           profileImageUrl: dto.profileImageUrl,
           role: dto.role,
+          createdBy: actorId,
+          updatedBy: actorId,
         },
       });
     } catch (err) {
@@ -41,6 +45,30 @@ export class UsersService {
 
   findAll(): Promise<User[]> {
     return this.prisma.user.findMany({ orderBy: { createdAt: 'desc' } });
+  }
+
+  async findPaginated(
+    query: PaginationQueryDto,
+  ): Promise<{ data: User[]; meta: PaginationMeta }> {
+    const page = query.page ?? 1;
+    const perPage = query.perPage ?? 20;
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.user.findMany({
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * perPage,
+        take: perPage,
+      }),
+      this.prisma.user.count(),
+    ]);
+    return {
+      data,
+      meta: {
+        page,
+        perPage,
+        total,
+        totalPages: Math.ceil(total / perPage),
+      },
+    };
   }
 
   async findById(id: string): Promise<User> {
@@ -61,7 +89,11 @@ export class UsersService {
     });
   }
 
-  async update(id: string, dto: UpdateUserDto): Promise<User> {
+  async update(
+    id: string,
+    dto: UpdateUserDto,
+    actorId: string | null,
+  ): Promise<User> {
     await this.findById(id);
 
     const data: Prisma.UserUpdateInput = {
@@ -77,6 +109,7 @@ export class UsersService {
       profileImageUrl: dto.profileImageUrl,
       role: dto.role,
       isActive: dto.isActive,
+      updatedBy: actorId,
     };
 
     if (dto.password) {
