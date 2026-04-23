@@ -107,7 +107,7 @@ jobs:
       # Trivy scans the built image for CVEs in OS packages and node modules.
       # Fails on HIGH or CRITICAL; MEDIUM is reported but non-blocking.
       - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: nestjs-api:ci
           format: table
