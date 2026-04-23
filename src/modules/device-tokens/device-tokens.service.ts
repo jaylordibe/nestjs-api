@@ -95,7 +95,6 @@ export class DeviceTokensService {
       deviceType: dto.deviceType,
       deviceOs: dto.deviceOs,
       deviceOsVersion: dto.deviceOsVersion,
-      isActive: dto.isActive,
       updatedBy: actorId,
     };
     if (dto.userId !== undefined) {

@@ -59,7 +59,6 @@ model AppVersion {
   updatedAt   DateTime @updatedAt
   createdBy   String?  @db.Uuid
   updatedBy   String?  @db.Uuid
-  isActive    Boolean  @default(true)
   version     String
   description String?
   platform    String
@@ -78,7 +77,6 @@ model DeviceToken {
   updatedAt       DateTime @updatedAt
   createdBy       String?  @db.Uuid
   updatedBy       String?  @db.Uuid
-  isActive        Boolean  @default(true)
   userId          String   @db.Uuid
   token           String   @unique
   appPlatform     String

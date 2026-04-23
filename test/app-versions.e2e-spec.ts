@@ -90,7 +90,6 @@ describe('AppVersions (e2e)', () => {
       platform: 'mobile',
       downloadUrl: 'https://apps.example.com/1.2.3.apk',
       forceUpdate: true,
-      isActive: true,
     });
     expect(res.body.createdBy).toBeDefined();
   });
@@ -229,7 +228,9 @@ describe('AppVersions (e2e)', () => {
     expect(res.body.forceUpdate).toBe(true);
   });
 
-  it('GET /api/app-versions/latest skips inactive versions', async () => {
+  it('GET /api/app-versions/latest falls back to the next-newest after a bad release is deleted', async () => {
+    // This table is a signal, not history: a bad release gets deleted
+    // rather than deactivated. `latest` reads the newest remaining row.
     const { token } = await seedAdmin(app);
     const newer = await request(app.getHttpServer())
       .post('/api/app-versions')
@@ -249,12 +250,11 @@ describe('AppVersions (e2e)', () => {
         releaseDate: '2026-03-01T00:00:00.000Z',
       })
       .expect(201);
-    // Admin marks the newer release inactive (bad build)
+
     await request(app.getHttpServer())
-      .patch(`/api/app-versions/${newer.body.id}`)
+      .delete(`/api/app-versions/${newer.body.id}`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ isActive: false })
-      .expect(200);
+      .expect(204);
 
     const res = await request(app.getHttpServer())
       .get('/api/app-versions/latest?platform=desktop')

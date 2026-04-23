@@ -84,15 +84,17 @@ export class AppVersionsService {
   }
 
   async findLatestByPlatform(platform: AppPlatform): Promise<AppVersion> {
-    // Active-only so admins can hide a bad release by flipping `isActive`
-    // without having to delete the row (audit trail preserved).
+    // This table is a signal for the mobile app ("is there an update, and
+    // is it forced?"), not a version history. A bad release gets deleted
+    // and replaced — there's no "deactivate without deleting" workflow,
+    // so no isActive filter is needed here.
     const row = await this.prisma.appVersion.findFirst({
-      where: { platform, isActive: true },
+      where: { platform },
       orderBy: { releaseDate: 'desc' },
     });
     if (!row) {
       throw new NotFoundException(
-        `No active app version found for platform "${platform}"`,
+        `No app version found for platform "${platform}"`,
       );
     }
     return row;
@@ -115,7 +117,6 @@ export class AppVersionsService {
       releaseDate: dto.releaseDate,
       downloadUrl: dto.downloadUrl,
       forceUpdate: dto.forceUpdate,
-      isActive: dto.isActive,
       updatedBy: actorId,
     };
     const updated = await this.prisma.appVersion.update({

@@ -19,6 +19,7 @@ Package manager: **yarn** (yarn.lock committed).
 - `yarn prisma:generate` — regenerate `@prisma/client` (run after schema edits)
 - `yarn prisma:migrate` — `prisma migrate dev` (interactive — creates + applies a migration)
 - `yarn prisma:deploy` — `prisma migrate deploy` (production, non-interactive)
+- `yarn prisma:seed` — upserts the default admin + user from `SEED_ADMIN_EMAIL`/`SEED_ADMIN_PASSWORD`/`SEED_USER_EMAIL`/`SEED_USER_PASSWORD` env vars. Idempotent: if a row with that email already exists, it's left untouched — the seed never rewrites an operator's in-flight password change. Password complexity (12+ chars, letter + digit) is enforced at seed time since the script bypasses the HTTP validation pipeline. Config lives in `prisma.config.ts` under `migrations.seed`.
 - `yarn prisma:studio` — DB browser
 - `docker compose up -d` — start the local Postgres 18 + Redis 8 containers. Compose requires `SERVICE_NAME`/`DB_USER`/`DB_PASSWORD`/`DB_NAME`/`DB_PORT`/`REDIS_PORT`/`REDIS_PASSWORD` to be set in `.env` — there are no fallbacks, so a missing key fails fast. With the values shipped in `.env.example` (`SERVICE_NAME=nestjs`, `DB_USER=${SERVICE_NAME}`, `DB_NAME=${SERVICE_NAME}_local`), you get container `nestjs-postgres`, role `nestjs`, and DB `nestjs_local` — i.e. the app connects as a per-service role rather than the generic `postgres` superuser, mirroring the least-privilege pattern used in managed prod (RDS/Cloud SQL). Host ports are **5433** (postgres) and **6378** (redis) to avoid clashing with host-installed instances on the standard 5432/6379; both containers still listen on their canonical ports internally.
   - **Postgres image** is **`postgres:18.3`** (Debian/glibc, fully pinned), **not** Alpine. Postgres 18 is the current latest stable per postgresql.org and is officially recommended for new production deployments. Reasons for this exact pin: (1) managed Postgres providers (RDS, Cloud SQL, Neon, Supabase) all run on glibc, and Postgres text collation is libc-dependent — running Alpine (musl) locally can produce different sort orders / index behavior than prod; (2) pinning to `18.3` (no `-bookworm` suffix needed — bare minor pulls the Debian variant) means an upstream image rebuild can't surprise you with a patch-level skew. Bump the pin deliberately when you bump prod. The cluster is initialized with `POSTGRES_INITDB_ARGS=--encoding=UTF-8 --locale=C.UTF-8` so encoding/collation is deterministic across hosts. `shm_size: 256mb` raises the default 64mb so parallel queries and `work_mem`-heavy plans don't trip "could not resize shared memory segment" errors that wouldn't appear on a real prod box.
@@ -62,7 +63,7 @@ Endpoints (all under `/api`):
 - **Auth** — `POST /auth/register`, `POST /auth/login`, `GET /auth/me` (JwtAuthGuard). Login + register override the global throttle with stricter per-route limits (10/min and 5/min) to slow brute-force attempts.
 - **Users** — the class has `@UseGuards(JwtAuthGuard, RolesGuard)`; each handler declares its own `@Roles(...)` (or `@Public()` for unauthenticated endpoints). Split:
   - **Public**: `POST /users/sign-up` (delegates to `AuthService.register`; returns `{ accessToken, user }`), `POST /users/request-password-reset` (always 200 regardless of whether email is registered — no enumeration), `POST /users/reset-password` (consumes OTP; sets new password; bumps `passwordChangedAt`, clearing active tokens). All three carry `@Throttle({ limit: 5, ttl: 60_000 })`.
-  - **Self-service** (any authenticated user; no `@Roles`): `GET /users/me`, `GET /users/me/export` (GDPR data access), `PATCH /users/me` (profile fields only), `DELETE /users/me` (soft delete — sets `deletedAt` + `isActive=false`, invalidates current JWT, blocks login), `POST /users/me/gdpr-erase` (right-to-be-forgotten — anonymizes every PII column; requires `currentPassword`), `PATCH /users/me/username`, `PATCH /users/me/email` (requires `currentPassword`; resets `emailVerifiedAt`), `PATCH /users/me/password` (requires `currentPassword`), `PATCH /users/me/profile-image`, `POST /users/me/request-email-verification` (issues OTP via email), `POST /users/verify-email` (consumes OTP).
+  - **Self-service** (any authenticated user; no `@Roles`): `GET /users/me`, `GET /users/me/export` (GDPR data access), `PATCH /users/me` (profile fields only), `DELETE /users/me` (soft delete — sets `deletedAt` + `deletedBy`; `isActive` is untouched because it's reserved for suspension, not double-signalling deletion), `POST /users/me/gdpr-erase` (right-to-be-forgotten — anonymizes every PII column; requires `currentPassword`), `PATCH /users/me/username`, `PATCH /users/me/email` (requires `currentPassword`; resets `emailVerifiedAt`), `PATCH /users/me/password` (requires `currentPassword`), `PATCH /users/me/profile-image`, `POST /users/me/request-email-verification` (issues OTP via email), `POST /users/verify-email` (consumes OTP).
   - **Admin** (`@Roles(Role.ADMIN)`): `POST /users`, `GET /users` (paginated, `?page=1&perPage=20`, max 100), `GET /users/all`, `GET /users/:id` (still returns soft-deleted rows so admins can recover them), `PATCH /users/:id`, `PATCH /users/:id/password` (no current-password check — refused if target is the actor; see H3 in Security model), `DELETE /users/:id` (soft delete — sets `deletedAt`; row remains for audit/recovery). All admin mutations write an `audit_logs` entry via `AuditService`.
 - **Health** — `GET /health/liveness` (process memory heap < 512MB — for k8s liveness; must NOT depend on DB), `GET /health/readiness` (DB `SELECT 1` — for readiness/LB probes; returns 503 if DB is down).
 
@@ -81,15 +82,34 @@ model Order {
   updatedAt       DateTime  @updatedAt
   createdBy       String?   @db.Uuid
   updatedBy       String?   @db.Uuid
-  deletedAt       DateTime? // only for resources that use soft delete — see "Delete semantics"
+  deletedAt       DateTime? // only for soft-delete resources — see "Delete semantics"
   deletedBy       String?   @db.Uuid // pairs with deletedAt — who performed the soft delete
-  isActive        Boolean   @default(true)
+  isActive        Boolean   @default(true) // only when the resource has a distinct suspension/pause state — see "Business state vs lifecycle"
   // resource-specific fields below this line
   @@map("orders")
 }
 ```
 
-Column order groups the at/by pairs together (`createdAt`/`createdBy`, `updatedAt`/`updatedBy`, `deletedAt`/`deletedBy`) then business state (`isActive`) — matches the mental model of "lifecycle metadata, then what the row actually is." `deletedAt` + `deletedBy` are opt-in as a pair: add both when the resource uses soft delete, omit both when the resource is hard-deleted. `deletedBy` completes the `createdBy`/`updatedBy`/`deletedBy` audit trio — it survives restore-then-re-delete cycles (where `updatedBy` would get overwritten) and answers "who killed this?" without a join to `audit_logs`. The `User` model additionally carries auth-specific columns (`passwordChangedAt`, `failedLoginCount`, `lockedUntil`, `deletedAt`, `deletedBy`) — see **Security model** and **Delete semantics** below.
+**Required**: `id`, `createdAt`, `updatedAt`, `createdBy`, `updatedBy`. Column order groups at/by pairs (`createdAt`/`createdBy`, `updatedAt`/`updatedBy`) then lifecycle metadata (`deletedAt`/`deletedBy`, if applicable) then business state (`isActive`, if applicable) — matches the mental model of "provenance, then lifecycle, then what the row actually is."
+
+**Opt-in, pair-wise**:
+- `deletedAt` + `deletedBy`: add when the resource uses soft delete (see **Delete semantics**). `deletedBy` completes the `createdBy`/`updatedBy`/`deletedBy` audit trio — it survives restore-then-re-delete cycles (where `updatedBy` would get overwritten) and answers "who killed this?" without a join to `audit_logs`.
+- `isActive`: add only when the resource has a distinct business-state toggle separate from deletion (see **Business state vs lifecycle**). Don't add it reflexively — most resources don't need it, and having it there but unused is dead weight that misleads readers.
+
+The `User` model additionally carries auth-specific columns (`passwordChangedAt`, `failedLoginCount`, `lockedUntil`, `deletedAt`, `deletedBy`) — see **Security model** and **Delete semantics** below.
+
+### Business state vs lifecycle
+
+`isActive` is **suspension** (business state: admin paused the user, subscription expired but row kept for reactivation). `deletedAt` is **deletion** (lifecycle: the row is logically gone). These are different concepts — don't conflate them.
+
+Decide per resource whether the business-state distinction is meaningful:
+
+- **Has a real suspension concept** → add `isActive`. Example: `User` (admin suspends for ToS violation / support investigation without deleting the account).
+- **No separate suspension state** → skip `isActive`. Example: `DeviceToken` (push tokens either exist or don't — there's no "muted but registered" workflow). Example: `AppVersion` (the table is a release signal, not a catalog — a bad release gets deleted and replaced, not deactivated).
+
+When you add `isActive`, wire it into the paths that care: auth guards for `User`, list filters for public-facing catalogs, etc. When you skip it, the resource's delete path is cleaner (just `deletedAt` for soft, or `prisma.delete` for hard), and readers aren't left wondering why a field exists but is never meaningfully set.
+
+**For `User` specifically**: `isActive` defaults to `true` on create. The soft-delete and GDPR-erase paths don't touch it — `deletedAt` is the lifecycle gate, `isActive` is reserved for explicit suspension. Auth hot paths (`AuthService.login`, `JwtStrategy.validate`) reject on any of: soft-deleted (via `prisma.scoped`), `!isActive` (suspended), or `lockedUntil > now` (brute-force lockout). Three independent reasons; none conflated.
 
 - `id` — UUID, always. Never use integer PKs.
 - `createdAt` / `updatedAt` — Prisma-managed timestamps.
@@ -307,7 +327,7 @@ Soft delete is not a default — each resource picks explicitly based on the rul
 - Compliance or legal retention applies (financial records, healthcare).
 - You care about "who owned this thing at the time of the event" questions.
 
-**Use both columns deliberately:** `isActive` is business state (user paused their account, version is deactivated but kept on record). `deletedAt` is lifecycle (record is logically gone). They're different concepts — don't conflate them. A user with `isActive=false, deletedAt=null` is temporarily disabled; `isActive=false, deletedAt<now>` is closed. Never use `isActive` alone to signal deletion.
+**Keep `isActive` and `deletedAt` separate:** see **Business state vs lifecycle** above. Short version — `isActive` is suspension, `deletedAt` is deletion, and not every resource needs both (or either). For soft-delete resources that also have suspension, they're independent flags; the delete paths write `deletedAt` only, never `isActive=false`, so "suspended" and "deleted" don't conflate.
 
 **GDPR / right-to-be-forgotten is a third mode.** Soft delete retains the PII; a genuine erasure request requires overwriting the identifying columns. The `User` model's `gdprErase` method is the canonical pattern: mark `deletedAt`, then set `email`/`firstName`/etc. to sentinel values, null out everything else, rehash the password so no valid credential survives. The row stays (so FK'd audit logs and bookings still point at a valid `id`) but carries nothing identifying.
 
@@ -315,12 +335,12 @@ Soft delete is not a default — each resource picks explicitly based on the rul
 
 **Current per-resource policy in this template:**
 
-| Resource | Admin `DELETE /:id` | Self `DELETE /me` | `/me/gdpr-erase` | Rationale |
-|---|---|---|---|---|
-| `users` | soft (`deletedAt`) | soft (`deletedAt` + `isActive=false`) | anonymize PII + soft delete | Retention + recovery; JWT invalidation + login rejection for deletedAt. |
-| `app_versions` | hard delete | — | — | Reference data. Prefer `PATCH { isActive: false }` to deactivate a bad release while keeping history; DELETE is available for genuine cleanup. |
-| `device_tokens` | hard delete | — | — | Transient; globally-unique `token` means soft delete would block re-registration; FK cascade handles user deletion cleanup. |
-| `audit_logs` | (never deleted through API) | — | — | Append-only. Retention/archival is a separate concern. |
+| Resource | Admin `DELETE /:id` | Self `DELETE /me` | `/me/gdpr-erase` | `isActive`? | Rationale |
+|---|---|---|---|---|---|
+| `users` | soft (`deletedAt`) | soft (`deletedAt` + `deletedBy`) | anonymize PII + soft delete | yes (suspension) | Retention + recovery; JWT invalidation + login rejection for deletedAt. `isActive` reserved for admin suspension. |
+| `app_versions` | hard delete | — | — | no | Release signal table, not a history. Bad release → delete + replace. |
+| `device_tokens` | hard delete | — | — | no | Transient; globally-unique `token` means soft delete would block re-registration; FK cascade handles user deletion cleanup. |
+| `audit_logs` | (never deleted through API) | — | — | no | Append-only. Retention/archival is a separate concern. |
 
 **When adding a new resource, decide up front and document:** if soft delete, add both `deletedAt DateTime?` and `deletedBy String? @db.Uuid`, update `remove()` to `prisma.update({ deletedAt: new Date(), deletedBy: actorId })`, ensure anywhere the resource drives access control (auth, list filters) checks `deletedAt IS NULL`. If hard delete, leave both columns out of the schema and keep `remove()` at `prisma.<model>.delete`.
 

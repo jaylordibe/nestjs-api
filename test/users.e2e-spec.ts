@@ -144,7 +144,7 @@ describe('Users (e2e)', () => {
         .expect(400);
     });
 
-    it('DELETE /api/users/me soft-deletes (deletedAt set, isActive=false) and blocks login', async () => {
+    it('DELETE /api/users/me soft-deletes (deletedAt + deletedBy set, isActive untouched) and blocks login', async () => {
       const { id, token } = await registerAndToken(app, 'self-del@example.com');
       await request(app.getHttpServer())
         .delete('/api/users/me')
@@ -153,7 +153,9 @@ describe('Users (e2e)', () => {
 
       const prisma = app.get(PrismaService);
       const row = await prisma.user.findUniqueOrThrow({ where: { id } });
-      expect(row.isActive).toBe(false);
+      // isActive stays `true` — it's reserved for explicit suspension,
+      // not double-signalling deletion. deletedAt is the lifecycle gate.
+      expect(row.isActive).toBe(true);
       expect(row.deletedAt).not.toBeNull();
       expect(row.deletedBy).toBe(id);
 
@@ -187,7 +189,6 @@ describe('Users (e2e)', () => {
       expect(row.phoneNumber).toBeNull();
       expect(row.deletedAt).not.toBeNull();
       expect(row.deletedBy).toBe(id);
-      expect(row.isActive).toBe(false);
 
       await request(app.getHttpServer())
         .post('/api/auth/login')

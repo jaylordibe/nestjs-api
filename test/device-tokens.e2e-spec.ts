@@ -95,7 +95,6 @@ describe('DeviceTokens (e2e)', () => {
       deviceType: 'smartphone',
       deviceOs: 'android',
       deviceOsVersion: '14',
-      isActive: true,
     });
   });
 
@@ -203,10 +202,9 @@ describe('DeviceTokens (e2e)', () => {
     const res = await request(app.getHttpServer())
       .patch(`/api/device-tokens/${created.body.id}`)
       .set('Authorization', `Bearer ${admin.token}`)
-      .send({ deviceOsVersion: '17.4', isActive: false })
+      .send({ deviceOsVersion: '17.4' })
       .expect(200);
     expect(res.body.deviceOsVersion).toBe('17.4');
-    expect(res.body.isActive).toBe(false);
   });
 
   it('DELETE /api/device-tokens/:id removes the row (admin)', async () => {

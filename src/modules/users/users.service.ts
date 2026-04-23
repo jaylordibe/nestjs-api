@@ -230,7 +230,6 @@ export class UsersService {
         otpPurpose: null,
         otpExpiresAt: null,
         emailVerifiedAt: null,
-        isActive: false,
         deletedAt: now,
         deletedBy: userId,
         updatedBy: userId,
@@ -266,15 +265,17 @@ export class UsersService {
 
   async softDelete(userId: string, actorId: string): Promise<void> {
     await this.findById(userId);
-    // Self-close: mark the row deleted AND flip business state off. After
-    // this, login and JwtStrategy both reject the user. The row itself
-    // stays for audit/FK integrity; call gdprErase for true PII removal.
+    // Self-close: mark the row deleted. The scoped Prisma client and the
+    // auth hot paths both reject rows with deletedAt set, so the user
+    // can't log back in. `isActive` is untouched — that flag exists for
+    // suspension (a separate business concept from deletion), not to
+    // double-signal lifecycle state. The row stays for audit/FK integrity;
+    // call gdprErase for true PII removal.
     await this.prisma.user.update({
       where: { id: userId },
       data: {
         deletedAt: new Date(),
         deletedBy: actorId,
-        isActive: false,
         updatedBy: actorId,
       },
     });

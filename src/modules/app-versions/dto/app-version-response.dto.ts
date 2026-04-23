@@ -7,7 +7,6 @@ export class AppVersionResponseDto {
   updatedAt!: Date;
   createdBy!: string | null;
   updatedBy!: string | null;
-  isActive!: boolean;
   version!: string;
   description!: string | null;
   platform!: AppPlatform;

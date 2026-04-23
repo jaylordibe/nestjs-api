@@ -9,7 +9,6 @@ export class DeviceTokenResponseDto {
   updatedAt!: Date;
   createdBy!: string | null;
   updatedBy!: string | null;
-  isActive!: boolean;
   userId!: string;
   token!: string;
   appPlatform!: AppPlatform;
