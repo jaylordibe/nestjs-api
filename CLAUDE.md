@@ -49,6 +49,8 @@ src/
     filters/           # AllExceptionsFilter (catch-all) + PrismaExceptionFilter (translates P2002/P2025 to 409/404)
     dto/               # PaginationQueryDto, PaginatedResponseDto<T>, PaginationMeta (shared by every list endpoint)
     enums/             # Role, Gender, OtpPurpose — TS-only enums (no DB enums — see "Generating a new resource")
+    email/             # EmailService (@Global) — stub dev adapter; swap the provider to wire SES/SendGrid/etc.
+    audit/             # AuditService (@Global) — append-only `audit_logs` writes for privileged actions. Best-effort (logs but never throws on failure).
   modules/
     auth/              # AuthService, AuthController, JwtStrategy, JwtAuthGuard, login/register DTOs (per-route stricter throttle)
     users/             # UsersService, controller, DTOs (Create/Update/Response) — canonical resource pattern
@@ -58,10 +60,10 @@ prisma/schema.prisma   # PostgreSQL datasource; User model
 
 Endpoints (all under `/api`):
 - **Auth** — `POST /auth/register`, `POST /auth/login`, `GET /auth/me` (JwtAuthGuard). Login + register override the global throttle with stricter per-route limits (10/min and 5/min) to slow brute-force attempts.
-- **Users** — the class has `@UseGuards(JwtAuthGuard, RolesGuard)`; each handler declares its own `@Roles(...)` (or `@Public()` for `sign-up`). Split:
-  - **Public**: `POST /users/sign-up` — delegates to `AuthService.register`; returns `{ accessToken, user }`.
-  - **Self-service** (any authenticated user; no `@Roles`): `GET /users/me`, `PATCH /users/me` (profile fields only), `DELETE /users/me` (soft delete — flips `isActive`), `PATCH /users/me/username`, `PATCH /users/me/email` (requires `currentPassword`; resets `emailVerifiedAt`), `PATCH /users/me/password` (requires `currentPassword`), `PATCH /users/me/profile-image`, `POST /users/verify-email` (consumes OTP — issuance endpoint is a TODO).
-  - **Admin** (`@Roles(Role.ADMIN)`): `POST /users`, `GET /users` (paginated, `?page=1&perPage=20`, max 100), `GET /users/all`, `GET /users/:id`, `PATCH /users/:id`, `PATCH /users/:id/password` (no current-password check), `DELETE /users/:id` (hard delete, 204).
+- **Users** — the class has `@UseGuards(JwtAuthGuard, RolesGuard)`; each handler declares its own `@Roles(...)` (or `@Public()` for unauthenticated endpoints). Split:
+  - **Public**: `POST /users/sign-up` (delegates to `AuthService.register`; returns `{ accessToken, user }`), `POST /users/request-password-reset` (always 200 regardless of whether email is registered — no enumeration), `POST /users/reset-password` (consumes OTP; sets new password; bumps `passwordChangedAt`, clearing active tokens). All three carry `@Throttle({ limit: 5, ttl: 60_000 })`.
+  - **Self-service** (any authenticated user; no `@Roles`): `GET /users/me`, `GET /users/me/export` (GDPR data access), `PATCH /users/me` (profile fields only), `DELETE /users/me` (soft delete — flips `isActive`), `PATCH /users/me/username`, `PATCH /users/me/email` (requires `currentPassword`; resets `emailVerifiedAt`), `PATCH /users/me/password` (requires `currentPassword`), `PATCH /users/me/profile-image`, `POST /users/me/request-email-verification` (issues OTP via email), `POST /users/verify-email` (consumes OTP).
+  - **Admin** (`@Roles(Role.ADMIN)`): `POST /users`, `GET /users` (paginated, `?page=1&perPage=20`, max 100), `GET /users/all`, `GET /users/:id`, `PATCH /users/:id`, `PATCH /users/:id/password` (no current-password check — refused if target is the actor; see H3 in Security model), `DELETE /users/:id` (hard delete, 204). All admin mutations write an `audit_logs` entry via `AuditService`.
 - **Health** — `GET /health/liveness` (process memory heap < 512MB — for k8s liveness; must NOT depend on DB), `GET /health/readiness` (DB `SELECT 1` — for readiness/LB probes; returns 503 if DB is down).
 
 ## Generating a new resource
@@ -286,6 +288,26 @@ The template ships with a specific set of hardening decisions. Know these before
 
 When adding a new resource that stores user-facing secrets (API keys, tokens, etc.), mirror this pattern: never store in plaintext (hash or encrypt), `@Exclude()` from the response DTO, map per-field uniqueness errors through the global Prisma filter.
 
+### Operational posture
+
+- **Structured logging via pino** (`nestjs-pino`). Prod/staging emit JSON one-line-per-event; dev uses `pino-pretty`. Every request gets an `X-Request-Id` header (reused if the client sends one, random UUID otherwise) — included in every log line for trace correlation. Sensitive fields are redacted at source: `authorization`, `cookie`, `req.body.password`, `req.body.newPassword`, `req.body.currentPassword`, `req.body.otp`. When adding new sensitive request bodies, extend the `redact.paths` array in `app.module.ts`.
+- **Rate-limiter storage is Redis** (`@nest-lab/throttler-storage-redis`) in dev/staging/prod so multi-pod deployments share one counter — in-memory storage would give each pod its own bucket and effectively multiply the limit by pod count. Test env (`NODE_ENV=test`) stays on in-memory so e2e doesn't require a live Redis.
+- **Email delivery is abstracted** via `EmailService` in `common/email/`. The default implementation logs to stdout (`[email:stub] ...`) — suitable for dev and tests. Production deployments replace the provider binding in `EmailModule` with an SES/SendGrid/Postmark/Resend adapter that implements the same `send` contract. `sendEmailVerificationOtp` / `sendPasswordResetOtp` are the high-level helpers; add more as new flows land.
+- **Audit logs**: `AuditService.record({ action, actorId, targetUserId, metadata })` writes to the `audit_logs` table. Already wired into admin create/update/delete, admin password reset (`password.reset.by_admin`), and self password reset (`password.reset.completed`). Extend when adding privileged actions — writes are best-effort (try/catch inside the service) so an audit failure never blocks the business operation.
+- **API docs** live at `GET /api/docs` via `@nestjs/swagger`. Bearer auth is pre-configured (`addBearerAuth()`). Annotate new DTOs with `@ApiProperty()` if you want them rendered; without annotations, Swagger infers types but misses optionality/examples.
+- **Production env enforcement** via Joi `.when('NODE_ENV', { is: 'production', ... })`: `CORS_ORIGIN` can't be `*`, `TRUST_PROXY` can't be `false` or `true` (force explicit `"1"` or CIDR list). Both fail boot with a pointed error message. Local dev is unaffected.
+
+### OTP lifecycle (email verification, password reset)
+
+Single `otpHash`/`otpPurpose`/`otpExpiresAt` triple per user — one active OTP at a time per account:
+
+1. **Issuance** (`requestEmailVerification`, `requestPasswordReset`): generate a 6-digit code, `bcrypt.hash` into `otpHash`, set `otpPurpose` (`email_verify` or `password_reset`), `otpExpiresAt = now + 15m`, send raw code via `EmailService`.
+2. **Consumption** (`verifyEmail`, `resetPassword`): verify purpose + expiry match, `bcrypt.compare` the code, apply the effect (set `emailVerifiedAt` or hash the new password), then null out all three OTP fields.
+
+Attacker considerations baked in: (a) `requestPasswordReset` returns 200 even if the email doesn't exist — no enumeration; (b) `resetPassword` returns the same opaque "Invalid or expired reset code" for every failure mode; (c) both `/request-*` endpoints carry strict per-IP throttles; (d) consuming an OTP for one purpose can't satisfy another because `otpPurpose` must match.
+
+If you add a new OTP purpose, add it to `OtpPurpose` enum, issue via a dedicated endpoint, and consume via a dedicated endpoint — don't overload existing ones.
+
 ### Decorator-typed parameters and `isolatedModules`
 
 TypeScript here has `isolatedModules: true` + `emitDecoratorMetadata: true`. Types referenced in **decorated** function signatures (e.g. `@CurrentUser() current: AuthenticatedUser`) must be imported via `import type` (or a separate type-only import line) — combining a value + type import in one statement breaks the build with TS1272. Pattern used in this repo:
@@ -330,7 +352,12 @@ yarn test:e2e                   # globalSetup creates nestjs_test on first run
 
 ### CI
 
-`.github/workflows/ci.yml` runs the same flow on every PR + every push to `main`: lint → build → unit tests → e2e tests. Postgres 18.3 is provisioned as a service container; env vars are set inline in the workflow's `env:` block (so `.env.test` is silently ignored — its values would be overridden anyway). No Redis service is provisioned because the app doesn't yet connect to Redis; only the env vars (which Joi validates) are present.
+`.github/workflows/ci.yml` has two jobs:
+
+1. **`ci`** — lint → build → unit tests → e2e tests → `yarn audit` (moderate severity, non-blocking warning). Postgres 18.3 provisioned as a service container; env vars set inline (`.env.test` is silently ignored).
+2. **`docker`** — depends on `ci` passing. Builds the production image via `docker/build-push-action`, then scans with Trivy for HIGH/CRITICAL CVEs (non-fixed issues are ignored to keep the build reliable). The image isn't pushed — wire a registry when you have one.
+
+Redis isn't provisioned in CI because the throttler is disabled in test env via `skipIf`, and no other code paths hit Redis during the test suite. Add a Redis service container if you wire a feature that depends on it at runtime.
 
 ## Lint/format
 

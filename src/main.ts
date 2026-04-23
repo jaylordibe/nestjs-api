@@ -1,14 +1,16 @@
-import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
+import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
+import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
-    logger: ['error', 'warn', 'log', 'debug', 'verbose'],
+    bufferLogs: true,
   });
+  app.useLogger(app.get(Logger));
 
   const configService = app.get(ConfigService);
   const port = configService.getOrThrow<number>('port');
@@ -26,10 +28,21 @@ async function bootstrap(): Promise<void> {
     credentials: true,
   });
 
+  const swaggerConfig = new DocumentBuilder()
+    .setTitle(configService.getOrThrow<string>('serviceName'))
+    .setDescription('NestJS API')
+    .setVersion('1.0')
+    .addBearerAuth()
+    .build();
+  const document = SwaggerModule.createDocument(app, swaggerConfig);
+  SwaggerModule.setup('api/docs', app, document);
+
   app.enableShutdownHooks();
 
   await app.listen(port);
-  Logger.log(`API listening on http://localhost:${port}/api`, 'Bootstrap');
+  app
+    .get(Logger)
+    .log(`API listening on http://localhost:${port}/api`, 'Bootstrap');
 }
 
 void bootstrap();

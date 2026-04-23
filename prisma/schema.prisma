@@ -35,3 +35,16 @@ model User {
 
   @@map("users")
 }
+
+model AuditLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  createdAt    DateTime @default(now())
+  actorId      String?  @db.Uuid
+  targetUserId String?  @db.Uuid
+  action       String
+  metadata     Json?
+
+  @@index([actorId, createdAt])
+  @@index([targetUserId, createdAt])
+  @@map("audit_logs")
+}

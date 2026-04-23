@@ -37,6 +37,9 @@ export const envValidationSchema = Joi.object({
     .min(32)
     .required()
     .invalid(
+      // Reject the exact value that shipped in earlier versions of
+      // .env.example so existing checkouts can't silently deploy with the
+      // template default.
       '136542716fe8f487721f5e2a3b48574cc3282c086487f28600bda8057f37c92e96c58e64ebe347d29517a2862c6694e2',
     )
     .messages({
@@ -45,13 +48,34 @@ export const envValidationSchema = Joi.object({
     }),
   JWT_EXPIRES_IN: Joi.string().default('30d'),
 
-  CORS_ORIGIN: Joi.string().default('*'),
+  // In production, refuse the wildcard origin — Same-Origin with
+  // credentials: true is broken in browsers against `*`, and leaving the
+  // wildcard in prod signals a CORS misconfiguration waiting to bite.
+  CORS_ORIGIN: Joi.string()
+    .default('*')
+    .when('NODE_ENV', {
+      is: 'production',
+      then: Joi.string().invalid('*').required().messages({
+        'any.invalid':
+          'CORS_ORIGIN cannot be "*" in production — set an explicit origin list.',
+      }),
+    }),
 
   THROTTLE_TTL_MS: Joi.number().integer().min(1000).default(60_000),
   THROTTLE_LIMIT: Joi.number().integer().min(1).default(100),
 
+  // In production, require an explicit trust-proxy setting. "false" behind a
+  // real load balancer collapses per-IP throttling into one global bucket;
+  // "true" lets clients spoof X-Forwarded-For. Force the operator to decide.
   TRUST_PROXY: Joi.string()
     .default('false')
+    .when('NODE_ENV', {
+      is: 'production',
+      then: Joi.string().invalid('false', 'true').required().messages({
+        'any.invalid':
+          'TRUST_PROXY must be set explicitly in production (e.g. "1" for a single proxy hop, or a CIDR list). "false" and "true" are both unsafe behind a load balancer.',
+      }),
+    })
     .description(
       'Express trust proxy setting. "false" = direct exposure (default), ' +
         '"true" = trust all (unsafe — allows X-Forwarded-For spoofing), ' +

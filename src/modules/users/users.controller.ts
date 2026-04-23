@@ -26,6 +26,8 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { AuthService, LoginResponse } from '../auth/auth.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateUserDto } from './dto/create-user.dto';
+import { RequestPasswordResetDto } from './dto/request-password-reset.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SignUpDto } from './dto/sign-up.dto';
 import { UpdateAuthUserEmailDto } from './dto/update-auth-user-email.dto';
 import { UpdateAuthUserInfoDto } from './dto/update-auth-user-info.dto';
@@ -52,6 +54,37 @@ export class UsersController {
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   signUp(@Body() dto: SignUpDto): Promise<LoginResponse> {
     return this.authService.register(dto);
+  }
+
+  @Post('request-password-reset')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  async requestPasswordReset(
+    @Body() dto: RequestPasswordResetDto,
+  ): Promise<{ ok: true }> {
+    await this.usersService.requestPasswordReset(dto.email);
+    // Constant response — do not reveal whether the email is registered.
+    return { ok: true };
+  }
+
+  @Post('reset-password')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  async resetPassword(@Body() dto: ResetPasswordDto): Promise<{ ok: true }> {
+    await this.usersService.resetPassword(dto);
+    return { ok: true };
+  }
+
+  @Post('me/request-email-verification')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  async requestEmailVerification(
+    @CurrentUser() current: AuthenticatedUser,
+  ): Promise<{ ok: true }> {
+    await this.usersService.requestEmailVerification(current.id);
+    return { ok: true };
   }
 
   @Post('verify-email')
@@ -91,6 +124,17 @@ export class UsersController {
     @CurrentUser() current: AuthenticatedUser,
   ): Promise<void> {
     await this.usersService.softDelete(current.id, current.id);
+  }
+
+  // Minimal GDPR "right to access" — returns the user's full row as JSON.
+  // Extend this as new tables are added (bookings, messages, etc.) so the
+  // dump stays complete.
+  @Get('me/export')
+  async exportAuthUser(
+    @CurrentUser() current: AuthenticatedUser,
+  ): Promise<UserResponseDto> {
+    const user = await this.usersService.findById(current.id);
+    return new UserResponseDto(user);
   }
 
   @Patch('me/username')
@@ -212,7 +256,10 @@ export class UsersController {
   @Delete(':id')
   @Roles(Role.ADMIN)
   @HttpCode(HttpStatus.NO_CONTENT)
-  async remove(@Param('id', new ParseUUIDPipe()) id: string): Promise<void> {
-    await this.usersService.remove(id);
+  async remove(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() current: AuthenticatedUser,
+  ): Promise<void> {
+    await this.usersService.remove(id, current.id);
   }
 }

@@ -254,6 +254,96 @@ describe('Users (e2e)', () => {
         .expect(400);
     });
 
+    it('POST /api/users/request-password-reset always returns 200 (no enumeration)', async () => {
+      await registerAndToken(app, 'reset@example.com');
+      await request(app.getHttpServer())
+        .post('/api/users/request-password-reset')
+        .send({ email: 'reset@example.com' })
+        .expect(200);
+      await request(app.getHttpServer())
+        .post('/api/users/request-password-reset')
+        .send({ email: 'ghost@example.com' })
+        .expect(200);
+    });
+
+    it('POST /api/users/reset-password completes the flow with a valid OTP', async () => {
+      const { id } = await registerAndToken(app, 'flow@example.com');
+      const prisma = app.get(PrismaService);
+      const otp = '654321';
+      await prisma.user.update({
+        where: { id },
+        data: {
+          otpHash: await bcrypt.hash(otp, 10),
+          otpPurpose: 'password_reset',
+          otpExpiresAt: new Date(Date.now() + 10 * 60_000),
+        },
+      });
+      await request(app.getHttpServer())
+        .post('/api/users/reset-password')
+        .send({
+          email: 'flow@example.com',
+          otp,
+          newPassword: 'brand-new-pw-1',
+        })
+        .expect(200);
+      // Old password rejected, new password works.
+      await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: 'flow@example.com', password: PASSWORD })
+        .expect(401);
+      await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: 'flow@example.com', password: 'brand-new-pw-1' })
+        .expect(200);
+    });
+
+    it('POST /api/users/reset-password rejects wrong OTP with 400', async () => {
+      const { id } = await registerAndToken(app, 'wrong-otp@example.com');
+      const prisma = app.get(PrismaService);
+      await prisma.user.update({
+        where: { id },
+        data: {
+          otpHash: await bcrypt.hash('111111', 10),
+          otpPurpose: 'password_reset',
+          otpExpiresAt: new Date(Date.now() + 10 * 60_000),
+        },
+      });
+      await request(app.getHttpServer())
+        .post('/api/users/reset-password')
+        .send({
+          email: 'wrong-otp@example.com',
+          otp: '999999',
+          newPassword: 'brand-new-pw-1',
+        })
+        .expect(400);
+    });
+
+    it('POST /api/users/me/request-email-verification sets otp fields', async () => {
+      const { id, token } = await registerAndToken(
+        app,
+        'verify-req@example.com',
+      );
+      await request(app.getHttpServer())
+        .post('/api/users/me/request-email-verification')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+      const prisma = app.get(PrismaService);
+      const row = await prisma.user.findUniqueOrThrow({ where: { id } });
+      expect(row.otpHash).not.toBeNull();
+      expect(row.otpPurpose).toBe('email_verify');
+      expect(row.otpExpiresAt).not.toBeNull();
+    });
+
+    it('GET /api/users/me/export returns the user JSON', async () => {
+      const { token } = await registerAndToken(app, 'export@example.com');
+      const res = await request(app.getHttpServer())
+        .get('/api/users/me/export')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+      expect(res.body.email).toBe('export@example.com');
+      expect(res.body).not.toHaveProperty('password');
+    });
+
     it('POST /api/users/verify-email succeeds when OTP matches', async () => {
       const { id, token } = await registerAndToken(app, 'verify@example.com');
       const prisma = app.get(PrismaService);

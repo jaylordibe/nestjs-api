@@ -9,9 +9,12 @@ import { Prisma, User } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 import { PaginationMeta } from '../../common/dto/paginated-response.dto';
+import { AuditService } from '../../common/audit/audit.service';
+import { EmailService } from '../../common/email/email.service';
 import { OtpPurpose } from '../../common/enums/otp-purpose.enum';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { UpdateAuthUserEmailDto } from './dto/update-auth-user-email.dto';
 import { UpdateAuthUserInfoDto } from './dto/update-auth-user-info.dto';
 import { UpdateAuthUserPasswordDto } from './dto/update-auth-user-password.dto';
@@ -20,14 +23,26 @@ import { UpdateUserDto } from './dto/update-user.dto';
 // OWASP 2024+ guidance. Bumping this is safe — existing hashes already
 // encode their own cost factor and continue to verify correctly.
 const BCRYPT_ROUNDS = 12;
+const OTP_EXPIRY_MS = 15 * 60 * 1000;
+
+function generateOtp(): string {
+  // 6 digits, zero-padded. Brute-force risk is bounded by the 15-min expiry
+  // window and the global throttle on verify/reset endpoints.
+  const n = Math.floor(Math.random() * 1_000_000);
+  return n.toString().padStart(6, '0');
+}
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly emailService: EmailService,
+    private readonly auditService: AuditService,
+  ) {}
 
   async create(dto: CreateUserDto, actorId: string | null): Promise<User> {
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
-    return this.prisma.user.create({
+    const user = await this.prisma.user.create({
       data: {
         email: dto.email.toLowerCase(),
         username: dto.username?.toLowerCase(),
@@ -46,6 +61,16 @@ export class UsersService {
         updatedBy: actorId,
       },
     });
+    // Only audit admin-initiated creates; self-signup has no actor.
+    if (actorId) {
+      await this.auditService.record({
+        action: 'user.created.by_admin',
+        actorId,
+        targetUserId: user.id,
+        metadata: { email: user.email, role: user.role },
+      });
+    }
+    return user;
   }
 
   findAll(): Promise<User[]> {
@@ -122,12 +147,32 @@ export class UsersService {
       data.passwordChangedAt = new Date();
     }
 
-    return this.prisma.user.update({ where: { id }, data });
+    const updated = await this.prisma.user.update({ where: { id }, data });
+    if (actorId && actorId !== id) {
+      await this.auditService.record({
+        action: 'user.updated.by_admin',
+        actorId,
+        targetUserId: id,
+        metadata: {
+          roleChanged: dto.role !== undefined,
+          isActiveChanged: dto.isActive !== undefined,
+          passwordChanged: Boolean(dto.password),
+        },
+      });
+    }
+    return updated;
   }
 
-  async remove(id: string): Promise<void> {
+  async remove(id: string, actorId: string | null): Promise<void> {
     await this.findById(id);
     await this.prisma.user.delete({ where: { id } });
+    if (actorId) {
+      await this.auditService.record({
+        action: 'user.deleted.by_admin',
+        actorId,
+        targetUserId: id,
+      });
+    }
   }
 
   async updateInfo(
@@ -230,7 +275,7 @@ export class UsersService {
     }
     await this.findById(userId);
     const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
-    return this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { id: userId },
       data: {
         password: passwordHash,
@@ -238,6 +283,12 @@ export class UsersService {
         updatedBy: actorId,
       },
     });
+    await this.auditService.record({
+      action: 'password.reset.by_admin',
+      actorId,
+      targetUserId: userId,
+    });
+    return updated;
   }
 
   async updateProfileImage(
@@ -249,6 +300,84 @@ export class UsersService {
     return this.prisma.user.update({
       where: { id: userId },
       data: { profileImageUrl, updatedBy: actorId },
+    });
+  }
+
+  async requestEmailVerification(userId: string): Promise<void> {
+    const user = await this.findById(userId);
+    if (user.emailVerifiedAt) {
+      throw new BadRequestException('Email is already verified');
+    }
+    const otp = generateOtp();
+    const otpHash = await bcrypt.hash(otp, BCRYPT_ROUNDS);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        otpHash,
+        otpPurpose: OtpPurpose.EMAIL_VERIFY,
+        otpExpiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
+      },
+    });
+    await this.emailService.sendEmailVerificationOtp(user.email, otp);
+  }
+
+  async requestPasswordReset(email: string): Promise<void> {
+    const user = await this.findByEmail(email);
+    // Intentionally no error when the email isn't registered — the caller
+    // (controller) returns 200 regardless, so the attacker can't enumerate
+    // registered emails through this endpoint.
+    if (!user || !user.isActive) {
+      return;
+    }
+    const otp = generateOtp();
+    const otpHash = await bcrypt.hash(otp, BCRYPT_ROUNDS);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        otpHash,
+        otpPurpose: OtpPurpose.PASSWORD_RESET,
+        otpExpiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
+      },
+    });
+    await this.emailService.sendPasswordResetOtp(user.email, otp);
+  }
+
+  async resetPassword(dto: ResetPasswordDto): Promise<void> {
+    const user = await this.findByEmail(dto.email);
+    if (
+      !user ||
+      !user.isActive ||
+      !user.otpHash ||
+      user.otpPurpose !== OtpPurpose.PASSWORD_RESET ||
+      !user.otpExpiresAt ||
+      user.otpExpiresAt.getTime() < Date.now()
+    ) {
+      // Same opaque error for every failure mode so an attacker can't
+      // distinguish "wrong email" from "expired OTP" from "wrong code".
+      throw new BadRequestException('Invalid or expired reset code');
+    }
+    const otpMatches = await bcrypt.compare(dto.otp, user.otpHash);
+    if (!otpMatches) {
+      throw new BadRequestException('Invalid or expired reset code');
+    }
+    const passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        password: passwordHash,
+        passwordChangedAt: new Date(),
+        otpHash: null,
+        otpPurpose: null,
+        otpExpiresAt: null,
+        failedLoginCount: 0,
+        lockedUntil: null,
+        updatedBy: user.id,
+      },
+    });
+    await this.auditService.record({
+      action: 'password.reset.completed',
+      actorId: user.id,
+      targetUserId: user.id,
     });
   }
 
