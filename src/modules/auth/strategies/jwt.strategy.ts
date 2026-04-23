@@ -30,6 +30,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload): Promise<AuthenticatedUser> {
+    // findByIdOrNull uses the scoped client, so soft-deleted users return
+    // null here automatically — no explicit deletedAt check needed.
     const user = await this.usersService.findByIdOrNull(payload.sub);
     if (!user || !user.isActive) {
       throw new UnauthorizedException();

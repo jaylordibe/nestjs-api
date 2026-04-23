@@ -26,6 +26,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { AuthService, LoginResponse } from '../auth/auth.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateUserDto } from './dto/create-user.dto';
+import { GdprEraseDto } from './dto/gdpr-erase.dto';
 import { RequestPasswordResetDto } from './dto/request-password-reset.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { SignUpDto } from './dto/sign-up.dto';
@@ -124,6 +125,19 @@ export class UsersController {
     @CurrentUser() current: AuthenticatedUser,
   ): Promise<void> {
     await this.usersService.softDelete(current.id, current.id);
+  }
+
+  // Right-to-be-forgotten / GDPR erase. Distinct from DELETE /me (which is
+  // "close my account"): this also anonymizes every PII column so the row
+  // can stay for FK integrity without carrying identifying data. Requires
+  // re-auth via currentPassword to prevent stolen-token erasure.
+  @Post('me/gdpr-erase')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async gdprErase(
+    @Body() dto: GdprEraseDto,
+    @CurrentUser() current: AuthenticatedUser,
+  ): Promise<void> {
+    await this.usersService.gdprErase(current.id, dto.currentPassword);
   }
 
   // Minimal GDPR "right to access" — returns the user's full row as JSON.

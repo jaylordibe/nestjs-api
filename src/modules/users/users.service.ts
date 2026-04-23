@@ -101,20 +101,28 @@ export class UsersService {
     };
   }
 
+  // Admin-facing fetch — uses the raw client so admins can see soft-
+  // deleted rows for recovery/audit. Paths that must reject deleted users
+  // (auth, login, JwtStrategy) use findByIdOrNull / findByEmail, which go
+  // through the scoped client.
   async findById(id: string): Promise<User> {
-    const user = await this.findByIdOrNull(id);
+    const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) {
       throw new NotFoundException('User not found');
     }
     return user;
   }
 
+  // Returns null for soft-deleted users — the scoped client filters
+  // deletedAt: null automatically. Callers that need to see deleted rows
+  // (admin recovery paths) should go through `findById` or directly hit
+  // `prisma.user.*` instead.
   findByIdOrNull(id: string): Promise<User | null> {
-    return this.prisma.user.findUnique({ where: { id } });
+    return this.prisma.scoped.user.findUnique({ where: { id } });
   }
 
   findByEmail(email: string): Promise<User | null> {
-    return this.prisma.user.findUnique({
+    return this.prisma.scoped.user.findUnique({
       where: { email: email.toLowerCase() },
     });
   }
@@ -165,14 +173,74 @@ export class UsersService {
 
   async remove(id: string, actorId: string | null): Promise<void> {
     await this.findById(id);
-    await this.prisma.user.delete({ where: { id } });
+    // Admin "delete" is soft — keeps the row for audit trail / recovery.
+    // For true PII removal (GDPR right-to-be-forgotten) the user themselves
+    // invokes gdprErase, which also anonymizes personal columns.
+    await this.prisma.user.update({
+      where: { id },
+      data: {
+        deletedAt: new Date(),
+        deletedBy: actorId,
+        updatedBy: actorId,
+      },
+    });
     if (actorId) {
       await this.auditService.record({
-        action: 'user.deleted.by_admin',
+        action: 'user.soft_deleted.by_admin',
         actorId,
         targetUserId: id,
       });
     }
+  }
+
+  // Right-to-be-forgotten path. Overwrites every column that could identify
+  // the user (email, name, phone, etc.) with sentinel values, wipes the
+  // password so no bcrypt hash survives, and marks deletedAt. The row
+  // itself stays so FK'd records (audit logs, bookings, etc.) remain
+  // queryable — but none of it points back to a real human.
+  async gdprErase(userId: string, currentPassword: string): Promise<void> {
+    const user = await this.findById(userId);
+    const passwordMatches = await bcrypt.compare(
+      currentPassword,
+      user.password,
+    );
+    if (!passwordMatches) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+    const now = new Date();
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        email: `deleted-${userId}@deleted.invalid`,
+        username: null,
+        password: await bcrypt.hash(
+          `erased-${userId}-${now.getTime()}`,
+          BCRYPT_ROUNDS,
+        ),
+        passwordChangedAt: now,
+        firstName: 'Deleted',
+        middleName: null,
+        lastName: 'User',
+        phoneNumber: null,
+        gender: null,
+        birthday: null,
+        timezone: null,
+        profileImageUrl: null,
+        otpHash: null,
+        otpPurpose: null,
+        otpExpiresAt: null,
+        emailVerifiedAt: null,
+        isActive: false,
+        deletedAt: now,
+        deletedBy: userId,
+        updatedBy: userId,
+      },
+    });
+    await this.auditService.record({
+      action: 'user.gdpr_erased',
+      actorId: userId,
+      targetUserId: userId,
+    });
   }
 
   async updateInfo(
@@ -198,9 +266,22 @@ export class UsersService {
 
   async softDelete(userId: string, actorId: string): Promise<void> {
     await this.findById(userId);
+    // Self-close: mark the row deleted AND flip business state off. After
+    // this, login and JwtStrategy both reject the user. The row itself
+    // stays for audit/FK integrity; call gdprErase for true PII removal.
     await this.prisma.user.update({
       where: { id: userId },
-      data: { isActive: false, updatedBy: actorId },
+      data: {
+        deletedAt: new Date(),
+        deletedBy: actorId,
+        isActive: false,
+        updatedBy: actorId,
+      },
+    });
+    await this.auditService.record({
+      action: 'user.self_deleted',
+      actorId,
+      targetUserId: userId,
     });
   }
 

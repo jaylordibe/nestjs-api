@@ -37,6 +37,10 @@ export class AuthService {
   async login(dto: LoginDto): Promise<LoginResponse> {
     const user = await this.usersService.findByEmail(dto.email);
 
+    // findByEmail uses the scoped client — soft-deleted users return null,
+    // so this branch treats them identically to "email doesn't exist"
+    // (down to the dummy bcrypt compare for timing).
+
     // Check lockout *before* doing work. Still do a dummy compare so locked
     // accounts can't be distinguished from wrong-password by timing either.
     if (user && user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {

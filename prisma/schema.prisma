@@ -12,6 +12,8 @@ model User {
   updatedAt         DateTime  @updatedAt
   createdBy         String?   @db.Uuid
   updatedBy         String?   @db.Uuid
+  deletedAt         DateTime?
+  deletedBy         String?   @db.Uuid
   isActive          Boolean   @default(true)
   firstName         String
   middleName        String?
@@ -32,6 +34,8 @@ model User {
   profileImageUrl   String?
   birthday          DateTime? @db.Date
   timezone          String?
+
+  deviceTokens DeviceToken[]
 
   @@map("users")
 }
@@ -66,4 +70,24 @@ model AppVersion {
   @@unique([platform, version])
   @@index([platform, releaseDate])
   @@map("app_versions")
+}
+
+model DeviceToken {
+  id              String   @id @default(uuid()) @db.Uuid
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  createdBy       String?  @db.Uuid
+  updatedBy       String?  @db.Uuid
+  isActive        Boolean  @default(true)
+  userId          String   @db.Uuid
+  token           String   @unique
+  appPlatform     String
+  deviceType      String
+  deviceOs        String
+  deviceOsVersion String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("device_tokens")
 }

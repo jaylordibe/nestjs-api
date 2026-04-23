@@ -9,6 +9,8 @@ export class UserResponseDto {
   updatedAt!: Date;
   createdBy!: string | null;
   updatedBy!: string | null;
+  deletedAt!: Date | null;
+  deletedBy!: string | null;
   isActive!: boolean;
   firstName!: string;
   middleName!: string | null;

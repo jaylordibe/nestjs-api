@@ -60,6 +60,16 @@ export class PrismaExceptionFilter implements ExceptionFilter {
           error: 'Conflict',
         };
       }
+      case 'P2003': {
+        const field = this.getTargetField(err);
+        return {
+          status: HttpStatus.BAD_REQUEST,
+          message: field
+            ? `${this.humanize(field)} references a record that does not exist`
+            : 'Foreign key references a record that does not exist',
+          error: 'Bad Request',
+        };
+      }
       case 'P2025':
         return {
           status: HttpStatus.NOT_FOUND,

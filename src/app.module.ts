@@ -20,6 +20,7 @@ import { envValidationSchema } from './config/env.validation';
 import { PrismaModule } from './prisma/prisma.module';
 import { AppVersionsModule } from './modules/app-versions/app-versions.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { DeviceTokensModule } from './modules/device-tokens/device-tokens.module';
 import { HealthModule } from './modules/health/health.module';
 import { UsersModule } from './modules/users/users.module';
 
@@ -103,6 +104,7 @@ import { UsersModule } from './modules/users/users.module';
     AuthModule,
     UsersModule,
     AppVersionsModule,
+    DeviceTokensModule,
     HealthModule,
   ],
   providers: [

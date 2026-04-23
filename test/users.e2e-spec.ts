@@ -144,8 +144,8 @@ describe('Users (e2e)', () => {
         .expect(400);
     });
 
-    it('DELETE /api/users/me soft-deletes (isActive=false)', async () => {
-      const { id, token } = await registerAndToken(app);
+    it('DELETE /api/users/me soft-deletes (deletedAt set, isActive=false) and blocks login', async () => {
+      const { id, token } = await registerAndToken(app, 'self-del@example.com');
       await request(app.getHttpServer())
         .delete('/api/users/me')
         .set('Authorization', `Bearer ${token}`)
@@ -154,6 +154,54 @@ describe('Users (e2e)', () => {
       const prisma = app.get(PrismaService);
       const row = await prisma.user.findUniqueOrThrow({ where: { id } });
       expect(row.isActive).toBe(false);
+      expect(row.deletedAt).not.toBeNull();
+      expect(row.deletedBy).toBe(id);
+
+      // Token invalidated via JwtStrategy's deletedAt check.
+      await request(app.getHttpServer())
+        .get('/api/users/me')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(401);
+
+      // Login refuses the account even with the right password.
+      await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: 'self-del@example.com', password: PASSWORD })
+        .expect(401);
+    });
+
+    it('POST /api/users/me/gdpr-erase anonymizes PII and blocks login', async () => {
+      const { id, token } = await registerAndToken(app, 'erase@example.com');
+
+      await request(app.getHttpServer())
+        .post('/api/users/me/gdpr-erase')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: PASSWORD })
+        .expect(204);
+
+      const prisma = app.get(PrismaService);
+      const row = await prisma.user.findUniqueOrThrow({ where: { id } });
+      expect(row.email).not.toBe('erase@example.com');
+      expect(row.email).toMatch(/^deleted-.+@deleted\.invalid$/);
+      expect(row.firstName).toBe('Deleted');
+      expect(row.phoneNumber).toBeNull();
+      expect(row.deletedAt).not.toBeNull();
+      expect(row.deletedBy).toBe(id);
+      expect(row.isActive).toBe(false);
+
+      await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: 'erase@example.com', password: PASSWORD })
+        .expect(401);
+    });
+
+    it('POST /api/users/me/gdpr-erase rejects wrong password with 401', async () => {
+      const { token } = await registerAndToken(app, 'wrong-erase@example.com');
+      await request(app.getHttpServer())
+        .post('/api/users/me/gdpr-erase')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: 'definitely-not-right-1' })
+        .expect(401);
     });
 
     it('PATCH /api/users/me/username changes username', async () => {
@@ -612,7 +660,7 @@ describe('Users (e2e)', () => {
         .expect(200);
     });
 
-    it('DELETE /api/users/:id removes the user', async () => {
+    it('DELETE /api/users/:id soft-deletes (row remains, admin can still see it)', async () => {
       const created = await request(app.getHttpServer())
         .post('/api/users')
         .set('Authorization', `Bearer ${adminToken}`)
@@ -628,10 +676,19 @@ describe('Users (e2e)', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(204);
 
-      await request(app.getHttpServer())
+      // Admin can still fetch the soft-deleted row for recovery/audit.
+      const after = await request(app.getHttpServer())
         .get(`/api/users/${created.body.id}`)
         .set('Authorization', `Bearer ${adminToken}`)
-        .expect(404);
+        .expect(200);
+      expect(after.body.deletedAt).not.toBeNull();
+      expect(after.body.deletedBy).toBe(adminId);
+
+      // But the deleted user can't log in.
+      await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: 'gone@example.com', password: PASSWORD })
+        .expect(401);
     });
   });
 });

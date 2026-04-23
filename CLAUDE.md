@@ -62,8 +62,8 @@ Endpoints (all under `/api`):
 - **Auth** — `POST /auth/register`, `POST /auth/login`, `GET /auth/me` (JwtAuthGuard). Login + register override the global throttle with stricter per-route limits (10/min and 5/min) to slow brute-force attempts.
 - **Users** — the class has `@UseGuards(JwtAuthGuard, RolesGuard)`; each handler declares its own `@Roles(...)` (or `@Public()` for unauthenticated endpoints). Split:
   - **Public**: `POST /users/sign-up` (delegates to `AuthService.register`; returns `{ accessToken, user }`), `POST /users/request-password-reset` (always 200 regardless of whether email is registered — no enumeration), `POST /users/reset-password` (consumes OTP; sets new password; bumps `passwordChangedAt`, clearing active tokens). All three carry `@Throttle({ limit: 5, ttl: 60_000 })`.
-  - **Self-service** (any authenticated user; no `@Roles`): `GET /users/me`, `GET /users/me/export` (GDPR data access), `PATCH /users/me` (profile fields only), `DELETE /users/me` (soft delete — flips `isActive`), `PATCH /users/me/username`, `PATCH /users/me/email` (requires `currentPassword`; resets `emailVerifiedAt`), `PATCH /users/me/password` (requires `currentPassword`), `PATCH /users/me/profile-image`, `POST /users/me/request-email-verification` (issues OTP via email), `POST /users/verify-email` (consumes OTP).
-  - **Admin** (`@Roles(Role.ADMIN)`): `POST /users`, `GET /users` (paginated, `?page=1&perPage=20`, max 100), `GET /users/all`, `GET /users/:id`, `PATCH /users/:id`, `PATCH /users/:id/password` (no current-password check — refused if target is the actor; see H3 in Security model), `DELETE /users/:id` (hard delete, 204). All admin mutations write an `audit_logs` entry via `AuditService`.
+  - **Self-service** (any authenticated user; no `@Roles`): `GET /users/me`, `GET /users/me/export` (GDPR data access), `PATCH /users/me` (profile fields only), `DELETE /users/me` (soft delete — sets `deletedAt` + `isActive=false`, invalidates current JWT, blocks login), `POST /users/me/gdpr-erase` (right-to-be-forgotten — anonymizes every PII column; requires `currentPassword`), `PATCH /users/me/username`, `PATCH /users/me/email` (requires `currentPassword`; resets `emailVerifiedAt`), `PATCH /users/me/password` (requires `currentPassword`), `PATCH /users/me/profile-image`, `POST /users/me/request-email-verification` (issues OTP via email), `POST /users/verify-email` (consumes OTP).
+  - **Admin** (`@Roles(Role.ADMIN)`): `POST /users`, `GET /users` (paginated, `?page=1&perPage=20`, max 100), `GET /users/all`, `GET /users/:id` (still returns soft-deleted rows so admins can recover them), `PATCH /users/:id`, `PATCH /users/:id/password` (no current-password check — refused if target is the actor; see H3 in Security model), `DELETE /users/:id` (soft delete — sets `deletedAt`; row remains for audit/recovery). All admin mutations write an `audit_logs` entry via `AuditService`.
 - **Health** — `GET /health/liveness` (process memory heap < 512MB — for k8s liveness; must NOT depend on DB), `GET /health/readiness` (DB `SELECT 1` — for readiness/LB probes; returns 503 if DB is down).
 
 ## Generating a new resource
@@ -81,13 +81,15 @@ model Order {
   updatedAt       DateTime  @updatedAt
   createdBy       String?   @db.Uuid
   updatedBy       String?   @db.Uuid
+  deletedAt       DateTime? // only for resources that use soft delete — see "Delete semantics"
+  deletedBy       String?   @db.Uuid // pairs with deletedAt — who performed the soft delete
   isActive        Boolean   @default(true)
   // resource-specific fields below this line
   @@map("orders")
 }
 ```
 
-The `User` model additionally carries auth-specific columns (`passwordChangedAt`, `failedLoginCount`, `lockedUntil`) — see **Security model** below.
+Column order groups the at/by pairs together (`createdAt`/`createdBy`, `updatedAt`/`updatedBy`, `deletedAt`/`deletedBy`) then business state (`isActive`) — matches the mental model of "lifecycle metadata, then what the row actually is." `deletedAt` + `deletedBy` are opt-in as a pair: add both when the resource uses soft delete, omit both when the resource is hard-deleted. `deletedBy` completes the `createdBy`/`updatedBy`/`deletedBy` audit trio — it survives restore-then-re-delete cycles (where `updatedBy` would get overwritten) and answers "who killed this?" without a join to `audit_logs`. The `User` model additionally carries auth-specific columns (`passwordChangedAt`, `failedLoginCount`, `lockedUntil`, `deletedAt`, `deletedBy`) — see **Security model** and **Delete semantics** below.
 
 - `id` — UUID, always. Never use integer PKs.
 - `createdAt` / `updatedAt` — Prisma-managed timestamps.
@@ -143,7 +145,7 @@ Rules:
 - **Paginated list** uses `PaginationQueryDto` from `src/common/dto/` and wraps results in `PaginatedResponseDto<T>`. Defaults: `page=1`, `perPage=20`, max `perPage=100`. Query-param pair is `page` + `perPage` (matching GitHub's `per_page` style); the matching meta shape is `{ page, perPage, total, totalPages }`.
 - **`/all` is unpaginated** — fine for dropdowns, exports, tables under a few thousand rows. If a resource can grow past that, document which endpoint callers should prefer, or add a hard cap inside the service. Callers who want more than 100 rows at a time should prefer `/all` over raising the `perPage` cap.
 - **PATCH, not PUT.** `Update<Resource>Dto = PartialType(Create<Resource>Dto)` — all fields optional, matching partial-update semantics. PUT's "replace entire resource" would need a separate DTO with required non-nullable fields and explicit null-ing of omitted ones; not worth it for CRUD.
-- **DELETE returns 204** via `@HttpCode(HttpStatus.NO_CONTENT)`. For soft delete, the endpoint stays `DELETE` and the service flips `isActive` instead of calling `prisma.<model>.delete`.
+- **DELETE returns 204** via `@HttpCode(HttpStatus.NO_CONTENT)`. Whether the service hard-deletes or soft-deletes depends on the resource — see **Delete semantics** below.
 - **UUID params** use `@Param('id', new ParseUUIDPipe())`.
 
 ### Controller skeleton
@@ -209,7 +211,7 @@ export class OrdersController {
 - `findPaginated(query)` — `findMany({ skip, take, orderBy })` + `count()` inside **one** `prisma.$transaction([...])` so the total matches the page.
 - `findById(id)` — throws `NotFoundException` when missing. Pair with `findByIdOrNull(id)` for non-throwing lookups (JwtStrategy needs the non-throwing form to return 401 instead of 404).
 - `update(id, dto, actorId)` — set `updatedBy: actorId`. Don't touch `createdBy`. Re-check existence first so a missing row throws 404, not a Prisma P2025.
-- `remove(id)` — hard delete via `prisma.<model>.delete` after existence check. For soft delete, `update({ isActive: false })` instead and document it.
+- `remove(id, actorId)` — hard delete via `prisma.<model>.delete` for transient/operational resources, or `update({ deletedAt: new Date() })` for resources with retention value. Pick based on the **Delete semantics** rules below.
 - **Don't try/catch Prisma errors in services.** `PrismaExceptionFilter` (global, registered in `app.module.ts`) catches `PrismaClientKnownRequestError` and translates `P2002 → 409 Conflict` (message derived from `err.meta.target`, e.g. "Email already in use"), `P2025 → 404 Not Found`, and anything else → 500. Let the errors bubble up.
 
 ### Audit fields
@@ -285,8 +287,59 @@ The template ships with a specific set of hardening decisions. Know these before
 - **`@Public()` decorator**: `src/common/decorators/public.decorator.ts` + handled in `JwtAuthGuard`. Use sparingly — currently only `sign-up`. Any public endpoint that accepts user-controlled input needs its own `@Throttle(...)` too; the global 100/min is too loose for public endpoints.
 - **Generic 500 responses**: `AllExceptionsFilter` returns `"Internal server error"` for non-`HttpException` errors; the real message is logged server-side. Prevents leaking Prisma/Node internals (hostnames, file paths) to clients.
 - **Password, OTP hash, `passwordChangedAt`, `failedLoginCount`, `lockedUntil`** are all `@Exclude()`-marked in `UserResponseDto`. Never build a response that serializes these directly — always go through the DTO.
+- **Soft-deleted users are blocked from auth**: `AuthService.login` and `JwtStrategy.validate` both reject when `deletedAt IS NOT NULL`. Combined with `passwordChangedAt` (rotates after `gdprErase` overwrites the password), any outstanding JWT for a deleted user stops working on the next request. See **Delete semantics** for the broader policy.
 
 When adding a new resource that stores user-facing secrets (API keys, tokens, etc.), mirror this pattern: never store in plaintext (hash or encrypt), `@Exclude()` from the response DTO, map per-field uniqueness errors through the global Prisma filter.
+
+### Delete semantics
+
+Soft delete is not a default — each resource picks explicitly based on the rules below. The naive "always soft delete" and "always hard delete" policies both bite eventually: the first leaks data through forgotten `WHERE deletedAt IS NULL` filters; the second destroys audit trails and makes admin mistakes unrecoverable.
+
+**Use hard delete when:**
+- The row is transient or operational (push-notification tokens, sessions, OTPs, queue entries, cache warmers).
+- A unique constraint matters and keeping soft-deleted rows around would block re-registration (e.g. FCM tokens, email verification codes).
+- FK cascades are desired — deleting the parent should clean up children.
+- The resource has no retention, audit, or restore value.
+
+**Use soft delete (`deletedAt DateTime?` + `deletedBy String? @db.Uuid`) when:**
+- The record is referenced by historical data that needs to remain queryable (users, bookings, orders, payments, reviews).
+- Admin mistakes need to be reversible.
+- Compliance or legal retention applies (financial records, healthcare).
+- You care about "who owned this thing at the time of the event" questions.
+
+**Use both columns deliberately:** `isActive` is business state (user paused their account, version is deactivated but kept on record). `deletedAt` is lifecycle (record is logically gone). They're different concepts — don't conflate them. A user with `isActive=false, deletedAt=null` is temporarily disabled; `isActive=false, deletedAt<now>` is closed. Never use `isActive` alone to signal deletion.
+
+**GDPR / right-to-be-forgotten is a third mode.** Soft delete retains the PII; a genuine erasure request requires overwriting the identifying columns. The `User` model's `gdprErase` method is the canonical pattern: mark `deletedAt`, then set `email`/`firstName`/etc. to sentinel values, null out everything else, rehash the password so no valid credential survives. The row stays (so FK'd audit logs and bookings still point at a valid `id`) but carries nothing identifying.
+
+**When in doubt, the answer is usually soft delete plus a GDPR-erase endpoint.** Booking/social apps especially: a user closing their account is "soft" (grace period, possible restore, preserve booking history); a user invoking their right to be forgotten is "hard" (anonymize).
+
+**Current per-resource policy in this template:**
+
+| Resource | Admin `DELETE /:id` | Self `DELETE /me` | `/me/gdpr-erase` | Rationale |
+|---|---|---|---|---|
+| `users` | soft (`deletedAt`) | soft (`deletedAt` + `isActive=false`) | anonymize PII + soft delete | Retention + recovery; JWT invalidation + login rejection for deletedAt. |
+| `app_versions` | hard delete | — | — | Reference data. Prefer `PATCH { isActive: false }` to deactivate a bad release while keeping history; DELETE is available for genuine cleanup. |
+| `device_tokens` | hard delete | — | — | Transient; globally-unique `token` means soft delete would block re-registration; FK cascade handles user deletion cleanup. |
+| `audit_logs` | (never deleted through API) | — | — | Append-only. Retention/archival is a separate concern. |
+
+**When adding a new resource, decide up front and document:** if soft delete, add both `deletedAt DateTime?` and `deletedBy String? @db.Uuid`, update `remove()` to `prisma.update({ deletedAt: new Date(), deletedBy: actorId })`, ensure anywhere the resource drives access control (auth, list filters) checks `deletedAt IS NULL`. If hard delete, leave both columns out of the schema and keep `remove()` at `prisma.<model>.delete`.
+
+**Never rely on "remembered" filters for security.** The template enforces this via a global soft-delete Prisma extension — see next section.
+
+### Soft-delete filter: `prisma.scoped` vs raw `prisma`
+
+`PrismaService` exposes two views on the same connection pool:
+
+- **`this.prisma.user.*`** — *raw*. Sees every row, including soft-deleted. Use in admin/forensic/recovery/retention code paths that explicitly need to look at deleted rows.
+- **`this.prisma.scoped.user.*`** — *filtered*. Every read (`findMany`, `findFirst`, `findUnique`, `count`, etc.) automatically injects `deletedAt: null`, so soft-deleted rows are invisible. Use in every user-facing code path.
+
+Mechanism: the Prisma Client Extension at `src/prisma/prisma-soft-delete.extension.ts` intercepts reads on any model in its `SOFT_DELETE_MODELS` set and either injects the `where: { deletedAt: null }` clause (for `findFirst`/`findMany`/`count`) or fetches-then-nullifies (for `findUnique`/`findUniqueOrThrow`, since their `where` type only accepts unique fields). Writes (`create`/`update`/`delete`) pass through on both views so admin flows like restore-a-deleted-user (`update({ data: { deletedAt: null } })`) and hard-delete-for-retention still work.
+
+**Adding a new soft-delete model**: declare `deletedAt DateTime?` + `deletedBy String? @db.Uuid` on the schema (see **Delete semantics**), then add the model name to `SOFT_DELETE_MODELS` in the extension file. That's the only manual step — every call through `prisma.scoped.*` automatically starts filtering.
+
+**Hot-path enforcement**: `AuthService.login` uses `findByEmail`, and `JwtStrategy.validate` uses `findByIdOrNull`; both go through `prisma.scoped`, so soft-deleted users are indistinguishable from unknown users (same 401, same timing via dummy bcrypt). No explicit `if (user.deletedAt)` check survives in the auth path — it would be dead code because the query never returns a deleted user.
+
+**When to reach for the raw client instead**: admin `GET /users/:id` (so admins can recover / re-enable a deleted user), `UsersService.findById` (admin fetch), any retention/archival job that processes soft-deleted rows, forensic queries over the audit log joined with deleted users. `UsersService.findById` in this template already uses the raw client for exactly this reason; `findByIdOrNull` and `findByEmail` both use `scoped`. New services should copy this split.
 
 ### Operational posture
 
