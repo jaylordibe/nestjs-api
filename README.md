@@ -35,30 +35,74 @@ A production-grade scaffold for building JSON APIs with **NestJS 11 + Prisma 7 +
 - **CI** — lint + build + unit + e2e + yarn audit + Trivy image scan on every PR (Postgres + Redis service containers).
 - **DB seeder** — `yarn prisma:seed` creates admin + user accounts from env-configured credentials (idempotent, password-complexity-enforced).
 
-## Quick start
+## Setup guide
 
 Requires **Node 22+**, **Yarn 1.x**, and **Docker**.
 
-```bash
-# 1. Start Postgres + Redis
-docker compose up -d
+### First-time setup (after cloning)
 
-# 2. Configure env
+Run these once when you first clone the repo (or after a teammate adds a new migration / env var).
+
+```bash
+# 1. Install dependencies
+yarn install
+
+# 2. Configure env (defaults match docker-compose — only JWT_SECRET needs changing)
 cp .env.example .env
-# IMPORTANT: regenerate JWT_SECRET (the one in .env.example is empty on purpose)
 sed -i '' "s|^JWT_SECRET=.*|JWT_SECRET=\"$(openssl rand -hex 48)\"|" .env
 
-# 3. Install deps + migrate + seed
-yarn install
+# 3. Start Postgres + Redis (host ports 5433 / 6378 to avoid clashing with local installs)
+docker compose up -d
+
+# 4. Generate Prisma client + apply migrations
 yarn prisma:generate
 yarn prisma:migrate dev --name init
-yarn prisma:seed         # optional: creates admin@example.com + user@example.com
 
-# 4. Run
+# 5. (Optional) Seed a default admin + user from SEED_* env vars
+yarn prisma:seed
+
+# 6. Run the dev server
 yarn start:dev
 ```
 
-Open [http://localhost:3000/api/docs](http://localhost:3000/api/docs) for the live Swagger UI.
+Open [http://localhost:3000/api/docs](http://localhost:3000/api/docs) for the live Swagger UI. Health check: [http://localhost:3000/api/health/readiness](http://localhost:3000/api/health/readiness).
+
+### Day-to-day (after initial setup)
+
+The only things you need on a normal workday — start the containers (they'll be stopped if your machine restarted) and run the dev server.
+
+```bash
+# 1. Bring Postgres + Redis back up (idempotent — no-op if already running)
+docker compose up -d
+
+# 2. Start the dev server in watch mode
+yarn start:dev
+```
+
+When you're done:
+
+```bash
+docker compose down     # stop containers, keep volumes
+# or
+docker compose down -v  # also wipe postgres-data + redis-data volumes (fresh DB next time)
+```
+
+### After pulling changes
+
+When a teammate adds schema changes or new dependencies:
+
+```bash
+yarn install                          # if package.json changed
+yarn prisma:generate                  # if prisma/schema.prisma changed
+yarn prisma:migrate dev               # apply any new migrations
+```
+
+### Troubleshooting
+
+- **Port already in use (5433 / 6378)** — something else is bound. `lsof -i :5433` / `:6378` to find it.
+- **`JWT_SECRET` boot error** — Joi rejects the template default. Regenerate: `openssl rand -hex 48` → paste into `.env`.
+- **Prisma client out of date** — after pulling schema changes, run `yarn prisma:generate`.
+- **Stale DB state** — `docker compose down -v && docker compose up -d && yarn prisma:migrate dev` nukes the volume and starts fresh.
 
 ## Common commands
 
