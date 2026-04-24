@@ -2,6 +2,7 @@ export interface AppConfig {
   nodeEnv: 'development' | 'test' | 'staging' | 'production';
   serviceName: string;
   port: number;
+  appBaseUrl: string;
   database: {
     url: string;
     name: string;
@@ -42,6 +43,7 @@ export default (): AppConfig => ({
   nodeEnv: (process.env.NODE_ENV as AppConfig['nodeEnv']) ?? 'development',
   serviceName: process.env.SERVICE_NAME!,
   port: parseInt(process.env.PORT ?? '3000', 10),
+  appBaseUrl: process.env.APP_BASE_URL ?? 'http://localhost:3000/api',
   database: {
     url: process.env.DATABASE_URL!,
     name: process.env.DB_NAME!,

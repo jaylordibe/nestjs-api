@@ -7,8 +7,9 @@ import * as path from 'path';
 // the template exists — `sendTemplate` call sites then get full type
 // checking on the `vars` argument.
 export interface EmailTemplates {
-  'email-verification-otp': { otp: string; expiresInMinutes: number };
+  'email-verification-link': { verifyUrl: string; firstName: string };
   'password-reset-otp': { otp: string; expiresInMinutes: number };
+  'password-changed-notification': { firstName: string; occurredAt: string };
 }
 
 export type EmailTemplateKey = keyof EmailTemplates;
@@ -26,8 +27,9 @@ type SubjectDefinition<K extends EmailTemplateKey> =
 const TEMPLATE_SUBJECTS: {
   [K in EmailTemplateKey]: SubjectDefinition<K>;
 } = {
-  'email-verification-otp': 'Verify your email',
+  'email-verification-link': 'Verify your email',
   'password-reset-otp': 'Reset your password',
+  'password-changed-notification': 'Your password was changed',
 };
 
 // Templates live in `./templates/<name>.html.hbs` with an optional

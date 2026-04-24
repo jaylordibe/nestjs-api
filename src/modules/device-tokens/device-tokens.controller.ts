@@ -12,6 +12,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -25,6 +26,8 @@ import { DeviceTokenResponseDto } from './dto/device-token-response.dto';
 import { UpdateDeviceTokenDto } from './dto/update-device-token.dto';
 import { DeviceTokensService } from './device-tokens.service';
 
+@ApiTags('Device Tokens')
+@ApiBearerAuth()
 @Controller('device-tokens')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class DeviceTokensController {

@@ -13,6 +13,17 @@ export const envValidationSchema = Joi.object({
       'lowercase identifier; also used as the Postgres database name',
     ),
 
+  // Base URL used to build clickable links embedded in outbound emails
+  // (e.g. the email-verification link). Point this at your frontend if
+  // you have one (e.g. `https://app.yourapp.com`); otherwise point it at
+  // the API base (e.g. `https://api.yourapp.com/api`) and the backend's
+  // `GET /auth/verify-email?token=…` endpoint will handle the click.
+  // Must be a full URL with scheme — no trailing slash.
+  APP_BASE_URL: Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .pattern(/[^/]$/, { name: 'no-trailing-slash' })
+    .default('http://localhost:3000/api'),
+
   DB_USER: Joi.string().required(),
   DB_PASSWORD: Joi.string().allow('').required(),
   DB_HOST: Joi.string().hostname().required(),

@@ -5,15 +5,14 @@ import {
   Get,
   HttpCode,
   HttpStatus,
-  Inject,
   Param,
   ParseUUIDPipe,
   Patch,
   Post,
   Query,
   UseGuards,
-  forwardRef,
 } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
@@ -23,13 +22,11 @@ import { Public } from '../../common/decorators/public.decorator';
 import { Role } from '../../common/enums/role.enum';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { RolesGuard } from '../../common/guards/roles.guard';
-import { AuthService, LoginResponse } from '../auth/auth.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateUserDto } from './dto/create-user.dto';
 import { GdprEraseDto } from './dto/gdpr-erase.dto';
 import { RequestPasswordResetDto } from './dto/request-password-reset.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
-import { SignUpDto } from './dto/sign-up.dto';
 import { UpdateAuthUserEmailDto } from './dto/update-auth-user-email.dto';
 import { UpdateAuthUserInfoDto } from './dto/update-auth-user-info.dto';
 import { UpdateAuthUserPasswordDto } from './dto/update-auth-user-password.dto';
@@ -38,24 +35,14 @@ import { UpdateAuthUsernameDto } from './dto/update-auth-username.dto';
 import { UpdatePasswordDto } from './dto/update-password.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserResponseDto } from './dto/user-response.dto';
-import { VerifyEmailDto } from './dto/verify-email.dto';
 import { UsersService } from './users.service';
 
+@ApiTags('Users')
+@ApiBearerAuth()
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class UsersController {
-  constructor(
-    private readonly usersService: UsersService,
-    @Inject(forwardRef(() => AuthService))
-    private readonly authService: AuthService,
-  ) {}
-
-  @Post('sign-up')
-  @Public()
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  signUp(@Body() dto: SignUpDto): Promise<LoginResponse> {
-    return this.authService.register(dto);
-  }
+  constructor(private readonly usersService: UsersService) {}
 
   @Post('request-password-reset')
   @Public()
@@ -78,25 +65,11 @@ export class UsersController {
     return { ok: true };
   }
 
-  @Post('me/request-email-verification')
-  @HttpCode(HttpStatus.OK)
-  @Throttle({ default: { limit: 3, ttl: 60_000 } })
-  async requestEmailVerification(
-    @CurrentUser() current: AuthenticatedUser,
-  ): Promise<{ ok: true }> {
-    await this.usersService.requestEmailVerification(current.id);
-    return { ok: true };
-  }
-
-  @Post('verify-email')
-  @HttpCode(HttpStatus.OK)
-  async verifyEmail(
-    @Body() dto: VerifyEmailDto,
-    @CurrentUser() current: AuthenticatedUser,
-  ): Promise<UserResponseDto> {
-    const user = await this.usersService.verifyEmail(current.id, dto.otp);
-    return new UserResponseDto(user);
-  }
+  // Email verification is now handled by POST /auth/verify-email (link-
+  // based) and POST /auth/resend-verification (public, no auth needed
+  // since unverified users can't log in). The old /users/verify-email
+  // and /users/me/request-email-verification endpoints were removed
+  // when the OTP flow was replaced with a JWT link.
 
   @Get('me')
   async getAuthUser(

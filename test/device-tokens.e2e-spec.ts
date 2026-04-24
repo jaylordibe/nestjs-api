@@ -19,6 +19,7 @@ async function seedAdmin(
       firstName: 'Admin',
       lastName: 'User',
       role: 'admin',
+      emailVerifiedAt: new Date(),
     },
   });
   const res = await request(app.getHttpServer())
@@ -31,15 +32,22 @@ async function registerUser(
   app: INestApplication<App>,
   email: string,
 ): Promise<{ id: string; token: string }> {
-  const res = await request(app.getHttpServer())
-    .post('/api/auth/register')
-    .send({
-      email,
-      password: PASSWORD,
-      firstName: 'Regular',
-      lastName: 'User',
-    });
-  return { id: res.body.user.id, token: res.body.accessToken };
+  await request(app.getHttpServer()).post('/api/auth/register').send({
+    email,
+    password: PASSWORD,
+    firstName: 'Regular',
+    lastName: 'User',
+  });
+  const prisma = app.get(PrismaService);
+  const row = await prisma.user.findUniqueOrThrow({ where: { email } });
+  await prisma.user.update({
+    where: { id: row.id },
+    data: { emailVerifiedAt: new Date() },
+  });
+  const login = await request(app.getHttpServer())
+    .post('/api/auth/login')
+    .send({ email, password: PASSWORD });
+  return { id: row.id, token: login.body.accessToken as string };
 }
 
 describe('DeviceTokens (e2e)', () => {

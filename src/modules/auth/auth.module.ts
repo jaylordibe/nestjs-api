@@ -33,6 +33,9 @@ import { JwtStrategy } from './strategies/jwt.strategy';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],
-  exports: [AuthService],
+  // Re-export JwtModule so UsersService can inject JwtService (used to
+  // sign email-verification links). Keeps the JWT sign config in one
+  // place rather than re-registering the module inside UsersModule.
+  exports: [AuthService, JwtModule],
 })
 export class AuthModule {}

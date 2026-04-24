@@ -31,40 +31,53 @@ async function seedAdmin(
       firstName: 'Admin',
       lastName: 'User',
       role: 'admin',
+      // Admin rows are seeded straight into the DB (bypassing the
+      // register flow), so set emailVerifiedAt here — otherwise login
+      // would be blocked by the new verification gate.
+      emailVerifiedAt: new Date(),
     },
   });
   const token = await loginAs(app, email, PASSWORD);
   return { id: admin.id, token };
 }
 
-async function registerUser(
-  app: INestApplication<App>,
-  email = 'user@example.com',
-): Promise<string> {
-  const res = await request(app.getHttpServer())
-    .post('/api/auth/register')
-    .send({
-      email,
-      password: PASSWORD,
-      firstName: 'Regular',
-      lastName: 'User',
-    });
-  return res.body.accessToken as string;
-}
-
+// Register, mark the row emailVerifiedAt=now directly (test shortcut —
+// production flow would click the email link), then log in. Returns the
+// resulting access token and the user id. Every test that needs a
+// logged-in session routes through this helper so the production
+// verification gate is exercised identically across the suite.
 async function registerAndToken(
   app: INestApplication<App>,
   email = 'user@example.com',
 ): Promise<{ id: string; token: string }> {
-  const res = await request(app.getHttpServer())
-    .post('/api/auth/register')
-    .send({
-      email,
-      password: PASSWORD,
-      firstName: 'Regular',
-      lastName: 'User',
-    });
-  return { id: res.body.user.id, token: res.body.accessToken };
+  // Register returns only { message } now — look the user up by email
+  // to grab the id, then verify + login. The lookup is intentionally
+  // done via prisma (not via any API) because there's no authenticated
+  // path to the user's own id until after login.
+  await request(app.getHttpServer()).post('/api/auth/register').send({
+    email,
+    password: PASSWORD,
+    firstName: 'Regular',
+    lastName: 'User',
+  });
+  const prisma = app.get(PrismaService);
+  const row = await prisma.user.findUniqueOrThrow({ where: { email } });
+  await prisma.user.update({
+    where: { id: row.id },
+    data: { emailVerifiedAt: new Date() },
+  });
+  const login = await request(app.getHttpServer())
+    .post('/api/auth/login')
+    .send({ email, password: PASSWORD });
+  return { id: row.id, token: login.body.accessToken as string };
+}
+
+async function registerUser(
+  app: INestApplication<App>,
+  email = 'user@example.com',
+): Promise<string> {
+  const { token } = await registerAndToken(app, email);
+  return token;
 }
 
 describe('Users (e2e)', () => {
@@ -96,22 +109,7 @@ describe('Users (e2e)', () => {
     });
   });
 
-  describe('sign-up and self-service', () => {
-    it('POST /api/users/sign-up creates a user and returns a token', async () => {
-      const res = await request(app.getHttpServer())
-        .post('/api/users/sign-up')
-        .send({
-          email: 'newbie@example.com',
-          password: PASSWORD,
-          firstName: 'New',
-          lastName: 'Bie',
-        })
-        .expect(201);
-      expect(res.body.accessToken).toEqual(expect.any(String));
-      expect(res.body.user.email).toBe('newbie@example.com');
-      expect(res.body.user.role).toBe('user');
-    });
-
+  describe('self-service', () => {
     it('GET /api/users/me returns the authenticated user', async () => {
       const { token } = await registerAndToken(app, 'me@example.com');
       const res = await request(app.getHttpServer())
@@ -294,15 +292,6 @@ describe('Users (e2e)', () => {
       expect(res.body.profileImageUrl).toBe('https://cdn.example.com/me.jpg');
     });
 
-    it('POST /api/users/verify-email returns 400 when no OTP is in progress', async () => {
-      const { token } = await registerAndToken(app);
-      await request(app.getHttpServer())
-        .post('/api/users/verify-email')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ otp: '123456' })
-        .expect(400);
-    });
-
     it('POST /api/users/request-password-reset always returns 200 (no enumeration)', async () => {
       await registerAndToken(app, 'reset@example.com');
       await request(app.getHttpServer())
@@ -367,22 +356,6 @@ describe('Users (e2e)', () => {
         .expect(400);
     });
 
-    it('POST /api/users/me/request-email-verification sets otp fields', async () => {
-      const { id, token } = await registerAndToken(
-        app,
-        'verify-req@example.com',
-      );
-      await request(app.getHttpServer())
-        .post('/api/users/me/request-email-verification')
-        .set('Authorization', `Bearer ${token}`)
-        .expect(200);
-      const prisma = app.get(PrismaService);
-      const row = await prisma.user.findUniqueOrThrow({ where: { id } });
-      expect(row.otpHash).not.toBeNull();
-      expect(row.otpPurpose).toBe('email_verify');
-      expect(row.otpExpiresAt).not.toBeNull();
-    });
-
     it('GET /api/users/me/export returns the user JSON', async () => {
       const { token } = await registerAndToken(app, 'export@example.com');
       const res = await request(app.getHttpServer())
@@ -391,32 +364,6 @@ describe('Users (e2e)', () => {
         .expect(200);
       expect(res.body.email).toBe('export@example.com');
       expect(res.body).not.toHaveProperty('password');
-    });
-
-    it('POST /api/users/verify-email succeeds when OTP matches', async () => {
-      const { id, token } = await registerAndToken(app, 'verify@example.com');
-      const prisma = app.get(PrismaService);
-      const otp = '123456';
-      await prisma.user.update({
-        where: { id },
-        data: {
-          otpHash: await bcrypt.hash(otp, 10),
-          otpPurpose: 'email_verify',
-          otpExpiresAt: new Date(Date.now() + 10 * 60_000),
-        },
-      });
-
-      const res = await request(app.getHttpServer())
-        .post('/api/users/verify-email')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ otp })
-        .expect(200);
-      expect(res.body.emailVerifiedAt).not.toBeNull();
-
-      const row = await prisma.user.findUniqueOrThrow({ where: { id } });
-      expect(row.otpHash).toBeNull();
-      expect(row.otpPurpose).toBeNull();
-      expect(row.otpExpiresAt).toBeNull();
     });
   });
 

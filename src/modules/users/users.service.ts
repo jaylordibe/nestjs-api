@@ -2,9 +2,12 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
 import { Prisma, User } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -34,11 +37,104 @@ function generateOtp(): string {
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly emailService: EmailService,
     private readonly auditService: AuditService,
+    private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
   ) {}
+
+  // JWT-based email verification link. Payload carries the user id and a
+  // `purpose` claim that prevents the token being used as an access token
+  // (JwtStrategy rejects any payload with `purpose` set). 24h expiry is
+  // longer than the OTP window because email links sit in inboxes.
+  async sendEmailVerificationLink(user: User): Promise<void> {
+    if (user.deletedAt) {
+      // Shouldn't happen in the register path, but guards against callers
+      // later using this helper for soft-deleted users.
+      return;
+    }
+    if (user.emailVerifiedAt) {
+      // Idempotent: re-sending for an already-verified user is a no-op,
+      // not an error. Lets the /auth/resend-verification endpoint be
+      // abuse-safe (always 200).
+      return;
+    }
+    const token = this.jwtService.sign(
+      { sub: user.id, purpose: 'email_verify' },
+      { expiresIn: '24h' },
+    );
+    const baseUrl = this.configService.getOrThrow<string>('appBaseUrl');
+    const verifyUrl = `${baseUrl}/auth/verify-email?token=${encodeURIComponent(token)}`;
+    await this.emailService.sendEmailVerificationLink(
+      user.email,
+      user.firstName,
+      verifyUrl,
+    );
+  }
+
+  // Best-effort password-change notification. Called from every mutation
+  // path that changes an existing user's password (self, admin-reset,
+  // password-reset-via-OTP, admin PATCH with a password field). NOT
+  // called from create/register (no prior password to worry about) or
+  // gdprErase (anonymization; the user is the actor and the email
+  // destination is already being nullified). Email failure never blocks
+  // the password change — password changes must succeed even if the
+  // provider is down; the audit log still captures the event.
+  private async notifyPasswordChanged(user: User): Promise<void> {
+    try {
+      await this.emailService.sendPasswordChangedNotification(
+        user.email,
+        user.firstName,
+        new Date(),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Failed to send password-change notification to ${user.email}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  // Consume a verification JWT. Silent no-op for already-verified users
+  // (idempotent). Any other failure — bad signature, wrong purpose,
+  // expired, unknown user — surfaces as a generic 400 so an attacker
+  // poking at the endpoint can't distinguish failure modes.
+  async verifyEmailByToken(token: string): Promise<void> {
+    interface VerifyPayload {
+      sub?: unknown;
+      purpose?: unknown;
+    }
+    let payload: VerifyPayload;
+    try {
+      payload = this.jwtService.verify<VerifyPayload>(token);
+    } catch {
+      throw new BadRequestException('Invalid or expired verification link');
+    }
+    if (payload.purpose !== 'email_verify' || typeof payload.sub !== 'string') {
+      throw new BadRequestException('Invalid or expired verification link');
+    }
+    const user = await this.findByIdOrNull(payload.sub);
+    if (!user) {
+      throw new BadRequestException('Invalid or expired verification link');
+    }
+    if (user.emailVerifiedAt) {
+      return;
+    }
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { emailVerifiedAt: new Date(), updatedBy: user.id },
+    });
+    await this.auditService.record({
+      action: 'user.email_verified',
+      actorId: user.id,
+      targetUserId: user.id,
+    });
+  }
 
   async create(dto: CreateUserDto, actorId: string | null): Promise<User> {
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
@@ -167,6 +263,9 @@ export class UsersService {
           passwordChanged: Boolean(dto.password),
         },
       });
+    }
+    if (dto.password) {
+      await this.notifyPasswordChanged(updated);
     }
     return updated;
   }
@@ -335,7 +434,7 @@ export class UsersService {
       throw new UnauthorizedException('Current password is incorrect');
     }
     const passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
-    return this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { id: userId },
       data: {
         password: passwordHash,
@@ -343,6 +442,8 @@ export class UsersService {
         updatedBy: actorId,
       },
     });
+    await this.notifyPasswordChanged(updated);
+    return updated;
   }
 
   async updatePasswordAsAdmin(
@@ -370,6 +471,7 @@ export class UsersService {
       actorId,
       targetUserId: userId,
     });
+    await this.notifyPasswordChanged(updated);
     return updated;
   }
 
@@ -385,22 +487,16 @@ export class UsersService {
     });
   }
 
-  async requestEmailVerification(userId: string): Promise<void> {
-    const user = await this.findById(userId);
-    if (user.emailVerifiedAt) {
-      throw new BadRequestException('Email is already verified');
+  // Public entry point for "resend my verification email". Accepts email
+  // rather than userId so unverified users (who can't log in) can call
+  // it without authenticating. Silent no-op if the email isn't
+  // registered or is already verified — keeps the response opaque.
+  async resendEmailVerification(email: string): Promise<void> {
+    const user = await this.findByEmail(email);
+    if (!user || user.deletedAt || user.emailVerifiedAt) {
+      return;
     }
-    const otp = generateOtp();
-    const otpHash = await bcrypt.hash(otp, BCRYPT_ROUNDS);
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        otpHash,
-        otpPurpose: OtpPurpose.EMAIL_VERIFY,
-        otpExpiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
-      },
-    });
-    await this.emailService.sendEmailVerificationOtp(user.email, otp);
+    await this.sendEmailVerificationLink(user);
   }
 
   async requestPasswordReset(email: string): Promise<void> {
@@ -443,7 +539,7 @@ export class UsersService {
       throw new BadRequestException('Invalid or expired reset code');
     }
     const passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
-    await this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { id: user.id },
       data: {
         password: passwordHash,
@@ -461,33 +557,6 @@ export class UsersService {
       actorId: user.id,
       targetUserId: user.id,
     });
-  }
-
-  async verifyEmail(userId: string, otp: string): Promise<User> {
-    const user = await this.findById(userId);
-    if (
-      !user.otpHash ||
-      user.otpPurpose !== OtpPurpose.EMAIL_VERIFY ||
-      !user.otpExpiresAt
-    ) {
-      throw new BadRequestException('No email verification in progress');
-    }
-    if (user.otpExpiresAt.getTime() < Date.now()) {
-      throw new BadRequestException('Verification code has expired');
-    }
-    const otpMatches = await bcrypt.compare(otp, user.otpHash);
-    if (!otpMatches) {
-      throw new BadRequestException('Invalid verification code');
-    }
-    return this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        emailVerifiedAt: new Date(),
-        otpHash: null,
-        otpPurpose: null,
-        otpExpiresAt: null,
-        updatedBy: userId,
-      },
-    });
+    await this.notifyPasswordChanged(updated);
   }
 }

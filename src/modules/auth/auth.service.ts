@@ -17,6 +17,14 @@ export interface LoginResponse {
   user: UserResponseDto;
 }
 
+export interface RegisterResponse {
+  // Intentionally just a message — no user object, no access token. Keeps
+  // the pre-verification response surface minimal (nothing useful for an
+  // attacker probing whether an email is registered) and reinforces that
+  // the user must verify + log in before they have a session.
+  message: string;
+}
+
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
 
@@ -35,9 +43,15 @@ export class AuthService {
     private readonly auditService: AuditService,
   ) {}
 
-  async register(dto: RegisterDto): Promise<LoginResponse> {
+  async register(dto: RegisterDto): Promise<RegisterResponse> {
     const user = await this.usersService.create(dto, null);
-    return this.buildLoginResponse(user);
+    // Fire the verification email immediately. The call is awaited so a
+    // provider outage surfaces as a 5xx at registration time instead of
+    // a silent "email never arrives" issue users only notice later.
+    await this.usersService.sendEmailVerificationLink(user);
+    return {
+      message: 'Check your email to verify your account before logging in.',
+    };
   }
 
   async login(dto: LoginDto): Promise<LoginResponse> {
@@ -64,6 +78,18 @@ export class AuthService {
         await this.registerFailedAttempt(user.id, user.failedLoginCount);
       }
       throw new UnauthorizedException('Invalid credentials');
+    }
+
+    // Verified-email check happens AFTER password verification so that
+    // "is this email registered but unverified?" leaks only to someone
+    // who already knows the correct password — much smaller enumeration
+    // surface than blocking at the top of the function.
+    if (!user.emailVerifiedAt) {
+      throw new UnauthorizedException({
+        message:
+          'Please verify your email before logging in. Check your inbox or request a new verification link.',
+        error: 'EmailNotVerified',
+      });
     }
 
     if (user.failedLoginCount > 0 || user.lockedUntil) {

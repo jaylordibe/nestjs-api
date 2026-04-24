@@ -10,6 +10,8 @@ import {
   EmailTemplates,
 } from './template-engine';
 
+// Only used by the password-reset flow now that email verification
+// switched to a JWT link.
 const OTP_EXPIRY_MINUTES = 15;
 
 // Facade used by the rest of the app. Resolves templates through the
@@ -45,10 +47,14 @@ export class EmailService {
     });
   }
 
-  sendEmailVerificationOtp(email: string, otp: string): Promise<void> {
-    return this.sendTemplate('email-verification-otp', email, {
-      otp,
-      expiresInMinutes: OTP_EXPIRY_MINUTES,
+  sendEmailVerificationLink(
+    email: string,
+    firstName: string,
+    verifyUrl: string,
+  ): Promise<void> {
+    return this.sendTemplate('email-verification-link', email, {
+      firstName,
+      verifyUrl,
     });
   }
 
@@ -56,6 +62,22 @@ export class EmailService {
     return this.sendTemplate('password-reset-otp', email, {
       otp,
       expiresInMinutes: OTP_EXPIRY_MINUTES,
+    });
+  }
+
+  // Security notification sent to the user after any password mutation
+  // (self-change, admin reset, password-reset-via-OTP, admin PATCH with
+  // a password field). `occurredAt` is a pre-formatted ISO string so the
+  // template doesn't need date-formatting helpers — caller decides UTC
+  // vs. user's timezone.
+  sendPasswordChangedNotification(
+    email: string,
+    firstName: string,
+    occurredAt: Date,
+  ): Promise<void> {
+    return this.sendTemplate('password-changed-notification', email, {
+      firstName,
+      occurredAt: occurredAt.toISOString(),
     });
   }
 }

@@ -19,6 +19,7 @@ async function seedAdmin(
       firstName: 'Admin',
       lastName: 'User',
       role: 'admin',
+      emailVerifiedAt: new Date(),
     },
   });
   const res = await request(app.getHttpServer())
@@ -31,15 +32,21 @@ async function registerUser(
   app: INestApplication<App>,
   email = 'user@example.com',
 ): Promise<string> {
-  const res = await request(app.getHttpServer())
-    .post('/api/auth/register')
-    .send({
-      email,
-      password: PASSWORD,
-      firstName: 'Regular',
-      lastName: 'User',
-    });
-  return res.body.accessToken as string;
+  await request(app.getHttpServer()).post('/api/auth/register').send({
+    email,
+    password: PASSWORD,
+    firstName: 'Regular',
+    lastName: 'User',
+  });
+  const prisma = app.get(PrismaService);
+  await prisma.user.update({
+    where: { email },
+    data: { emailVerifiedAt: new Date() },
+  });
+  const login = await request(app.getHttpServer())
+    .post('/api/auth/login')
+    .send({ email, password: PASSWORD });
+  return login.body.accessToken as string;
 }
 
 describe('AppVersions (e2e)', () => {

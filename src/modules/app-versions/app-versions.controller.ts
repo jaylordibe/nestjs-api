@@ -12,6 +12,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
@@ -29,6 +30,8 @@ import { AppVersionsService } from './app-versions.service';
 
 // Reads are `@Public()` because apps typically hit a version-check endpoint
 // at launch, before any user has authenticated. Writes require admin.
+@ApiTags('App Versions')
+@ApiBearerAuth()
 @Controller('app-versions')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class AppVersionsController {

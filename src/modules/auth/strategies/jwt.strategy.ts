@@ -14,6 +14,10 @@ export interface JwtPayload {
   iss?: string;
   aud?: string;
   jti?: string;
+  // Access tokens don't carry a purpose claim. Tokens signed for other
+  // flows (email verification, future one-shot actions) do, and this
+  // strategy rejects them so they can't be used as auth tokens.
+  purpose?: string;
 }
 
 export const LOGOUT_KEY_PREFIX = 'logout:jti:';
@@ -38,6 +42,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload): Promise<AuthenticatedUser> {
+    // Reject tokens that were signed for a non-auth purpose (e.g.
+    // email-verification JWTs). Access tokens never set `purpose`.
+    if (payload.purpose !== undefined) {
+      throw new UnauthorizedException();
+    }
+
     // findByIdOrNull uses the scoped client, so soft-deleted users return
     // null here automatically — no explicit deletedAt check needed.
     const user = await this.usersService.findByIdOrNull(payload.sub);

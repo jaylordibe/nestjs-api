@@ -1,10 +1,41 @@
 import { INestApplication } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import request from 'supertest';
 import { App } from 'supertest/types';
+import { PrismaService } from '../src/prisma/prisma.service';
 import { createTestApp } from './setup/test-app';
 import { truncateAll } from './setup/db';
 
 const VALID_PASSWORD = 'correct-horse-battery-1';
+
+// Mark a registered user as email-verified directly in the DB so
+// downstream tests can log in. Keeps test setup close to production
+// behavior (same row shape) without needing to intercept / parse the
+// stub-logged verification JWT.
+async function markVerified(
+  app: INestApplication<App>,
+  email: string,
+): Promise<void> {
+  const prisma = app.get(PrismaService);
+  await prisma.user.update({
+    where: { email: email.toLowerCase() },
+    data: { emailVerifiedAt: new Date() },
+  });
+}
+
+// Fetches the user id after register — register returns only { message }
+// now, so the id isn't in the response. Used by the verify-email JWT
+// tests that need to sign a token with the user's sub.
+async function getUserIdByEmail(
+  app: INestApplication<App>,
+  email: string,
+): Promise<string> {
+  const prisma = app.get(PrismaService);
+  const row = await prisma.user.findUniqueOrThrow({
+    where: { email: email.toLowerCase() },
+  });
+  return row.id;
+}
 
 describe('Auth (e2e)', () => {
   let app: INestApplication<App>;
@@ -22,7 +53,7 @@ describe('Auth (e2e)', () => {
   });
 
   describe('POST /api/auth/register', () => {
-    it('creates a user and returns an access token', async () => {
+    it('returns only a message (no user, no token) and creates an unverified row', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/auth/register')
         .send({
@@ -33,35 +64,24 @@ describe('Auth (e2e)', () => {
         })
         .expect(201);
 
-      expect(res.body).toMatchObject({
-        accessToken: expect.any(String),
-        user: {
-          email: 'alice@example.com',
-          firstName: 'Alice',
-          lastName: 'Smith',
-          role: 'user',
-          isActive: true,
-        },
+      expect(res.body).toEqual({ message: expect.stringContaining('verify') });
+      expect(res.body).not.toHaveProperty('user');
+      expect(res.body).not.toHaveProperty('accessToken');
+
+      // Row exists, unverified, with createdBy/updatedBy null.
+      const prisma = app.get(PrismaService);
+      const row = await prisma.user.findUniqueOrThrow({
+        where: { email: 'alice@example.com' },
       });
-      expect(res.body.user).not.toHaveProperty('password');
-    });
-
-    it('leaves createdBy and updatedBy null (unauthenticated create)', async () => {
-      const res = await request(app.getHttpServer())
-        .post('/api/auth/register')
-        .send({
-          email: 'noactor@example.com',
-          password: VALID_PASSWORD,
-          firstName: 'No',
-          lastName: 'Actor',
-        })
-        .expect(201);
-      expect(res.body.user.createdBy).toBeNull();
-      expect(res.body.user.updatedBy).toBeNull();
+      expect(row.role).toBe('user');
+      expect(row.isActive).toBe(true);
+      expect(row.emailVerifiedAt).toBeNull();
+      expect(row.createdBy).toBeNull();
+      expect(row.updatedBy).toBeNull();
     });
 
     it('lowercases the email on storage', async () => {
-      const res = await request(app.getHttpServer())
+      await request(app.getHttpServer())
         .post('/api/auth/register')
         .send({
           email: 'MIXED@Example.COM',
@@ -70,7 +90,11 @@ describe('Auth (e2e)', () => {
           lastName: 'Case',
         })
         .expect(201);
-      expect(res.body.user.email).toBe('mixed@example.com');
+      const prisma = app.get(PrismaService);
+      const row = await prisma.user.findUniqueOrThrow({
+        where: { email: 'mixed@example.com' },
+      });
+      expect(row.email).toBe('mixed@example.com');
     });
 
     it('rejects duplicate email with 409', async () => {
@@ -122,8 +146,8 @@ describe('Auth (e2e)', () => {
           password: VALID_PASSWORD,
           firstName: 'X',
           lastName: 'Y',
+          phoneNumber: '+15551234',
           role: 'admin',
-          isActive: false,
         })
         .expect(400);
     });
@@ -139,7 +163,17 @@ describe('Auth (e2e)', () => {
       });
     });
 
-    it('returns access token for valid credentials', async () => {
+    it('blocks login when email is not verified (specific error)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: 'bob@example.com', password: VALID_PASSWORD })
+        .expect(401);
+      expect(res.body.error).toBe('EmailNotVerified');
+      expect(res.body.message).toMatch(/verify/i);
+    });
+
+    it('returns access token for valid credentials after verification', async () => {
+      await markVerified(app, 'bob@example.com');
       const res = await request(app.getHttpServer())
         .post('/api/auth/login')
         .send({ email: 'bob@example.com', password: VALID_PASSWORD })
@@ -149,17 +183,21 @@ describe('Auth (e2e)', () => {
     });
 
     it('login is case-insensitive on email', async () => {
+      await markVerified(app, 'bob@example.com');
       await request(app.getHttpServer())
         .post('/api/auth/login')
         .send({ email: 'BOB@example.com', password: VALID_PASSWORD })
         .expect(200);
     });
 
-    it('rejects wrong password with 401', async () => {
-      await request(app.getHttpServer())
+    it('rejects wrong password with generic 401 (no verification hint)', async () => {
+      const res = await request(app.getHttpServer())
         .post('/api/auth/login')
         .send({ email: 'bob@example.com', password: 'wrong-password-1' })
         .expect(401);
+      // Unknown-email and wrong-password must be indistinguishable —
+      // no EmailNotVerified leak for attackers who don't have the password.
+      expect(res.body.error).not.toBe('EmailNotVerified');
     });
 
     it('rejects unknown email with 401', async () => {
@@ -170,6 +208,7 @@ describe('Auth (e2e)', () => {
     });
 
     it('locks the account after 5 failed attempts (M6)', async () => {
+      await markVerified(app, 'bob@example.com');
       for (let i = 0; i < 5; i++) {
         await request(app.getHttpServer())
           .post('/api/auth/login')
@@ -184,6 +223,108 @@ describe('Auth (e2e)', () => {
     });
   });
 
+  describe('POST /api/auth/verify-email', () => {
+    async function registerAndSignEmailVerifyToken(
+      email: string,
+      purpose: string = 'email_verify',
+    ): Promise<string> {
+      await request(app.getHttpServer()).post('/api/auth/register').send({
+        email,
+        password: VALID_PASSWORD,
+        firstName: 'Verify',
+        lastName: 'Flow',
+      });
+      const userId = await getUserIdByEmail(app, email);
+      return app
+        .get(JwtService)
+        .sign({ sub: userId, purpose }, { expiresIn: '10m' });
+    }
+
+    it('verifies a user via a valid token and unblocks login', async () => {
+      const token = await registerAndSignEmailVerifyToken(
+        'verify-flow@example.com',
+      );
+      await request(app.getHttpServer())
+        .post('/api/auth/verify-email')
+        .send({ token })
+        .expect(200);
+      await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: 'verify-flow@example.com', password: VALID_PASSWORD })
+        .expect(200);
+    });
+
+    it('also accepts GET /api/auth/verify-email?token=... for direct email clicks', async () => {
+      const token = await registerAndSignEmailVerifyToken(
+        'verify-get@example.com',
+      );
+      await request(app.getHttpServer())
+        .get(`/api/auth/verify-email?token=${encodeURIComponent(token)}`)
+        .expect(200);
+    });
+
+    it('rejects a token with the wrong purpose claim (400)', async () => {
+      const token = await registerAndSignEmailVerifyToken(
+        'purpose@example.com',
+        'password_reset',
+      );
+      await request(app.getHttpServer())
+        .post('/api/auth/verify-email')
+        .send({ token })
+        .expect(400);
+    });
+
+    it('rejects a garbage token with 400', async () => {
+      await request(app.getHttpServer())
+        .post('/api/auth/verify-email')
+        .send({ token: 'eyJ0.definitely.not-a-real-jwt' })
+        .expect(400);
+    });
+
+    it('is idempotent — re-verifying an already-verified user returns 200', async () => {
+      const token = await registerAndSignEmailVerifyToken('idem@example.com');
+      await request(app.getHttpServer())
+        .post('/api/auth/verify-email')
+        .send({ token })
+        .expect(200);
+      await request(app.getHttpServer())
+        .post('/api/auth/verify-email')
+        .send({ token })
+        .expect(200);
+    });
+
+    it('email-verify tokens cannot be used as access tokens', async () => {
+      const token = await registerAndSignEmailVerifyToken(
+        'no-auth@example.com',
+      );
+      // JwtStrategy rejects tokens with a `purpose` claim.
+      await request(app.getHttpServer())
+        .get('/api/auth/me')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(401);
+    });
+  });
+
+  describe('POST /api/auth/resend-verification', () => {
+    it('always returns 200 — even for unregistered emails (no enumeration)', async () => {
+      await request(app.getHttpServer())
+        .post('/api/auth/resend-verification')
+        .send({ email: 'ghost@example.com' })
+        .expect(200);
+
+      await request(app.getHttpServer()).post('/api/auth/register').send({
+        email: 'real@example.com',
+        password: VALID_PASSWORD,
+        firstName: 'R',
+        lastName: 'E',
+      });
+      await request(app.getHttpServer())
+        .post('/api/auth/resend-verification')
+        .send({ email: 'real@example.com' })
+        .expect(200);
+    });
+  });
+
   describe('POST /api/auth/logout', () => {
     it('revokes the exact token it was called with; other tokens stay valid', async () => {
       await request(app.getHttpServer()).post('/api/auth/register').send({
@@ -192,8 +333,8 @@ describe('Auth (e2e)', () => {
         firstName: 'Log',
         lastName: 'Out',
       });
+      await markVerified(app, 'logout@example.com');
 
-      // Two independent logins → two different tokens with different jti.
       const first = await request(app.getHttpServer())
         .post('/api/auth/login')
         .send({ email: 'logout@example.com', password: VALID_PASSWORD });
@@ -204,7 +345,6 @@ describe('Auth (e2e)', () => {
       const tokenA = first.body.accessToken;
       const tokenB = second.body.accessToken;
 
-      // Both tokens work before logout.
       await request(app.getHttpServer())
         .get('/api/auth/me')
         .set('Authorization', `Bearer ${tokenA}`)
@@ -214,13 +354,11 @@ describe('Auth (e2e)', () => {
         .set('Authorization', `Bearer ${tokenB}`)
         .expect(200);
 
-      // Logout token A.
       await request(app.getHttpServer())
         .post('/api/auth/logout')
         .set('Authorization', `Bearer ${tokenA}`)
         .expect(204);
 
-      // Token A is revoked; token B is unaffected.
       await request(app.getHttpServer())
         .get('/api/auth/me')
         .set('Authorization', `Bearer ${tokenA}`)
@@ -244,13 +382,11 @@ describe('Auth (e2e)', () => {
         firstName: 'Log',
         lastName: 'Out',
       });
+      await markVerified(app, 'logout-all@example.com');
+
       const loginA = await request(app.getHttpServer())
         .post('/api/auth/login')
         .send({ email: 'logout-all@example.com', password: VALID_PASSWORD });
-      // Wait past a full second so token B is issued in a strictly later
-      // second than the passwordChangedAt bump from the eventual logout-all
-      // call won't accidentally catch token B too (we want ALL tokens
-      // issued BEFORE logout-all to be revoked).
       await new Promise((resolve) => setTimeout(resolve, 1100));
       const loginB = await request(app.getHttpServer())
         .post('/api/auth/login')
@@ -259,16 +395,12 @@ describe('Auth (e2e)', () => {
       const tokenA = loginA.body.accessToken;
       const tokenB = loginB.body.accessToken;
 
-      // Wait past another second so logout-all's passwordChangedAt is in
-      // a strictly later second than token B's iat.
       await new Promise((resolve) => setTimeout(resolve, 1100));
-
       await request(app.getHttpServer())
         .post('/api/auth/logout-all')
         .set('Authorization', `Bearer ${tokenB}`)
         .expect(204);
 
-      // Both pre-existing tokens are revoked.
       await request(app.getHttpServer())
         .get('/api/auth/me')
         .set('Authorization', `Bearer ${tokenA}`)
@@ -278,7 +410,6 @@ describe('Auth (e2e)', () => {
         .set('Authorization', `Bearer ${tokenB}`)
         .expect(401);
 
-      // Fresh login after logout-all works.
       await new Promise((resolve) => setTimeout(resolve, 1100));
       const loginC = await request(app.getHttpServer())
         .post('/api/auth/login')
@@ -295,15 +426,17 @@ describe('Auth (e2e)', () => {
     let token: string;
 
     beforeEach(async () => {
-      const res = await request(app.getHttpServer())
-        .post('/api/auth/register')
-        .send({
-          email: 'carol@example.com',
-          password: VALID_PASSWORD,
-          firstName: 'Carol',
-          lastName: 'Lee',
-        });
-      token = res.body.accessToken as string;
+      await request(app.getHttpServer()).post('/api/auth/register').send({
+        email: 'carol@example.com',
+        password: VALID_PASSWORD,
+        firstName: 'Carol',
+        lastName: 'Lee',
+      });
+      await markVerified(app, 'carol@example.com');
+      const login = await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: 'carol@example.com', password: VALID_PASSWORD });
+      token = login.body.accessToken as string;
     });
 
     it('returns current user profile with valid token', async () => {
