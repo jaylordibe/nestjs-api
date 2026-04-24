@@ -1,9 +1,12 @@
-name: CI
+name: Test
 
+# Reusable + PR-triggered. Deploy workflows call this via `uses:` to gate merges.
 on:
   pull_request:
-  push:
-    branches: [main]
+    branches:
+      - main
+      - staging
+      - develop
 
 concurrency:
   group: ci-${{ github.ref }}
