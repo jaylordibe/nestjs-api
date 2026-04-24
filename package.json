@@ -1,10 +1,27 @@
 {
   "name": "nestjs-api",
-  "version": "0.0.1",
-  "description": "",
-  "author": "",
+  "version": "1.0.0",
+  "description": "Production-grade NestJS 11 + Prisma 7 + PostgreSQL + Redis API template. Auth with email verification, RBAC, soft-delete, audit log, GDPR erase, Swagger docs, and 81 e2e tests out of the box.",
+  "author": "Jay Ibe",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jaylordibe/nestjs-api"
+  },
+  "bugs": {
+    "url": "https://github.com/jaylordibe/nestjs-api/issues"
+  },
+  "keywords": [
+    "nestjs",
+    "prisma",
+    "typescript",
+    "postgres",
+    "redis",
+    "api-template",
+    "jwt",
+    "rbac"
+  ],
   "private": true,
-  "license": "UNLICENSED",
   "engines": {
     "node": ">=22"
   },
