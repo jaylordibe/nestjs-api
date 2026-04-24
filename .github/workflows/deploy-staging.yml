@@ -1,0 +1,36 @@
+# Set the workflow name
+name: Deploy To Staging
+
+# Set events that trigger the workflow
+on:
+  push:
+    branches:
+      - staging
+
+# Set jobs to be executed in the workflow
+jobs:
+  test:
+    name: Test
+    # Calls the reusable workflow; deploy only runs if this passes.
+    uses: ./.github/workflows/test.yml
+
+  deploy:
+    name: Build And Deploy To Staging
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      - name: Deploy to staging
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -t rsa ${{ secrets.STAGING_HOST }} >> ~/.ssh/known_hosts
+          (umask 077; echo "${{ secrets.STAGING_SSH_KEY }}" > ~/.ssh/id_rsa)
+          eval "$(ssh-agent -s)"
+          ssh-add ~/.ssh/id_rsa
+          cat >> ~/.ssh/config <<EOL
+          Host ${{ secrets.STAGING_HOST }}
+            ForwardAgent yes
+          EOL
+          ssh ${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }} "pwd && exit"
+          sudo rm -r ~/.ssh

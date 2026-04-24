@@ -99,11 +99,21 @@ jobs:
       # transitive in a dev tool can red-light CI for days — not worth it.
       # If a specific moderate finding matters, address it directly (yarn
       # resolution, dep bump, or remove the package).
+      # Informational: lists everything moderate and above. Never fails.
+      # Known moderate: `uuid` via `resend > svix > uuid` (CVE fixed in
+      # uuid >= 14.0.0, but uuid 11+ is ESM-only and breaks the CJS
+      # `require` path svix uses — can't bump until svix updates upstream).
       - name: Dependency audit (informational)
         run: yarn audit --level moderate || true
 
+      # yarn 1.x's `--level` flag only filters the printed table; the
+      # exit code is still a bitmask of ALL severities found (1=info,
+      # 2=low, 4=moderate, 8=high, 16=critical). A single moderate
+      # finding → exit 4 even with `--level high`. Guard with a shell
+      # check that only fails on exit codes with the high (8) or
+      # critical (16) bit set, i.e. exit code >= 8.
       - name: Dependency audit (blocks on high+)
-        run: yarn audit --level high
+        run: yarn audit --level high || test $? -lt 8
 
   docker:
     name: Build & scan container image
