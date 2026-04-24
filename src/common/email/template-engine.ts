@@ -112,6 +112,11 @@ export class EmailTemplateEngine implements OnModuleInit {
   // fallback. Adequate for the template library shipped here (simple
   // transactional emails). For richer content, provide an explicit
   // `<name>.text.hbs` alongside the html template.
+  //
+  // Numeric-entity decoding matters because Handlebars HTML-escapes `=`,
+  // `'`, `` ` `` etc. to entities like `&#x3D;` by default. Without
+  // decoding here, URLs in the plain-text fallback would render as
+  // `?token&#x3D;eyJ...` in terminals and plain-text email clients.
   private htmlToText(html: string): string {
     return html
       .replace(/<(style|script)[\s\S]*?<\/\1>/gi, '')
@@ -122,6 +127,14 @@ export class EmailTemplateEngine implements OnModuleInit {
       .replace(/&amp;/g, '&')
       .replace(/&lt;/g, '<')
       .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) =>
+        String.fromCharCode(parseInt(hex, 16)),
+      )
+      .replace(/&#(\d+);/g, (_, dec: string) =>
+        String.fromCharCode(parseInt(dec, 10)),
+      )
       .replace(/\n{3,}/g, '\n\n')
       .trim();
   }

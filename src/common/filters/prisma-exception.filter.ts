@@ -16,6 +16,20 @@ interface ErrorResponseBody {
   timestamp: string;
 }
 
+// Subset of the meta shape emitted by @prisma/adapter-pg for P2002
+// errors. Prisma's public types don't describe this nested object, so
+// we declare just the path we actually read.
+interface AdapterPgMeta {
+  target?: unknown;
+  driverAdapterError?: {
+    cause?: {
+      constraint?: {
+        fields?: unknown;
+      };
+    };
+  };
+}
+
 @Catch(Prisma.PrismaClientKnownRequestError)
 export class PrismaExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(PrismaExceptionFilter.name);
@@ -85,13 +99,54 @@ export class PrismaExceptionFilter implements ExceptionFilter {
     }
   }
 
+  // P2002 meta shape varies by driver path:
+  //   - Classic Rust engine: meta.target = string[] or string
+  //       (e.g. ['email'] or 'users_email_key')
+  //   - adapter-pg (Prisma 7+): meta.target is undefined; the field list
+  //       lives at meta.driverAdapterError.cause.constraint.fields
+  //       (e.g. { fields: ['email'] })
+  //   - Fallback: Prisma's message string contains
+  //       "Unique constraint failed on the fields: (`email`)"
+  // Check all three in order so we return a sensible field name
+  // regardless of which path the error came from. For composite
+  // uniques, returns the last column — imprecise but not misleading.
   private getTargetField(
     err: Prisma.PrismaClientKnownRequestError,
   ): string | undefined {
-    const target = err.meta?.target;
-    if (Array.isArray(target)) return target[0] as string | undefined;
-    if (typeof target === 'string') return target;
-    return undefined;
+    const meta = err.meta as AdapterPgMeta | undefined;
+    if (!meta) return this.extractFieldFromMessage(err.message);
+
+    // Classic target path
+    if (Array.isArray(meta.target) && meta.target.length > 0) {
+      const first: unknown = meta.target[0];
+      if (typeof first === 'string' && first.length > 0) return first;
+    }
+    if (typeof meta.target === 'string' && meta.target.length > 0) {
+      const withoutSuffix = meta.target.replace(/_(key|idx|unique)$/i, '');
+      const last = withoutSuffix.split('_').pop();
+      if (last && last.length > 0) return last;
+    }
+
+    // adapter-pg path
+    const adapterFields = meta.driverAdapterError?.cause?.constraint?.fields;
+    if (
+      Array.isArray(adapterFields) &&
+      adapterFields.length > 0 &&
+      typeof adapterFields[0] === 'string'
+    ) {
+      return adapterFields[0];
+    }
+
+    return this.extractFieldFromMessage(err.message);
+  }
+
+  // Parse the field name out of Prisma's message string as a last
+  // resort. Example: "Unique constraint failed on the fields: (`email`)"
+  // Composite: "... on the fields: (`platform`,`version`)" → picks
+  // `platform`. Imprecise but never misleading.
+  private extractFieldFromMessage(message: string): string | undefined {
+    const match = /fields:\s*\(`?([^`,)]+)`?/.exec(message);
+    return match ? match[1].trim() : undefined;
   }
 
   private humanize(field: string): string {

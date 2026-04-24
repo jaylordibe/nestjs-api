@@ -97,7 +97,7 @@ describe('Auth (e2e)', () => {
       expect(row.email).toBe('mixed@example.com');
     });
 
-    it('rejects duplicate email with 409', async () => {
+    it('rejects duplicate email with 409 and field-aware message', async () => {
       const payload = {
         email: 'dup@example.com',
         password: VALID_PASSWORD,
@@ -108,10 +108,11 @@ describe('Auth (e2e)', () => {
         .post('/api/auth/register')
         .send(payload)
         .expect(201);
-      await request(app.getHttpServer())
+      const res = await request(app.getHttpServer())
         .post('/api/auth/register')
         .send(payload)
         .expect(409);
+      expect(res.body.message).toMatch(/email already in use/i);
     });
 
     it('rejects invalid email with 400', async () => {
