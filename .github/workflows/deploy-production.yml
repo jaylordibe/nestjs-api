@@ -1,26 +1,73 @@
-# Set the workflow name
-name: Deploy To Production
+name: Deploy to Production
 
-# Set events that trigger the workflow
 on:
+  # Auto-deploy on pushes to main.
   push:
     branches:
       - main
+  # Manual re-deploy button in the Actions UI — useful for retries
+  # after transient infra failures without needing a new commit.
+  workflow_dispatch:
 
-# Set jobs to be executed in the workflow
+# Serialize production deploys so two pushes in quick succession don't
+# race. `cancel-in-progress: false` — an in-flight prod deploy must
+# finish, not be killed mid-flight. Newer pushes queue.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test
-    # Production deploys also require the full test suite to pass.
+    # Production deploys require the full test suite to pass.
     uses: ./.github/workflows/test.yml
 
   deploy:
-    name: Build And Deploy To Production
+    name: Deploy
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # GitHub environment — configure in Settings → Environments →
+    # production to:
+    #   1. Require reviewer approval before the job runs (strongly
+    #      recommended for prod — enforces a human check).
+    #   2. Scope secrets (PROD_*) to this environment only.
+    #   3. Restrict which branches can deploy to it.
+    # The `url:` is displayed in the Actions UI as a clickable link to
+    # the deployed environment after a successful run.
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_URL }}
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Replace the placeholder below with your real deploy flow.
+      # Examples by deploy target:
+      #
+      #   Kubernetes (recommended for most prod apps):
+      #     - uses: azure/setup-kubectl@v4
+      #     - run: kubectl set image deployment/api api=${{ env.IMAGE }}:${{ github.sha }} -n production
+      #
+      #   Container registry push + pull-on-target:
+      #     - uses: docker/login-action@v3
+      #     - uses: docker/build-push-action@v6
+      #     - run: ssh prod "docker compose pull && docker compose up -d"
+      #
+      #   PaaS (Fly, Railway, Render, AWS App Runner):
+      #     - run: curl -fsSL https://fly.io/install.sh | sh
+      #     - run: flyctl deploy --remote-only
+      #
+      # The checkout step above gives you the repo contents at the
+      # commit being deployed; reference secrets via
+      # `${{ secrets.PRODUCTION_* }}` scoped to this environment.
       - name: Deploy to production
         run: |
-          echo 'Add production deployment script here...'
+          echo "TODO: wire your real production deploy here"
+          echo "Commit: ${{ github.sha }}"
+          echo "Actor:  ${{ github.actor }}"

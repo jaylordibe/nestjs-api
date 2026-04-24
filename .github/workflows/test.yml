@@ -1,21 +1,38 @@
 name: Test
 
-# Reusable + PR-triggered. Deploy workflows call this via `uses:` to gate merges.
+# Reusable + PR-triggered. Deploy workflows call this via `uses:` to gate
+# merges; PR events trigger it directly against the target branch.
 on:
   pull_request:
     branches:
       - main
       - staging
       - develop
+  # Makes this workflow callable from other workflows as
+  # `jobs.<name>.uses: ./.github/workflows/test.yml`. Needed by the
+  # deploy-production / deploy-staging workflows that gate their deploys
+  # on a passing test run. No `inputs` or `secrets` are declared — the
+  # env vars below are CI-only constants, not repo secrets.
+  workflow_call:
 
+# Cancel in-flight runs of this workflow for the same ref. Avoids two
+# concurrent CI runs on rapid pushes; the newer commit wins.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
+# Least-privilege default. Only read access to the repo. Individual jobs
+# can escalate if they ever need to (e.g., to push images to GHCR).
+permissions:
+  contents: read
 
 jobs:
   ci:
     name: Lint, build, test
     runs-on: ubuntu-latest
+    # Bounded so a hung job can't burn billable minutes. 15 min is ~3x
+    # the normal green run, plenty of headroom for flaky DB starts.
+    timeout-minutes: 15
 
     services:
       postgres:
@@ -69,9 +86,11 @@ jobs:
       THROTTLE_LIMIT: 100
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: yarn
@@ -79,6 +98,8 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile --silent
         env:
+          # Suppress Node's "DEP0169 url.parse" warning emitted by
+          # yarn 1.x itself — yarn-internal, no upstream fix available.
           NODE_OPTIONS: --no-deprecation
 
       - name: Generate Prisma client
@@ -96,12 +117,6 @@ jobs:
       - name: E2E tests
         run: yarn test:e2e
 
-      # Dependency vulnerability audit. Two-step: surface every moderate+
-      # finding as an informational log (never blocks), then gate the build
-      # on high+ only. Raising the floor to moderate means one unfixed
-      # transitive in a dev tool can red-light CI for days — not worth it.
-      # If a specific moderate finding matters, address it directly (yarn
-      # resolution, dep bump, or remove the package).
       # Informational: lists everything moderate and above. Never fails.
       # Known moderate: `uuid` via `resend > svix > uuid` (CVE fixed in
       # uuid >= 14.0.0, but uuid 11+ is ESM-only and breaks the CJS
@@ -122,14 +137,17 @@ jobs:
     name: Build & scan container image
     runs-on: ubuntu-latest
     needs: ci
+    timeout-minutes: 15
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Build image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: false
@@ -140,6 +158,8 @@ jobs:
 
       # Trivy scans the built image for CVEs in OS packages and node modules.
       # Fails on HIGH or CRITICAL; MEDIUM is reported but non-blocking.
+      # `ignore-unfixed: true` skips CVEs with no available patch so the
+      # build doesn't red-light on findings you literally cannot fix.
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@v0.36.0
         with:

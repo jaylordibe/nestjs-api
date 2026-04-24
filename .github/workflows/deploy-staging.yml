@@ -1,13 +1,24 @@
-# Set the workflow name
-name: Deploy To Staging
+name: Deploy to Staging
 
-# Set events that trigger the workflow
 on:
+  # Auto-deploy on pushes to the staging branch (typical GitFlow).
   push:
     branches:
       - staging
+  # Manual re-deploy button in the Actions UI. Useful for retries
+  # after transient infra failures without needing a new commit.
+  workflow_dispatch:
 
-# Set jobs to be executed in the workflow
+# Serialize staging deploys so two pushes in quick succession don't
+# race. `cancel-in-progress: false` — an in-flight deploy should
+# finish, not be killed mid-flight. Newer pushes queue.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test
@@ -15,22 +26,46 @@ jobs:
     uses: ./.github/workflows/test.yml
 
   deploy:
-    name: Build And Deploy To Staging
+    name: Deploy
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # GitHub environment — lets you configure environment-scoped
+    # secrets (STAGING_HOST, STAGING_USER, STAGING_SSH_KEY) and
+    # optionally require reviewer approval for deploys via
+    # Settings → Environments → staging.
+    environment:
+      name: staging
+      url: ${{ vars.STAGING_URL }}
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-      - name: Deploy to staging
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Loads the SSH private key into ssh-agent without writing it to
+      # disk — cleaner than `echo "$KEY" > ~/.ssh/id_rsa`. Agent is
+      # scoped to this job; no cleanup needed (runners are ephemeral).
+      - name: Configure SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+
+      # Trust the staging host's fingerprint. Hashing with `-H` avoids
+      # leaking hostnames in known_hosts. Omits `-t rsa` so ssh-keyscan
+      # negotiates the strongest algorithm the server offers (usually
+      # ed25519 on modern boxes).
+      - name: Trust host key
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -t rsa ${{ secrets.STAGING_HOST }} >> ~/.ssh/known_hosts
-          (umask 077; echo "${{ secrets.STAGING_SSH_KEY }}" > ~/.ssh/id_rsa)
-          eval "$(ssh-agent -s)"
-          ssh-add ~/.ssh/id_rsa
-          cat >> ~/.ssh/config <<EOL
-          Host ${{ secrets.STAGING_HOST }}
-            ForwardAgent yes
-          EOL
-          ssh ${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }} "pwd && exit"
-          sudo rm -r ~/.ssh
+          ssh-keyscan -H "${{ secrets.STAGING_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy to staging
+        run: |
+          # Replace this with your real deploy logic. Example options:
+          #   - SSH + `git pull && pm2 reload` on a VM
+          #   - `docker compose pull && docker compose up -d`
+          #   - `kubectl rollout restart deployment/api`
+          #   - `fly deploy` / `railway up` / etc.
+          ssh "${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }}" \
+            "pwd && echo 'TODO: real deploy commands here' && exit"
