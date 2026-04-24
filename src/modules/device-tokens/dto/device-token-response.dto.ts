@@ -1,3 +1,5 @@
+import { ApiHideProperty } from '@nestjs/swagger';
+import { Exclude } from 'class-transformer';
 import { DeviceToken } from '@prisma/client';
 import { AppPlatform } from '../../../common/enums/app-platform.enum';
 import { DeviceOs } from '../../../common/enums/device-os.enum';
@@ -7,8 +9,9 @@ export class DeviceTokenResponseDto {
   id!: string;
   createdAt!: Date;
   updatedAt!: Date;
-  createdBy!: string | null;
-  updatedBy!: string | null;
+  // Audit-trail columns hidden from frontend — see CLAUDE.md.
+  @ApiHideProperty() @Exclude() createdBy!: string | null;
+  @ApiHideProperty() @Exclude() updatedBy!: string | null;
   userId!: string;
   token!: string;
   appPlatform!: AppPlatform;

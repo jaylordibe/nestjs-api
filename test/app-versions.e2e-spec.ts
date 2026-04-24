@@ -98,7 +98,13 @@ describe('AppVersions (e2e)', () => {
       downloadUrl: 'https://apps.example.com/1.2.3.apk',
       forceUpdate: true,
     });
-    expect(res.body.createdBy).toBeDefined();
+    // createdBy is scrubbed from the API response; verify it was
+    // populated at the DB level.
+    expect(res.body).not.toHaveProperty('createdBy');
+    const row = await app
+      .get(PrismaService)
+      .appVersion.findUniqueOrThrow({ where: { id: res.body.id } });
+    expect(row.createdBy).not.toBeNull();
   });
 
   it('POST /api/app-versions rejects invalid platform with 400', async () => {

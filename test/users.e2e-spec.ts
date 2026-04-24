@@ -473,7 +473,10 @@ describe('Users (e2e)', () => {
       expect(res.body).not.toHaveProperty('password');
     });
 
-    it('POST /api/users sets createdBy and updatedBy to the acting admin', async () => {
+    // Audit columns (createdBy/updatedBy/deletedBy) are intentionally
+    // hidden from the API response and not in the body. Verify via the
+    // DB row directly — the columns still exist for reporting.
+    it('POST /api/users sets createdBy and updatedBy to the acting admin (DB-side assertion)', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/users')
         .set('Authorization', `Bearer ${adminToken}`)
@@ -484,11 +487,17 @@ describe('Users (e2e)', () => {
           lastName: 'User',
         })
         .expect(201);
-      expect(res.body.createdBy).toBe(adminId);
-      expect(res.body.updatedBy).toBe(adminId);
+      expect(res.body).not.toHaveProperty('createdBy');
+      expect(res.body).not.toHaveProperty('updatedBy');
+
+      const row = await app
+        .get(PrismaService)
+        .user.findUniqueOrThrow({ where: { id: res.body.id } });
+      expect(row.createdBy).toBe(adminId);
+      expect(row.updatedBy).toBe(adminId);
     });
 
-    it('PATCH /api/users/:id updates updatedBy but leaves createdBy intact', async () => {
+    it('PATCH /api/users/:id updates updatedBy but leaves createdBy intact (DB-side assertion)', async () => {
       const created = await request(app.getHttpServer())
         .post('/api/users')
         .set('Authorization', `Bearer ${adminToken}`)
@@ -498,16 +507,23 @@ describe('Users (e2e)', () => {
           firstName: 'Audit',
           lastName: 'Patch',
         });
-      const createdBy = created.body.createdBy;
+      const prisma = app.get(PrismaService);
+      const before = await prisma.user.findUniqueOrThrow({
+        where: { id: created.body.id },
+      });
 
       const other = await seedAdmin(app, 'other-admin@example.com');
-      const patched = await request(app.getHttpServer())
+      await request(app.getHttpServer())
         .patch(`/api/users/${created.body.id}`)
         .set('Authorization', `Bearer ${other.token}`)
         .send({ firstName: 'Renamed' })
         .expect(200);
-      expect(patched.body.createdBy).toBe(createdBy);
-      expect(patched.body.updatedBy).toBe(other.id);
+
+      const after = await prisma.user.findUniqueOrThrow({
+        where: { id: created.body.id },
+      });
+      expect(after.createdBy).toBe(before.createdBy);
+      expect(after.updatedBy).toBe(other.id);
     });
 
     it('GET /api/users/:id returns a user', async () => {
@@ -624,13 +640,22 @@ describe('Users (e2e)', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(204);
 
-      // Admin can still fetch the soft-deleted row for recovery/audit.
+      // Admin can still fetch the soft-deleted row via the API — but
+      // `deletedAt`/`deletedBy` are hidden from the response (frontend
+      // sees only `createdAt`/`updatedAt`). Deletion metadata is
+      // asserted at the DB layer; reports read from there.
       const after = await request(app.getHttpServer())
         .get(`/api/users/${created.body.id}`)
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(200);
-      expect(after.body.deletedAt).not.toBeNull();
-      expect(after.body.deletedBy).toBe(adminId);
+      expect(after.body).not.toHaveProperty('deletedAt');
+      expect(after.body).not.toHaveProperty('deletedBy');
+
+      const row = await app
+        .get(PrismaService)
+        .user.findUniqueOrThrow({ where: { id: created.body.id } });
+      expect(row.deletedAt).not.toBeNull();
+      expect(row.deletedBy).toBe(adminId);
 
       // But the deleted user can't log in.
       await request(app.getHttpServer())

@@ -1,3 +1,5 @@
+import { ApiHideProperty } from '@nestjs/swagger';
+import { Exclude } from 'class-transformer';
 import { AppVersion } from '@prisma/client';
 import { AppPlatform } from '../../../common/enums/app-platform.enum';
 
@@ -5,8 +7,9 @@ export class AppVersionResponseDto {
   id!: string;
   createdAt!: Date;
   updatedAt!: Date;
-  createdBy!: string | null;
-  updatedBy!: string | null;
+  // Audit-trail columns hidden from frontend — see CLAUDE.md.
+  @ApiHideProperty() @Exclude() createdBy!: string | null;
+  @ApiHideProperty() @Exclude() updatedBy!: string | null;
   version!: string;
   description!: string | null;
   platform!: AppPlatform;

@@ -1,3 +1,4 @@
+import { ApiHideProperty } from '@nestjs/swagger';
 import { Exclude } from 'class-transformer';
 import { User } from '@prisma/client';
 import { Gender } from '../../../common/enums/gender.enum';
@@ -7,10 +8,16 @@ export class UserResponseDto {
   id!: string;
   createdAt!: Date;
   updatedAt!: Date;
-  createdBy!: string | null;
-  updatedBy!: string | null;
-  deletedAt!: Date | null;
-  deletedBy!: string | null;
+  // Audit-trail columns are scrubbed from the frontend response — only
+  // `createdAt`/`updatedAt` are exposed. `createdBy`/`updatedBy`/
+  // `deletedAt`/`deletedBy` stay in the DB for reporting + forensics
+  // but are never surfaced via the API. Pattern applies to every
+  // resource — see CLAUDE.md "Response DTO" under "Generating a new
+  // resource".
+  @ApiHideProperty() @Exclude() createdBy!: string | null;
+  @ApiHideProperty() @Exclude() updatedBy!: string | null;
+  @ApiHideProperty() @Exclude() deletedAt!: Date | null;
+  @ApiHideProperty() @Exclude() deletedBy!: string | null;
   isActive!: boolean;
   firstName!: string;
   middleName!: string | null;
@@ -25,13 +32,17 @@ export class UserResponseDto {
   birthday!: Date | null;
   timezone!: string | null;
 
-  @Exclude() password!: string;
-  @Exclude() passwordChangedAt!: Date | null;
-  @Exclude() failedLoginCount!: number;
-  @Exclude() lockedUntil!: Date | null;
-  @Exclude() otpHash!: string | null;
-  @Exclude() otpPurpose!: string | null;
-  @Exclude() otpExpiresAt!: Date | null;
+  // `@Exclude()` strips these from the JSON response at runtime (via
+  // ClassSerializerInterceptor). `@ApiHideProperty()` hides them from
+  // the Swagger schema at build time — the two layers are independent,
+  // so both decorators are needed to keep the docs honest.
+  @ApiHideProperty() @Exclude() password!: string;
+  @ApiHideProperty() @Exclude() passwordChangedAt!: Date | null;
+  @ApiHideProperty() @Exclude() failedLoginCount!: number;
+  @ApiHideProperty() @Exclude() lockedUntil!: Date | null;
+  @ApiHideProperty() @Exclude() otpHash!: string | null;
+  @ApiHideProperty() @Exclude() otpPurpose!: string | null;
+  @ApiHideProperty() @Exclude() otpExpiresAt!: Date | null;
 
   constructor(user: User) {
     Object.assign(this, user);

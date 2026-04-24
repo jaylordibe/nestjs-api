@@ -252,21 +252,29 @@ Controllers pass `@CurrentUser().id`. For unauthenticated creates (registration 
 
 ### Response DTO
 
-Mirror the schema's column order: `id, createdAt, updatedAt, createdBy, updatedBy, isActive, ...resource fields`. Always construct via `new <Resource>ResponseDto(row)`; the global `ClassSerializerInterceptor` then strips `@Exclude()`-marked fields automatically. **Never return raw Prisma rows from a controller** — secrets (passwords, OTP hashes, tokens) leak otherwise.
+Always construct via `new <Resource>ResponseDto(row)`; the global `ClassSerializerInterceptor` strips `@Exclude()`-marked fields automatically. **Never return raw Prisma rows from a controller** — secrets (passwords, OTP hashes, tokens) leak otherwise.
+
+**Audit columns are hidden from the frontend.** Only `createdAt` and `updatedAt` are exposed. `createdBy`, `updatedBy`, `deletedAt`, `deletedBy` are kept in the DB for reporting/forensics but stripped from every API response. Pair `@ApiHideProperty()` (hides from Swagger schema) with `@Exclude()` (strips from JSON) — the two systems are independent and both decorators are required to keep docs + wire in sync. Scrubbing every resource uniformly means a frontend reading `/api/<resource>/:id` can't accidentally render internal-actor UUIDs or lifecycle metadata.
 
 ```ts
 export class OrderResponseDto {
   id!: string;
   createdAt!: Date;
   updatedAt!: Date;
-  createdBy!: string | null;
-  updatedBy!: string | null;
-  isActive!: boolean;
+  // Audit-trail columns hidden from frontend. DB still has them for reports.
+  @ApiHideProperty() @Exclude() createdBy!: string | null;
+  @ApiHideProperty() @Exclude() updatedBy!: string | null;
+  // Only for soft-delete resources — also hidden from frontend:
+  @ApiHideProperty() @Exclude() deletedAt!: Date | null;
+  @ApiHideProperty() @Exclude() deletedBy!: string | null;
+  isActive!: boolean; // only when the resource has a real suspension concept
   // resource-specific fields
-  @Exclude() secretColumn!: string | null;
+  @ApiHideProperty() @Exclude() secretColumn!: string | null;
   constructor(row: Order) { Object.assign(this, row); }
 }
 ```
+
+**For e2e tests**: assertions on `createdBy`/`updatedBy`/`deletedAt`/`deletedBy` must read from the DB directly (`app.get(PrismaService).<model>.findUniqueOrThrow(...)`), not from the API response body. The three example resources demonstrate the pattern.
 
 ### Migration
 
@@ -283,6 +291,7 @@ Required for every resource. Create `test/<resource>.e2e-spec.ts` — see "Addin
 - **Trust proxy**: `main.ts` calls `app.set('trust proxy', config.trustProxy)` from the `TRUST_PROXY` env var. Default is `"false"` (direct exposure). When deploying behind nginx/ALB/Cloudflare/k8s ingress, set it to `"1"` (single hop) or a comma-separated CIDR list — otherwise `req.ip` is the proxy's IP and per-IP throttling collapses into one global bucket. Never set to `"true"` in prod (lets clients spoof `X-Forwarded-For`).
 - **Validation is global**: `ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true, transformOptions: { enableImplicitConversion: true } })` is registered as `APP_PIPE` in `app.module.ts`. Add a DTO for every request body/query — extra fields → 400. Query-string numbers (`?page=2`) auto-convert to `number` thanks to `enableImplicitConversion`.
 - **Response serialization**: global `ClassSerializerInterceptor` (`APP_INTERCEPTOR` in `app.module.ts`). Controllers return DTO instances (`new <Resource>ResponseDto(row)`); `@Exclude()`-marked fields are stripped before JSON. Never return raw Prisma rows.
+- **`@Exclude()` + `@ApiHideProperty()` are not the same thing**. `@Exclude()` (class-transformer) strips a field at runtime serialization; `@ApiHideProperty()` (`@nestjs/swagger`) hides the field from the OpenAPI schema at build time. They operate on independent layers — the Swagger compiler plugin introspects the TypeScript class and doesn't read class-transformer metadata. **Every sensitive field on a response DTO needs BOTH decorators**: `@ApiHideProperty() @Exclude() password!: string;`. Without both, the field either shows up in `/api/docs` even though it's stripped from the wire (confusing docs) or it leaks to the wire even though it's hidden in the docs (security issue).
 - **Auth payload shape**: JWT carries `{ sub, email, role }`. `JwtStrategy.validate` re-fetches the user **by `sub`** via `UsersService.findByIdOrNull` (non-throwing, so a missing user surfaces as 401, not 404), checks `isActive`, and returns `AuthenticatedUser` (the `request.user` shape). Use `@CurrentUser()` to read it; it returns `AuthenticatedUser`, NOT a full `User`. If you need the full row in a handler, call `usersService.findById(currentUser.id)`.
 - **Role-based access**: `@UseGuards(JwtAuthGuard, RolesGuard)` at the class, then either `@Roles(Role.ADMIN)` on handlers that need admin, or no `@Roles` on handlers any authenticated user can hit. `RolesGuard` is a no-op when `@Roles()` is absent, so the handler-level decorator is what actually gates access. For mixed public/private within one controller, use `@Public()` on the public handlers — the `JwtAuthGuard` honors it and skips authentication. Role values in the DB are lowercase (`'admin'`, `'user'`) per the enum-style convention above.
 - **Cross-module forward refs**: when a controller needs a service from a module that already imports back (e.g. `UsersController` needs `AuthService`, and `AuthModule` imports `UsersModule`), break the cycle with `forwardRef` in both `imports` and the `@Inject` constructor parameter. See `users.module.ts` ↔ `auth.module.ts` + `UsersController`.
