@@ -15,6 +15,7 @@ import { AuditModule } from './common/audit/audit.module';
 import { EmailModule } from './common/email/email.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
+import { RedisModule } from './common/redis/redis.module';
 import configuration from './config/configuration';
 import { envValidationSchema } from './config/env.validation';
 import { PrismaModule } from './prisma/prisma.module';
@@ -99,6 +100,7 @@ import { UsersModule } from './modules/users/users.module';
       },
     }),
     PrismaModule,
+    RedisModule,
     EmailModule,
     AuditModule,
     AuthModule,

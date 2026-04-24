@@ -28,6 +28,18 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      # Required for the JWT logout blocklist (src/common/redis). Without
+      # it, /auth/logout tests can't write to Redis. Image is pinned to
+      # match the docker-compose dev version; no auth (ci-only).
+      redis:
+        image: redis:8.6.2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     env:
       NODE_ENV: test
@@ -41,10 +53,14 @@ jobs:
       DATABASE_URL: postgresql://nestjs:ci-postgres-password@localhost:5432/nestjs_test?schema=public
       REDIS_HOST: localhost
       REDIS_PORT: 6379
+      # The CI Redis service has no auth (no --requirepass), so this
+      # password is just a placeholder to satisfy the Joi .min(16) validation.
+      # The connection URL below intentionally omits any auth segment.
       REDIS_PASSWORD: ci-redis-password-not-actually-used
-      REDIS_URL: redis://default:ci-redis-password-not-actually-used@localhost:6379
+      REDIS_URL: redis://localhost:6379
       JWT_SECRET: ci-jwt-secret-not-for-production-use-only-for-testing
       JWT_EXPIRES_IN: 1h
+      EMAIL_PROVIDER: stub
       CORS_ORIGIN: '*'
       THROTTLE_TTL_MS: 60000
       THROTTLE_LIMIT: 100

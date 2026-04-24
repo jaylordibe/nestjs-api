@@ -1,23 +1,31 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { AuthenticatedUser } from '../../../common/decorators/current-user.decorator';
 import { Role } from '../../../common/enums/role.enum';
+import { RedisService } from '../../../common/redis/redis.service';
 import { UsersService } from '../../users/users.service';
 
 export interface JwtPayload {
   sub: string;
   iat?: number;
+  exp?: number;
   iss?: string;
   aud?: string;
+  jti?: string;
 }
+
+export const LOGOUT_KEY_PREFIX = 'logout:jti:';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
+  private readonly logger = new Logger(JwtStrategy.name);
+
   constructor(
     configService: ConfigService,
     private readonly usersService: UsersService,
+    private readonly redis: RedisService,
   ) {
     const serviceName = configService.getOrThrow<string>('serviceName');
     super({
@@ -51,6 +59,35 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       }
     }
 
-    return { id: user.id, email: user.email, role: user.role as Role };
+    // Per-token revocation via Redis blocklist. Logout writes the jti to
+    // Redis with a TTL matching the token's remaining lifetime, so we just
+    // check existence. Fail-open on Redis outage (log + allow) — a Redis
+    // incident shouldn't cascade into a full auth outage. The tradeoff is
+    // accepted: revocation is best-effort when Redis is unreachable.
+    if (payload.jti) {
+      try {
+        const revoked = await this.redis.client.exists(
+          `${LOGOUT_KEY_PREFIX}${payload.jti}`,
+        );
+        if (revoked) {
+          throw new UnauthorizedException();
+        }
+      } catch (err) {
+        if (err instanceof UnauthorizedException) throw err;
+        this.logger.warn(
+          `Logout blocklist check failed (failing open): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+
+    return {
+      id: user.id,
+      email: user.email,
+      role: user.role as Role,
+      jti: payload.jti,
+      exp: payload.exp,
+    };
   }
 }

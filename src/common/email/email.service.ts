@@ -1,42 +1,61 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
+import { EMAIL_ADAPTER } from './adapters/email-adapter.interface';
+import type {
+  EmailAdapter,
+  OutgoingEmail,
+} from './adapters/email-adapter.interface';
+import {
+  EmailTemplateEngine,
+  EmailTemplateKey,
+  EmailTemplates,
+} from './template-engine';
 
-export interface EmailMessage {
-  to: string;
-  subject: string;
-  text: string;
-}
+const OTP_EXPIRY_MINUTES = 15;
 
-// Swap this class (or re-bind the provider in EmailModule) when wiring a
-// real SMTP/SES/SendGrid/Postmark/Resend adapter. The contract is
-// intentionally minimal — templates and HTML rendering are layered above
-// in a real deployment.
+// Facade used by the rest of the app. Resolves templates through the
+// Handlebars engine, then hands a fully-rendered message to whichever
+// adapter is bound (stub in dev/test, Resend in staging/prod). Call sites
+// should not care which adapter is active — that decision lives in
+// EmailModule's provider factory.
 @Injectable()
 export class EmailService {
-  private readonly logger = new Logger(EmailService.name);
+  constructor(
+    @Inject(EMAIL_ADAPTER) private readonly adapter: EmailAdapter,
+    private readonly templates: EmailTemplateEngine,
+  ) {}
 
-  async send(message: EmailMessage): Promise<void> {
-    // Dev/test adapter: log the message so test assertions and local flows
-    // can observe what would have been sent. Returns immediately so the
-    // caller's latency matches a real "enqueue to SES" pattern.
-    this.logger.log(
-      `[email:stub] to=${message.to} subject="${message.subject}"\n${message.text}`,
-    );
-    return Promise.resolve();
+  // Escape hatch for ad-hoc plain-text messages. New flows should prefer
+  // sendTemplate — it keeps the subject/body/style in a versionable file
+  // and ensures the plain-text fallback is always generated.
+  send(message: OutgoingEmail): Promise<void> {
+    return this.adapter.send(message);
+  }
+
+  sendTemplate<K extends EmailTemplateKey>(
+    key: K,
+    to: string,
+    vars: EmailTemplates[K],
+  ): Promise<void> {
+    const rendered = this.templates.render(key, vars);
+    return this.adapter.send({
+      to,
+      subject: rendered.subject,
+      html: rendered.html,
+      text: rendered.text,
+    });
   }
 
   sendEmailVerificationOtp(email: string, otp: string): Promise<void> {
-    return this.send({
-      to: email,
-      subject: 'Verify your email',
-      text: `Your email verification code is: ${otp}\n\nThis code expires in 15 minutes.`,
+    return this.sendTemplate('email-verification-otp', email, {
+      otp,
+      expiresInMinutes: OTP_EXPIRY_MINUTES,
     });
   }
 
   sendPasswordResetOtp(email: string, otp: string): Promise<void> {
-    return this.send({
-      to: email,
-      subject: 'Reset your password',
-      text: `Your password reset code is: ${otp}\n\nThis code expires in 15 minutes.\n\nIf you didn't request this, ignore this email.`,
+    return this.sendTemplate('password-reset-otp', email, {
+      otp,
+      expiresInMinutes: OTP_EXPIRY_MINUTES,
     });
   }
 }

@@ -184,6 +184,113 @@ describe('Auth (e2e)', () => {
     });
   });
 
+  describe('POST /api/auth/logout', () => {
+    it('revokes the exact token it was called with; other tokens stay valid', async () => {
+      await request(app.getHttpServer()).post('/api/auth/register').send({
+        email: 'logout@example.com',
+        password: VALID_PASSWORD,
+        firstName: 'Log',
+        lastName: 'Out',
+      });
+
+      // Two independent logins → two different tokens with different jti.
+      const first = await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: 'logout@example.com', password: VALID_PASSWORD });
+      const second = await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: 'logout@example.com', password: VALID_PASSWORD });
+
+      const tokenA = first.body.accessToken;
+      const tokenB = second.body.accessToken;
+
+      // Both tokens work before logout.
+      await request(app.getHttpServer())
+        .get('/api/auth/me')
+        .set('Authorization', `Bearer ${tokenA}`)
+        .expect(200);
+      await request(app.getHttpServer())
+        .get('/api/auth/me')
+        .set('Authorization', `Bearer ${tokenB}`)
+        .expect(200);
+
+      // Logout token A.
+      await request(app.getHttpServer())
+        .post('/api/auth/logout')
+        .set('Authorization', `Bearer ${tokenA}`)
+        .expect(204);
+
+      // Token A is revoked; token B is unaffected.
+      await request(app.getHttpServer())
+        .get('/api/auth/me')
+        .set('Authorization', `Bearer ${tokenA}`)
+        .expect(401);
+      await request(app.getHttpServer())
+        .get('/api/auth/me')
+        .set('Authorization', `Bearer ${tokenB}`)
+        .expect(200);
+    });
+
+    it('requires authentication', async () => {
+      await request(app.getHttpServer()).post('/api/auth/logout').expect(401);
+    });
+  });
+
+  describe('POST /api/auth/logout-all', () => {
+    it('revokes every active token for the user', async () => {
+      await request(app.getHttpServer()).post('/api/auth/register').send({
+        email: 'logout-all@example.com',
+        password: VALID_PASSWORD,
+        firstName: 'Log',
+        lastName: 'Out',
+      });
+      const loginA = await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: 'logout-all@example.com', password: VALID_PASSWORD });
+      // Wait past a full second so token B is issued in a strictly later
+      // second than the passwordChangedAt bump from the eventual logout-all
+      // call won't accidentally catch token B too (we want ALL tokens
+      // issued BEFORE logout-all to be revoked).
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      const loginB = await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: 'logout-all@example.com', password: VALID_PASSWORD });
+
+      const tokenA = loginA.body.accessToken;
+      const tokenB = loginB.body.accessToken;
+
+      // Wait past another second so logout-all's passwordChangedAt is in
+      // a strictly later second than token B's iat.
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+
+      await request(app.getHttpServer())
+        .post('/api/auth/logout-all')
+        .set('Authorization', `Bearer ${tokenB}`)
+        .expect(204);
+
+      // Both pre-existing tokens are revoked.
+      await request(app.getHttpServer())
+        .get('/api/auth/me')
+        .set('Authorization', `Bearer ${tokenA}`)
+        .expect(401);
+      await request(app.getHttpServer())
+        .get('/api/auth/me')
+        .set('Authorization', `Bearer ${tokenB}`)
+        .expect(401);
+
+      // Fresh login after logout-all works.
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      const loginC = await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: 'logout-all@example.com', password: VALID_PASSWORD })
+        .expect(200);
+      await request(app.getHttpServer())
+        .get('/api/auth/me')
+        .set('Authorization', `Bearer ${loginC.body.accessToken}`)
+        .expect(200);
+    });
+  });
+
   describe('GET /api/auth/me', () => {
     let token: string;
 

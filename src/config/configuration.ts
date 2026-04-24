@@ -16,6 +16,11 @@ export interface AppConfig {
     secret: string;
     expiresIn: string;
   };
+  email: {
+    provider: 'stub' | 'resend';
+    from: string | undefined;
+    resendApiKey: string | undefined;
+  };
   cors: {
     origin: string;
   };
@@ -50,6 +55,11 @@ export default (): AppConfig => ({
   jwt: {
     secret: process.env.JWT_SECRET!,
     expiresIn: process.env.JWT_EXPIRES_IN ?? '30d',
+  },
+  email: {
+    provider: (process.env.EMAIL_PROVIDER as 'stub' | 'resend') ?? 'stub',
+    from: process.env.EMAIL_FROM,
+    resendApiKey: process.env.RESEND_API_KEY,
   },
   cors: {
     origin: process.env.CORS_ORIGIN ?? '*',

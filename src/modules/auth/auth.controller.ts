@@ -45,4 +45,23 @@ export class AuthController {
     const user = await this.usersService.findById(current.id);
     return new UserResponseDto(user);
   }
+
+  // Revoke the exact token this request arrived on. Other sessions (other
+  // devices) stay active. Client should also discard its local copy.
+  @Post('logout')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async logout(@CurrentUser() current: AuthenticatedUser): Promise<void> {
+    await this.authService.logout(current);
+  }
+
+  // "Sign me out everywhere" — invalidates every active token for the user
+  // via the passwordChangedAt mechanism. Use when the user suspects their
+  // account is compromised but isn't ready to change their password yet.
+  @Post('logout-all')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async logoutAll(@CurrentUser() current: AuthenticatedUser): Promise<void> {
+    await this.authService.logoutAll(current.id);
+  }
 }

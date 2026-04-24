@@ -1,12 +1,16 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { randomUUID } from 'crypto';
+import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import { AuditService } from '../../common/audit/audit.service';
+import { RedisService } from '../../common/redis/redis.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UserResponseDto } from '../users/dto/user-response.dto';
 import { UsersService } from '../users/users.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
-import { JwtPayload } from './strategies/jwt.strategy';
+import { JwtPayload, LOGOUT_KEY_PREFIX } from './strategies/jwt.strategy';
 
 export interface LoginResponse {
   accessToken: string;
@@ -27,6 +31,8 @@ export class AuthService {
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
     private readonly prisma: PrismaService,
+    private readonly redis: RedisService,
+    private readonly auditService: AuditService,
   ) {}
 
   async register(dto: RegisterDto): Promise<LoginResponse> {
@@ -96,12 +102,62 @@ export class AuthService {
     return this.dummyHash;
   }
 
+  // Per-token logout. Writes the current JWT's jti to the Redis blocklist
+  // with a TTL equal to the token's remaining lifetime, so the key expires
+  // on its own — no cleanup job needed. JwtStrategy rejects any subsequent
+  // request carrying that jti. Other tokens for the same user (other
+  // devices) are unaffected; use logoutAll for "sign me out everywhere."
+  async logout(current: AuthenticatedUser): Promise<void> {
+    if (!current.jti || !current.exp) {
+      // Legacy token issued before jti/exp were wired through — nothing to
+      // revoke. Still record the audit event so the action isn't invisible.
+      await this.auditService.record({
+        action: 'auth.logout.no_jti',
+        actorId: current.id,
+        targetUserId: current.id,
+      });
+      return;
+    }
+    const ttlSeconds = Math.max(1, current.exp - Math.floor(Date.now() / 1000));
+    await this.redis.client.set(
+      `${LOGOUT_KEY_PREFIX}${current.jti}`,
+      '1',
+      'EX',
+      ttlSeconds,
+    );
+    await this.auditService.record({
+      action: 'auth.logout',
+      actorId: current.id,
+      targetUserId: current.id,
+      metadata: { jti: current.jti },
+    });
+  }
+
+  // Logout-everywhere. Bumps passwordChangedAt to now; JwtStrategy rejects
+  // every token with iat earlier than that second. Same mechanism used by
+  // password change — all the user's active sessions die on the next
+  // request. No Redis writes needed; scales to however many devices the
+  // user has logged in on.
+  async logoutAll(userId: string): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordChangedAt: new Date() },
+    });
+    await this.auditService.record({
+      action: 'auth.logout_all',
+      actorId: userId,
+      targetUserId: userId,
+    });
+  }
+
   private buildLoginResponse(
     user: Awaited<ReturnType<UsersService['findById']>>,
   ): LoginResponse {
     const payload: JwtPayload = { sub: user.id };
     return {
-      accessToken: this.jwtService.sign(payload),
+      // jwtid sets the `jti` claim. One per token, used by /auth/logout to
+      // revoke this specific token via Redis without affecting others.
+      accessToken: this.jwtService.sign(payload, { jwtid: randomUUID() }),
       user: new UserResponseDto(user),
     };
   }

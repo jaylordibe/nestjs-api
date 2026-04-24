@@ -48,6 +48,20 @@ export const envValidationSchema = Joi.object({
     }),
   JWT_EXPIRES_IN: Joi.string().default('30d'),
 
+  // Email provider selection. `stub` (default) logs to stdout — OTPs are
+  // visible in the app log so local flows can be completed manually.
+  // `resend` routes through resend.com and requires RESEND_API_KEY and
+  // EMAIL_FROM (the latter must be a verified sender on that domain).
+  EMAIL_PROVIDER: Joi.string().valid('stub', 'resend').default('stub'),
+  EMAIL_FROM: Joi.string().when('EMAIL_PROVIDER', {
+    is: 'resend',
+    then: Joi.required(),
+  }),
+  RESEND_API_KEY: Joi.string().when('EMAIL_PROVIDER', {
+    is: 'resend',
+    then: Joi.required(),
+  }),
+
   // In production, refuse the wildcard origin — Same-Origin with
   // credentials: true is broken in browsers against `*`, and leaving the
   // wildcard in prod signals a CORS misconfiguration waiting to bite.
