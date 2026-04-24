@@ -244,7 +244,10 @@ describe('Users (e2e)', () => {
         .send({ newEmail: 'new@example.com', currentPassword: PASSWORD })
         .expect(200);
       expect(res.body.email).toBe('new@example.com');
-      expect(res.body.emailVerifiedAt).toBeNull();
+      // emailVerifiedAt is hidden from the response DTO — verify the DB instead.
+      expect(res.body).not.toHaveProperty('emailVerifiedAt');
+      const row = await prisma.user.findUniqueOrThrow({ where: { id } });
+      expect(row.emailVerifiedAt).toBeNull();
     });
 
     it('PATCH /api/users/me/email rejects wrong current password with 401', async () => {
