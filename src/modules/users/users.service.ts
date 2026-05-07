@@ -10,10 +10,11 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Prisma, User } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
-import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { buildOrderBy, MetaQueryDto } from '../../common/dto/meta-query.dto';
 import { PaginationMeta } from '../../common/dto/paginated-response.dto';
 import { AuditService } from '../../common/audit/audit.service';
 import { EmailService } from '../../common/email/email.service';
+import { SmsService } from '../../common/sms/sms.service';
 import { OtpPurpose } from '../../common/enums/otp-purpose.enum';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -22,6 +23,7 @@ import { UpdateAuthUserEmailDto } from './dto/update-auth-user-email.dto';
 import { UpdateAuthUserInfoDto } from './dto/update-auth-user-info.dto';
 import { UpdateAuthUserPasswordDto } from './dto/update-auth-user-password.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { VerifyAuthUserPhoneDto } from './dto/verify-auth-user-phone.dto';
 
 // OWASP 2024+ guidance. Bumping this is safe — existing hashes already
 // encode their own cost factor and continue to verify correctly.
@@ -42,6 +44,7 @@ export class UsersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly emailService: EmailService,
+    private readonly smsService: SmsService,
     private readonly auditService: AuditService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
@@ -169,18 +172,18 @@ export class UsersService {
     return user;
   }
 
-  findAll(): Promise<User[]> {
-    return this.prisma.user.findMany({ orderBy: { createdAt: 'desc' } });
+  findAll(query: MetaQueryDto = new MetaQueryDto()): Promise<User[]> {
+    return this.prisma.user.findMany(this.buildListArgs(query));
   }
 
   async findPaginated(
-    query: PaginationQueryDto,
+    query: MetaQueryDto,
   ): Promise<{ data: User[]; meta: PaginationMeta }> {
-    const page = query.page ?? 1;
-    const perPage = query.perPage ?? 20;
+    const { page, perPage } = query;
+    const args = this.buildListArgs(query);
     const [data, total] = await this.prisma.$transaction([
       this.prisma.user.findMany({
-        orderBy: { createdAt: 'desc' },
+        ...args,
         skip: (page - 1) * perPage,
         take: perPage,
       }),
@@ -194,6 +197,23 @@ export class UsersService {
         total,
         totalPages: Math.ceil(total / perPage),
       },
+    };
+  }
+
+  // Shared between findAll + findPaginated so they always agree on sort
+  // allowlist and default ordering. Pass-through for the buildOrderBy()
+  // 400 on disallowed sortBy. Extend this with a `where` clause built
+  // from `query.search` when adding search to a resource — keeps both
+  // list endpoints in lockstep.
+  private buildListArgs(query: MetaQueryDto): {
+    orderBy: Prisma.UserOrderByWithRelationInput;
+  } {
+    return {
+      orderBy: buildOrderBy(
+        query,
+        ['email', 'firstName', 'lastName', 'createdAt', 'updatedAt'] as const,
+        'createdAt',
+      ),
     };
   }
 
@@ -484,6 +504,94 @@ export class UsersService {
     return this.prisma.user.update({
       where: { id: userId },
       data: { profileImageUrl, updatedBy: actorId },
+    });
+  }
+
+  // Step 1 of phone update: generate an OTP, store its hash, and dispatch
+  // it to the *new* phone number. The hash binds the code to the target
+  // number (`otp:phoneNumber`) so a code delivered to phone X cannot later
+  // be replayed to claim phone Y on the verify step. Re-issuing replaces
+  // any existing PHONE_VERIFY OTP — the latest request wins.
+  async requestPhoneVerification(
+    userId: string,
+    phoneNumber: string,
+  ): Promise<void> {
+    await this.findById(userId);
+    const otp = generateOtp();
+    const otpHash = await bcrypt.hash(`${otp}:${phoneNumber}`, BCRYPT_ROUNDS);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        otpHash,
+        otpPurpose: OtpPurpose.PHONE_VERIFY,
+        otpExpiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
+      },
+    });
+    await this.smsService.sendPhoneVerificationOtp(phoneNumber, otp);
+  }
+
+  // Step 2 of the verified-phone flow: verify the OTP against the *same*
+  // phone number it was issued for, then apply it. Same opaque error on
+  // every failure so callers can't distinguish "wrong code" from "expired"
+  // from "wrong number". Clears the OTP triple on success — a code is
+  // single-use.
+  async verifyAndUpdatePhoneNumber(
+    userId: string,
+    dto: VerifyAuthUserPhoneDto,
+    actorId: string,
+  ): Promise<User> {
+    const user = await this.findById(userId);
+    if (
+      !user.otpHash ||
+      user.otpPurpose !== OtpPurpose.PHONE_VERIFY ||
+      !user.otpExpiresAt ||
+      user.otpExpiresAt.getTime() < Date.now()
+    ) {
+      throw new BadRequestException('Invalid or expired verification code');
+    }
+    const matches = await bcrypt.compare(
+      `${dto.otp}:${dto.phoneNumber}`,
+      user.otpHash,
+    );
+    if (!matches) {
+      throw new BadRequestException('Invalid or expired verification code');
+    }
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        phoneNumber: dto.phoneNumber,
+        // Stamp verification at the moment the OTP is accepted —
+        // mirrors `emailVerifiedAt` after a successful email-link
+        // confirm. Re-running the OTP flow with the same number
+        // re-stamps to a fresh `now`, which is fine: the field is
+        // semantically "last verified at," not "first verified at."
+        phoneNumberVerifiedAt: new Date(),
+        otpHash: null,
+        otpPurpose: null,
+        otpExpiresAt: null,
+        updatedBy: actorId,
+      },
+    });
+  }
+
+  // Plain phone update without verification. Used by `PATCH /users/me/phone`.
+  // Always clears `phoneNumberVerifiedAt` — the new number hasn't been
+  // proven owned, so any prior verified state on the row is no longer
+  // meaningful. Callers that need a verified number should run the OTP
+  // flow (`requestPhoneVerification` → `verifyAndUpdatePhoneNumber`).
+  async updatePhoneNumber(
+    userId: string,
+    phoneNumber: string,
+    actorId: string,
+  ): Promise<User> {
+    await this.findById(userId);
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        phoneNumber,
+        phoneNumberVerifiedAt: null,
+        updatedBy: actorId,
+      },
     });
   }
 

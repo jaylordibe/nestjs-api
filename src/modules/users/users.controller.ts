@@ -16,7 +16,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
-import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { MetaQueryDto } from '../../common/dto/meta-query.dto';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { Public } from '../../common/decorators/public.decorator';
 import { Role } from '../../common/enums/role.enum';
@@ -26,15 +26,18 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateUserDto } from './dto/create-user.dto';
 import { GdprEraseDto } from './dto/gdpr-erase.dto';
 import { RequestPasswordResetDto } from './dto/request-password-reset.dto';
+import { RequestPhoneVerificationDto } from './dto/request-phone-verification.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { UpdateAuthUserEmailDto } from './dto/update-auth-user-email.dto';
 import { UpdateAuthUserInfoDto } from './dto/update-auth-user-info.dto';
 import { UpdateAuthUserPasswordDto } from './dto/update-auth-user-password.dto';
+import { UpdateAuthUserPhoneDto } from './dto/update-auth-user-phone.dto';
 import { UpdateAuthUserProfileImageDto } from './dto/update-auth-user-profile-image.dto';
 import { UpdateAuthUsernameDto } from './dto/update-auth-username.dto';
 import { UpdatePasswordDto } from './dto/update-password.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserResponseDto } from './dto/user-response.dto';
+import { VerifyAuthUserPhoneDto } from './dto/verify-auth-user-phone.dto';
 import { UsersService } from './users.service';
 
 @ApiTags('Users')
@@ -176,6 +179,54 @@ export class UsersController {
     return new UserResponseDto(user);
   }
 
+  // Step 1 of the verified-phone flow — send a one-time code via SMS to
+  // the new number. Throttled per-IP (matches the password-reset request)
+  // to limit abuse of the SMS provider's send budget.
+  @Post('me/request-phone-verification')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  async requestPhoneVerification(
+    @Body() dto: RequestPhoneVerificationDto,
+    @CurrentUser() current: AuthenticatedUser,
+  ): Promise<{ ok: true }> {
+    await this.usersService.requestPhoneVerification(
+      current.id,
+      dto.phoneNumber,
+    );
+    return { ok: true };
+  }
+
+  // Step 2 of the verified-phone flow — verify the OTP and apply the new
+  // number. Stamps `phoneNumberVerifiedAt = now` on success.
+  @Patch('me/verify-phone')
+  async verifyAuthUserPhone(
+    @Body() dto: VerifyAuthUserPhoneDto,
+    @CurrentUser() current: AuthenticatedUser,
+  ): Promise<UserResponseDto> {
+    const user = await this.usersService.verifyAndUpdatePhoneNumber(
+      current.id,
+      dto,
+      current.id,
+    );
+    return new UserResponseDto(user);
+  }
+
+  // Plain phone update — no OTP, no verification. Sets the new number and
+  // clears `phoneNumberVerifiedAt` so the row no longer claims a verified
+  // phone. Use the OTP flow above when you need verification.
+  @Patch('me/phone')
+  async updateAuthUserPhone(
+    @Body() dto: UpdateAuthUserPhoneDto,
+    @CurrentUser() current: AuthenticatedUser,
+  ): Promise<UserResponseDto> {
+    const user = await this.usersService.updatePhoneNumber(
+      current.id,
+      dto.phoneNumber,
+      current.id,
+    );
+    return new UserResponseDto(user);
+  }
+
   @Post()
   @Roles(Role.ADMIN)
   async create(
@@ -189,7 +240,7 @@ export class UsersController {
   @Get()
   @Roles(Role.ADMIN)
   async findPaginated(
-    @Query() query: PaginationQueryDto,
+    @Query() query: MetaQueryDto,
   ): Promise<PaginatedResponseDto<UserResponseDto>> {
     const { data, meta } = await this.usersService.findPaginated(query);
     return {
@@ -200,8 +251,8 @@ export class UsersController {
 
   @Get('all')
   @Roles(Role.ADMIN)
-  async findAll(): Promise<UserResponseDto[]> {
-    const users = await this.usersService.findAll();
+  async findAll(@Query() query: MetaQueryDto): Promise<UserResponseDto[]> {
+    const users = await this.usersService.findAll(query);
     return users.map((u) => new UserResponseDto(u));
   }
 

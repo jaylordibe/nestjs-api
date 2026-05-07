@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { DeviceToken, Prisma } from '@prisma/client';
 import { AuditService } from '../../common/audit/audit.service';
-import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { buildOrderBy, MetaQueryDto } from '../../common/dto/meta-query.dto';
 import { PaginationMeta } from '../../common/dto/paginated-response.dto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateDeviceTokenDto } from './dto/create-device-token.dto';
@@ -41,20 +41,18 @@ export class DeviceTokensService {
     return created;
   }
 
-  findAll(): Promise<DeviceToken[]> {
-    return this.prisma.deviceToken.findMany({
-      orderBy: { createdAt: 'desc' },
-    });
+  findAll(query: MetaQueryDto = new MetaQueryDto()): Promise<DeviceToken[]> {
+    return this.prisma.deviceToken.findMany(this.buildListArgs(query));
   }
 
   async findPaginated(
-    query: PaginationQueryDto,
+    query: MetaQueryDto,
   ): Promise<{ data: DeviceToken[]; meta: PaginationMeta }> {
-    const page = query.page ?? 1;
-    const perPage = query.perPage ?? 20;
+    const { page, perPage } = query;
+    const args = this.buildListArgs(query);
     const [data, total] = await this.prisma.$transaction([
       this.prisma.deviceToken.findMany({
-        orderBy: { createdAt: 'desc' },
+        ...args,
         skip: (page - 1) * perPage,
         take: perPage,
       }),
@@ -68,6 +66,18 @@ export class DeviceTokensService {
         total,
         totalPages: Math.ceil(total / perPage),
       },
+    };
+  }
+
+  private buildListArgs(query: MetaQueryDto): {
+    orderBy: Prisma.DeviceTokenOrderByWithRelationInput;
+  } {
+    return {
+      orderBy: buildOrderBy(
+        query,
+        ['createdAt', 'updatedAt'] as const,
+        'createdAt',
+      ),
     };
   }
 

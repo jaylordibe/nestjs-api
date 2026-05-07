@@ -29,7 +29,14 @@ model User {
   otpPurpose        String?
   otpExpiresAt      DateTime?
   emailVerifiedAt   DateTime?
+  // `phoneNumber` may be set without verification (e.g. via admin
+  // create or `PATCH /users/me/phone`); `phoneNumberVerifiedAt` is
+  // stamped only when the OTP flow completes (POST
+  // /users/me/request-phone-verification → PATCH /users/me/verify-phone).
+  // Plain phone updates clear the verifiedAt — the new number hasn't
+  // been proven owned, so any prior verified state is no longer valid.
   phoneNumber       String?
+  phoneNumberVerifiedAt DateTime?
   gender            String?
   profileImageUrl   String?
   birthday          DateTime? @db.Date

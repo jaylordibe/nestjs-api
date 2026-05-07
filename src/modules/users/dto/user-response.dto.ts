@@ -27,6 +27,7 @@ export class UserResponseDto {
   role!: Role;
   @ApiHideProperty() @Exclude() emailVerifiedAt!: Date | null;
   phoneNumber!: string | null;
+  phoneNumberVerifiedAt!: Date | null;
   gender!: Gender | null;
   profileImageUrl!: string | null;
   birthday!: Date | null;

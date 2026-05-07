@@ -17,7 +17,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { MetaQueryDto } from '../../common/dto/meta-query.dto';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { Role } from '../../common/enums/role.enum';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -50,7 +50,7 @@ export class AppVersionsController {
   @Get()
   @Public()
   async findPaginated(
-    @Query() query: PaginationQueryDto,
+    @Query() query: MetaQueryDto,
   ): Promise<PaginatedResponseDto<AppVersionResponseDto>> {
     const { data, meta } = await this.appVersionsService.findPaginated(query);
     return {
@@ -62,8 +62,10 @@ export class AppVersionsController {
   // Must be before @Get(':id') — NestJS matches routes in declaration order.
   @Get('all')
   @Public()
-  async findAll(): Promise<AppVersionResponseDto[]> {
-    const rows = await this.appVersionsService.findAll();
+  async findAll(
+    @Query() query: MetaQueryDto,
+  ): Promise<AppVersionResponseDto[]> {
+    const rows = await this.appVersionsService.findAll(query);
     return rows.map((r) => new AppVersionResponseDto(r));
   }
 

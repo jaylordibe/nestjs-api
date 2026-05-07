@@ -24,6 +24,21 @@ export const envValidationSchema = Joi.object({
     .pattern(/[^/]$/, { name: 'no-trailing-slash' })
     .default('http://localhost:3000/api'),
 
+  // Customer-facing web frontend base URL — distinct from APP_BASE_URL
+  // (which is the API). Used by emails that link customers to pages
+  // they actually browse (booking confirmation CTAs, marketing pages,
+  // etc.). Default targets the Vite dev port; production must set this
+  // to the real web hostname (e.g. `https://yourapp.com`).
+  WEB_BASE_URL: Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .pattern(/[^/]$/, { name: 'no-trailing-slash' })
+    .default('http://localhost:5173'),
+
+  // Commit hash of the running build. Populated by the deploy workflow
+  // (Docker build arg → ENV); local dev leaves it 'unknown'. Surfaced in
+  // Swagger's version string so a stale image is immediately visible.
+  GIT_SHA: Joi.string().default('unknown'),
+
   DB_USER: Joi.string().required(),
   DB_PASSWORD: Joi.string().allow('').required(),
   DB_HOST: Joi.string().hostname().required(),
@@ -73,6 +88,76 @@ export const envValidationSchema = Joi.object({
     then: Joi.required(),
   }),
 
+  // SMS provider selection. `stub` (default) logs to stdout — OTPs are
+  // visible in the app log so local flows can be completed manually.
+  // `twilio` routes through twilio.com and requires TWILIO_ACCOUNT_SID,
+  // TWILIO_AUTH_TOKEN, and TWILIO_FROM (an E.164 phone number you've
+  // provisioned in the Twilio console, or a Messaging Service SID
+  // starting with "MG…").
+  SMS_PROVIDER: Joi.string().valid('stub', 'twilio').default('stub'),
+  // The Twilio fields tolerate empty strings when SMS_PROVIDER=stub so a
+  // committed `.env` template can ship with `TWILIO_FROM=""` placeholders
+  // without breaking dev/test boot. The format/required checks only kick
+  // in when twilio is actually selected.
+  TWILIO_ACCOUNT_SID: Joi.string().when('SMS_PROVIDER', {
+    is: 'twilio',
+    then: Joi.string()
+      .pattern(/^AC[0-9a-fA-F]{32}$/)
+      .required()
+      .messages({
+        'string.pattern.base':
+          'TWILIO_ACCOUNT_SID must start with "AC" followed by 32 hex chars.',
+      }),
+    otherwise: Joi.string().allow('').optional(),
+  }),
+  TWILIO_AUTH_TOKEN: Joi.string().when('SMS_PROVIDER', {
+    is: 'twilio',
+    then: Joi.required(),
+    otherwise: Joi.string().allow('').optional(),
+  }),
+  TWILIO_FROM: Joi.string().when('SMS_PROVIDER', {
+    is: 'twilio',
+    then: Joi.required(),
+    otherwise: Joi.string().allow('').optional(),
+  }),
+
+  // File storage provider selection. `stub` (default) logs and returns
+  // fake `stub://...` URLs — useful for local dev and tests where the
+  // upload flow needs to exercise but no real persistence is wanted.
+  // `s3` routes through AWS S3 (or any S3-compatible: Cloudflare R2,
+  // DigitalOcean Spaces, MinIO) and requires STORAGE_S3_BUCKET +
+  // STORAGE_S3_REGION + standard AWS credentials in the SDK chain
+  // (env vars, shared config, or instance/task IAM roles).
+  STORAGE_PROVIDER: Joi.string().valid('stub', 's3').default('stub'),
+  STORAGE_S3_BUCKET: Joi.string().when('STORAGE_PROVIDER', {
+    is: 's3',
+    then: Joi.string().min(3).required(),
+    otherwise: Joi.string().allow('').optional(),
+  }),
+  STORAGE_S3_REGION: Joi.string().when('STORAGE_PROVIDER', {
+    is: 's3',
+    then: Joi.string().required(),
+    otherwise: Joi.string().allow('').optional(),
+  }),
+  // Optional public URL base. Defaults to the standard
+  // https://<bucket>.s3.<region>.amazonaws.com when unset. Set to your
+  // CDN hostname (CloudFront, Cloudflare, R2 public bucket URL) when
+  // fronting the bucket with a CDN.
+  STORAGE_S3_PUBLIC_URL_BASE: Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .pattern(/[^/]$/, { name: 'no-trailing-slash' })
+    .allow('')
+    .optional(),
+  // S3-compatible endpoint override. Set when using R2 / MinIO / Spaces;
+  // leave empty for real AWS S3.
+  STORAGE_S3_ENDPOINT: Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .allow('')
+    .optional(),
+  STORAGE_S3_FORCE_PATH_STYLE: Joi.string()
+    .valid('true', 'false')
+    .default('false'),
+
   // In production, refuse the wildcard origin — Same-Origin with
   // credentials: true is broken in browsers against `*`, and leaving the
   // wildcard in prod signals a CORS misconfiguration waiting to bite.
@@ -85,6 +170,16 @@ export const envValidationSchema = Joi.object({
           'CORS_ORIGIN cannot be "*" in production — set an explicit origin list.',
       }),
     }),
+
+  // Public web URL the API redirects to after a GET /auth/verify-email
+  // click. The web app reads `?status=success|error&reason=…` and
+  // renders the matching state. Optional in dev (defaults to
+  // `${WEB_BASE_URL}/auth/verify-email`); production should set this
+  // explicitly to the real landing page hostname.
+  EMAIL_VERIFIED_REDIRECT_URL: Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .pattern(/[^/]$/, { name: 'no-trailing-slash' })
+    .optional(),
 
   THROTTLE_TTL_MS: Joi.number().integer().min(1000).default(60_000),
   THROTTLE_LIMIT: Joi.number().integer().min(1).default(100),

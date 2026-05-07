@@ -259,9 +259,13 @@ describe('Auth (e2e)', () => {
       const token = await registerAndSignEmailVerifyToken(
         'verify-get@example.com',
       );
-      await request(app.getHttpServer())
+      // GET form is for direct email-link clicks — 302-redirects to the
+      // public web app's verify landing page with `?status=success`.
+      // (POST form returns JSON for SPAs that handle the token in-app.)
+      const res = await request(app.getHttpServer())
         .get(`/api/auth/verify-email?token=${encodeURIComponent(token)}`)
-        .expect(200);
+        .expect(302);
+      expect(res.headers.location).toContain('status=success');
     });
 
     it('rejects a token with the wrong purpose claim (400)', async () => {
@@ -300,7 +304,7 @@ describe('Auth (e2e)', () => {
       );
       // JwtStrategy rejects tokens with a `purpose` claim.
       await request(app.getHttpServer())
-        .get('/api/auth/me')
+        .get('/api/users/me')
         .set('Authorization', `Bearer ${token}`)
         .expect(401);
     });
@@ -347,11 +351,11 @@ describe('Auth (e2e)', () => {
       const tokenB = second.body.accessToken;
 
       await request(app.getHttpServer())
-        .get('/api/auth/me')
+        .get('/api/users/me')
         .set('Authorization', `Bearer ${tokenA}`)
         .expect(200);
       await request(app.getHttpServer())
-        .get('/api/auth/me')
+        .get('/api/users/me')
         .set('Authorization', `Bearer ${tokenB}`)
         .expect(200);
 
@@ -361,11 +365,11 @@ describe('Auth (e2e)', () => {
         .expect(204);
 
       await request(app.getHttpServer())
-        .get('/api/auth/me')
+        .get('/api/users/me')
         .set('Authorization', `Bearer ${tokenA}`)
         .expect(401);
       await request(app.getHttpServer())
-        .get('/api/auth/me')
+        .get('/api/users/me')
         .set('Authorization', `Bearer ${tokenB}`)
         .expect(200);
     });
@@ -403,11 +407,11 @@ describe('Auth (e2e)', () => {
         .expect(204);
 
       await request(app.getHttpServer())
-        .get('/api/auth/me')
+        .get('/api/users/me')
         .set('Authorization', `Bearer ${tokenA}`)
         .expect(401);
       await request(app.getHttpServer())
-        .get('/api/auth/me')
+        .get('/api/users/me')
         .set('Authorization', `Bearer ${tokenB}`)
         .expect(401);
 
@@ -417,13 +421,13 @@ describe('Auth (e2e)', () => {
         .send({ email: 'logout-all@example.com', password: VALID_PASSWORD })
         .expect(200);
       await request(app.getHttpServer())
-        .get('/api/auth/me')
+        .get('/api/users/me')
         .set('Authorization', `Bearer ${loginC.body.accessToken}`)
         .expect(200);
     });
   });
 
-  describe('GET /api/auth/me', () => {
+  describe('GET /api/users/me', () => {
     let token: string;
 
     beforeEach(async () => {
@@ -442,7 +446,7 @@ describe('Auth (e2e)', () => {
 
     it('returns current user profile with valid token', async () => {
       const res = await request(app.getHttpServer())
-        .get('/api/auth/me')
+        .get('/api/users/me')
         .set('Authorization', `Bearer ${token}`)
         .expect(200);
       expect(res.body).toMatchObject({
@@ -455,12 +459,12 @@ describe('Auth (e2e)', () => {
     });
 
     it('rejects request without a token with 401', async () => {
-      await request(app.getHttpServer()).get('/api/auth/me').expect(401);
+      await request(app.getHttpServer()).get('/api/users/me').expect(401);
     });
 
     it('rejects malformed token with 401', async () => {
       await request(app.getHttpServer())
-        .get('/api/auth/me')
+        .get('/api/users/me')
         .set('Authorization', 'Bearer junk')
         .expect(401);
     });

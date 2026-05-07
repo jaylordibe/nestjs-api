@@ -19,19 +19,26 @@ src/
   config/              # configuration.ts (typed factory), env.validation.ts (Joi)
   prisma/              # @Global() PrismaModule + PrismaService + soft-delete extension
   common/
-    decorators/        # Roles, CurrentUser (+ AuthenticatedUser type), Public
+    decorators/        # Roles, CurrentUser (+ AuthenticatedUser type), Public, IsUtcIsoString
     guards/            # RolesGuard (reads ROLES_KEY metadata)
     filters/           # AllExceptionsFilter + PrismaExceptionFilter (P2002→409, P2025→404)
-    dto/               # PaginationQueryDto, PaginatedResponseDto<T>, PaginationMeta
+    pipes/             # ParseJsonPipe (multipart JSON-string body field)
+    dto/               # MetaQueryDto (page/perPage/search/sortBy/sortOrder + buildOrderBy), PaginatedResponseDto<T>
     enums/             # Role, Gender, OtpPurpose, AppPlatform, DeviceType, DeviceOs
     email/             # EmailService (@Global), adapters (stub/resend), Handlebars templates
+    sms/               # SmsService (@Global), adapters (stub/twilio)
+    storage/           # FileStorageService (@Global), adapters (stub/s3), image-upload.config
     audit/             # AuditService (@Global) — best-effort audit_logs writes
     redis/             # RedisService (@Global) — ioredis client (JWT logout blocklist)
+    scheduled-jobs/    # @Cron host module (example heartbeat — replace with real jobs)
   modules/
     auth/              # AuthService, AuthController, JwtStrategy, JwtAuthGuard
     users/             # canonical resource pattern
     health/            # terminus: /health/liveness + /health/readiness
+    public/            # guest-mode surface (no JwtAuthGuard, class-level @Throttle)
 prisma/schema.prisma   # PostgreSQL datasource
+prisma/scripts/        # one-off ts-node admin scripts (backfills, imports)
+prisma/seeds/          # static seed data JSON consumed by prisma/seed.ts
 ```
 
 All endpoints under `/api`. See Swagger at `/api/docs`.
@@ -101,7 +108,8 @@ Register in `app.module.ts` imports. `PrismaModule` is `@Global()`.
 
 Rules:
 - **Declaration order matters** — `@Get('all')` (and any static path) must appear before `@Get(':id')`, else captured by UUID param → 400 via `ParseUUIDPipe`.
-- **Pagination** uses `PaginationQueryDto`. Defaults `page=1`, `perPage=20`, max `perPage=100`. Meta: `{ page, perPage, total, totalPages }`.
+- **Pagination** uses `MetaQueryDto`. Defaults `page=1`, `perPage=20`, max `perPage=100`. Also exposes `search`, `sortBy`, `sortOrder` (lowercase `asc`/`desc`). Meta: `{ page, perPage, total, totalPages }`.
+- **Sort allowlist via `buildOrderBy(query, allowed, defaultColumn, defaultOrder?)`** — pass the per-resource allowlist `as const`; throws 400 on disallowed `sortBy`. Never feed `query.sortBy` directly to Prisma's `orderBy`.
 - **`/all` unpaginated** — for dropdowns/exports under a few thousand rows.
 - **PATCH not PUT.** `Update<Resource>Dto = PartialType(Create<Resource>Dto)`.
 - **DELETE returns 204** via `@HttpCode(HttpStatus.NO_CONTENT)`.
@@ -129,8 +137,8 @@ export class OrdersController {
 
   // Must be before @Get(':id').
   @Get('all')
-  async findAll() {
-    const rows = await this.ordersService.findAll();
+  async findAll(@Query() query: MetaQueryDto) {
+    const rows = await this.ordersService.findAll(query);
     return rows.map((r) => new OrderResponseDto(r));
   }
 
@@ -155,8 +163,9 @@ export class OrdersController {
 ### Service skeleton
 
 - `create(dto, actorId)` — set `createdBy: actorId, updatedBy: actorId`.
-- `findAll()` — `orderBy: { createdAt: 'desc' }`, no pagination/filters.
+- `findAll(query?)` — accepts `MetaQueryDto` for sort/search; **no pagination** (returns the full filtered set). Default-arg pattern (`query: MetaQueryDto = new MetaQueryDto()`) lets internal callers omit it.
 - `findPaginated(query)` — `findMany` + `count()` in **one** `prisma.$transaction([...])` so total matches page.
+- **Both share a private `buildListArgs(query)`** that calls `buildOrderBy(query, ['col1', 'col2'] as const, 'createdAt')`. Keeping both list endpoints in lockstep on sort allowlist + any future search clause prevents one-side drift.
 - `findById(id)` — throws `NotFoundException`. Pair with `findByIdOrNull(id)` (JwtStrategy needs non-throwing → 401 not 404).
 - `update(id, dto, actorId)` — set `updatedBy`, don't touch `createdBy`. Re-check existence for 404 not P2025.
 - `remove(id, actorId)` — hard `delete` for transient; `update({ deletedAt: new Date(), deletedBy: actorId })` for retention. See **Delete semantics**.
@@ -212,6 +221,43 @@ Required for every resource. Min coverage: six endpoints + access control (401 u
 - **Prisma errors**: global `PrismaExceptionFilter` handles P2002/P2025. Services don't try/catch these. `APP_FILTER` is LIFO — register specific filters *after* `AllExceptionsFilter`.
 - **Config access**: `configService.getOrThrow<T>('jwt.secret')` etc. Dot-paths into `configuration.ts`. Don't read `process.env` outside that file.
 - **`SERVICE_NAME`** is single source of truth. Drives `DB_NAME` default (`${SERVICE_NAME}_local`), container name, JWT `iss`/`aud`.
+- **`APP_BASE_URL` vs `WEB_BASE_URL`**: `APP_BASE_URL` is the API; `WEB_BASE_URL` is the customer-facing frontend. Emails that link the customer to a *page* (booking confirmation, marketing CTA) compose hrefs from `WEB_BASE_URL`. Emails that link to a *backend handler* (verify-email click) use `APP_BASE_URL`.
+- **`GIT_SHA`**: deploy-injected commit hash, surfaced in Swagger version (`1.0+<short-sha>`). Empty → `"unknown"` for local. Pair Swagger version with `/api/health/*` to verify which build is serving.
+- **Multipart uploads**: `imageUploadOptions` in `common/storage/image-upload.config.ts` — pass to `FilesInterceptor`. JPEG/PNG/WEBP/GIF whitelist, 10 MB cap, memoryStorage so the buffer reaches `FileStorageService.save()` with a UUID filename.
+- **Mixed multipart + JSON DTO**: a multipart endpoint with a structured body uses `ParseJsonPipe`: `@Body('data', new ParseJsonPipe(CreateXDto)) dto: CreateXDto`. The DTO rides as a JSON-string field next to the file fields and runs through the same global ValidationPipe rules.
+- **UTC date inputs**: use `@IsUtcIsoString()` instead of `@IsDateString()` whenever a column is a timestamp. Rejects naive strings and non-UTC offsets — closes the silent-timezone-drift gap.
+
+### Public / guest-mode surface
+
+Routes intended for anonymous traffic live in `src/modules/public/` rather than scattered `@Public()` decorators across feature controllers. The whole controller carries a class-level `@Throttle({ default: { limit: 10, ttl: 60_000 } })` (one ceiling for the whole guest surface — auditable in one place) and no `JwtAuthGuard`. Use this for things like contact-form submissions, public listings, integration proxies. User-specific routes always stay behind auth.
+
+### Storage (file uploads)
+
+`FileStorageService` (@Global) is provider-agnostic. `STORAGE_PROVIDER`: `stub` (default — logs + returns `stub://...` URLs, used in dev and tests so no real persistence happens) or `s3` (AWS S3 or any S3-compatible backend: Cloudflare R2, DigitalOcean Spaces, MinIO).
+
+`FileStorageService.save(file, subdir)` returns `{ url, storageKey }`. Pattern:
+1. Save the file → get `{ url, storageKey }`.
+2. Persist `url` on the DB row.
+3. On DB write failure, `service.delete(storageKey)` to roll back.
+
+Resource `remove()` paths should call `service.deleteByUrl(row.url)` so the bucket doesn't accumulate orphans. URLs that don't match this provider's `publicUrlBase` are silently ignored, so external CDN URLs imported from elsewhere are safe to call against.
+
+Adding a new provider: implement `FileStorageAdapter`, add it to the factory in `file-storage.module.ts`, and extend `STORAGE_PROVIDER` in env validation.
+
+### SMS
+
+`SmsService` (@Global) mirrors `EmailService`. `SMS_PROVIDER`: `stub` (default — logs to stdout) or `twilio` (requires `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`). Only the selected adapter is constructed, so the stub path doesn't fail at boot when Twilio creds are unset.
+
+Templated helpers (e.g. `sendPhoneVerificationOtp`) live on `SmsService`; adapters only see a fully-formed message body. Add new flows by adding a typed helper, not by inlining `.send({ body: ... })` at the call site.
+
+### Scheduled jobs
+
+`ScheduleModule.forRoot()` registered at the app level. Cross-cutting jobs go in `src/common/scheduled-jobs/`; feature-owned jobs live alongside the service that owns their data. Conventions:
+
+1. Public method (`runOnce()`) is the testable seam — `@Cron`-decorated method just calls it.
+2. Skip in test: `if (configService.get('nodeEnv') === 'test') return;`.
+3. Per-row try/catch + dedupe column for batch jobs — fire often, dedupe per row.
+4. Idempotency required — assume the job fires twice for the same instant (clock skew, restart, manual `runOnce()` from a runbook).
 
 ## Security model
 

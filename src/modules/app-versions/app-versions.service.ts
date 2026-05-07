@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { AppVersion, Prisma } from '@prisma/client';
 import { AuditService } from '../../common/audit/audit.service';
-import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { buildOrderBy, MetaQueryDto } from '../../common/dto/meta-query.dto';
 import { PaginationMeta } from '../../common/dto/paginated-response.dto';
 import { AppPlatform } from '../../common/enums/app-platform.enum';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -45,20 +45,18 @@ export class AppVersionsService {
     return created;
   }
 
-  findAll(): Promise<AppVersion[]> {
-    return this.prisma.appVersion.findMany({
-      orderBy: { releaseDate: 'desc' },
-    });
+  findAll(query: MetaQueryDto = new MetaQueryDto()): Promise<AppVersion[]> {
+    return this.prisma.appVersion.findMany(this.buildListArgs(query));
   }
 
   async findPaginated(
-    query: PaginationQueryDto,
+    query: MetaQueryDto,
   ): Promise<{ data: AppVersion[]; meta: PaginationMeta }> {
-    const page = query.page ?? 1;
-    const perPage = query.perPage ?? 20;
+    const { page, perPage } = query;
+    const args = this.buildListArgs(query);
     const [data, total] = await this.prisma.$transaction([
       this.prisma.appVersion.findMany({
-        orderBy: { releaseDate: 'desc' },
+        ...args,
         skip: (page - 1) * perPage,
         take: perPage,
       }),
@@ -72,6 +70,18 @@ export class AppVersionsService {
         total,
         totalPages: Math.ceil(total / perPage),
       },
+    };
+  }
+
+  private buildListArgs(query: MetaQueryDto): {
+    orderBy: Prisma.AppVersionOrderByWithRelationInput;
+  } {
+    return {
+      orderBy: buildOrderBy(
+        query,
+        ['releaseDate', 'createdAt', 'updatedAt'] as const,
+        'releaseDate',
+      ),
     };
   }
 

@@ -23,6 +23,7 @@ CREATE TABLE "users" (
     "otpExpiresAt" TIMESTAMP(3),
     "emailVerifiedAt" TIMESTAMP(3),
     "phoneNumber" TEXT,
+    "phoneNumberVerifiedAt" TIMESTAMP(3),
     "gender" TEXT,
     "profileImageUrl" TEXT,
     "birthday" DATE,

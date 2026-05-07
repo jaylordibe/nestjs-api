@@ -28,14 +28,41 @@ async function bootstrap(): Promise<void> {
     credentials: true,
   });
 
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle(configService.getOrThrow<string>('serviceName'))
-    .setDescription('NestJS API')
-    .setVersion('1.0')
-    .addBearerAuth()
-    .build();
-  const document = SwaggerModule.createDocument(app, swaggerConfig);
-  SwaggerModule.setup('api/docs', app, document);
+  // Swagger gate: local + staging expose `/api/docs`; production hides
+  // it. Operators don't need it on the customer-facing host, and the
+  // schema dump leaks DTO shape to anonymous traffic. Staging keeps it
+  // because that's where integration partners and admins actually use
+  // Try-it-out. Branches on NODE_ENV.
+  const nodeEnv = configService.getOrThrow<string>('nodeEnv');
+  if (nodeEnv !== 'production') {
+    // Stamp the commit hash into the Swagger doc's `version` so the
+    // docs page shows which build it's describing. Mismatch with the
+    // live API means a stale image is serving — pair with the health
+    // endpoint to confirm. Truncate to 12 chars to match standard
+    // short-SHA convention.
+    const gitSha = configService.getOrThrow<string>('gitSha');
+    const docVersion =
+      gitSha === 'unknown' ? '1.0' : `1.0+${gitSha.slice(0, 12)}`;
+    const swaggerConfig = new DocumentBuilder()
+      .setTitle(configService.getOrThrow<string>('serviceName'))
+      .setDescription('NestJS API')
+      .setVersion(docVersion)
+      .addBearerAuth()
+      .build();
+    const document = SwaggerModule.createDocument(app, swaggerConfig);
+    SwaggerModule.setup('api/docs', app, document, {
+      swaggerOptions: {
+        // Force schemas to render fully expanded — without this, complex
+        // refs inside multipart request bodies show only "object" and
+        // the fields are hidden behind a click-to-expand. -1 = unlimited.
+        defaultModelsExpandDepth: 2,
+        defaultModelExpandDepth: 5,
+        // Render request bodies with a starting example matching the
+        // schema so operators see realistic input shapes in Try-it-out.
+        tryItOutEnabled: true,
+      },
+    });
+  }
 
   app.enableShutdownHooks();
 

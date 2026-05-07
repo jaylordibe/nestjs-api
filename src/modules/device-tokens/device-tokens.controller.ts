@@ -16,7 +16,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { MetaQueryDto } from '../../common/dto/meta-query.dto';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { Role } from '../../common/enums/role.enum';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -46,7 +46,7 @@ export class DeviceTokensController {
   @Get()
   @Roles(Role.ADMIN)
   async findPaginated(
-    @Query() query: PaginationQueryDto,
+    @Query() query: MetaQueryDto,
   ): Promise<PaginatedResponseDto<DeviceTokenResponseDto>> {
     const { data, meta } = await this.deviceTokensService.findPaginated(query);
     return {
@@ -58,8 +58,10 @@ export class DeviceTokensController {
   // Must be before @Get(':id') — NestJS matches routes in declaration order.
   @Get('all')
   @Roles(Role.ADMIN)
-  async findAll(): Promise<DeviceTokenResponseDto[]> {
-    const rows = await this.deviceTokensService.findAll();
+  async findAll(
+    @Query() query: MetaQueryDto,
+  ): Promise<DeviceTokenResponseDto[]> {
+    const rows = await this.deviceTokensService.findAll(query);
     return rows.map((r) => new DeviceTokenResponseDto(r));
   }
 
