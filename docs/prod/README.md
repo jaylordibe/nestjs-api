@@ -213,6 +213,24 @@ In the api repo under **Settings → Environments → production**:
 | Variable | `PRODUCTION_SERVICE_DIR` | `/srv/<service>` (the on-server project dir) |
 | Variable | `PRODUCTION_URL` | `https://api.example.com` |
 
+**Enable deploys.** The deploy job ships gated, so the template (and any
+fresh clone) runs CI but never deploys. To turn on CD in a real project,
+do **either**:
+
+- **Simplest — remove the gate (recommended per project):** delete the
+  `if: ${{ vars.DEPLOY_ENABLED == 'true' }}` line (and the comment above
+  it) from the `deploy` job in **both** `.github/workflows/deploy-production.yml`
+  and `deploy-staging.yml`. After that the deploy runs on every push (once
+  tests pass). Do this **only after the secrets above are set** — the
+  commit that removes the line, pushed to `main`, is itself the first
+  deploy.
+- **Or keep the gate and flip a switch:** set a **repository** variable
+  `DEPLOY_ENABLED=true` under **Settings → Secrets and variables → Actions
+  → Variables** — repository scope, NOT environment-scoped (a job's `if:`
+  can't read environment variables). This decouples enabling from any push.
+
+Either way the same gate covers prod and staging.
+
 The `admin` and `web` repos each need the same three secrets under their
 own **Settings → Environments → production**, plus a `PRODUCTION_URL`
 variable pointing at that SPA's hostname.

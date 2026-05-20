@@ -219,6 +219,15 @@ In the api repo under **Settings → Environments → staging**:
 | Variable | `STAGING_SERVICE_DIR` | `/srv/<service>` (the on-server project dir) |
 | Variable | `STAGING_URL` | `https://api.staging.example.com` |
 
+**Enable deploys.** The deploy job ships gated, so the template (and fresh
+clones) run CI but never deploy. To enable CD in a real project, **either**
+delete the `if: ${{ vars.DEPLOY_ENABLED == 'true' }}` line (and its comment)
+from the `deploy` job in **both** deploy workflows — the simplest per-project
+option, do it only after secrets are set — **or** set the **repository**
+variable `DEPLOY_ENABLED=true` (Settings → Secrets and variables → Actions →
+Variables; repository scope, NOT environment-scoped). The same gate covers
+prod and staging; see `docs/prod/README.md` for details.
+
 The `admin` and `web` repos each need the same three secrets under their
 own **Settings → Environments → staging**, plus a `STAGING_URL` variable
 pointing at that SPA's hostname.

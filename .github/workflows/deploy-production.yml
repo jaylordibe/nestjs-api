@@ -27,6 +27,15 @@ jobs:
 
   deploy:
     name: Deploy
+    # Deploy is OPT-IN. The template ships the `DEPLOY_ENABLED` repo
+    # variable UNSET, so pushes to the template itself (or any fresh clone)
+    # run CI but SKIP the deploy — no failed runs from missing
+    # secrets/server. In a real project, enable deploys by EITHER deleting
+    # this `if:` line (+ this comment) OR setting repo variable
+    # DEPLOY_ENABLED=true (Settings → Secrets and variables → Actions →
+    # Variables) — once the server + PRODUCTION_* secrets are provisioned.
+    # See docs/prod/README.md.
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 20

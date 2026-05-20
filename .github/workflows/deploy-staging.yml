@@ -27,6 +27,11 @@ jobs:
 
   deploy:
     name: Deploy
+    # Deploy is OPT-IN — see deploy-production.yml / docs/prod/README.md.
+    # Enable by deleting this `if:` line (+ this comment) OR setting repo
+    # variable DEPLOY_ENABLED=true, once the STAGING_* secrets are
+    # provisioned; until then pushes run CI but skip the deploy.
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 20
