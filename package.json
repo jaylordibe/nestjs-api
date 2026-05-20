@@ -82,7 +82,9 @@
   },
   "resolutions": {
     "picomatch": "^4.0.4",
-    "@hono/node-server": "^1.19.13"
+    "@hono/node-server": "^1.19.13",
+    "fast-uri": "^3.1.2",
+    "fast-xml-builder": "^1.1.7"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
