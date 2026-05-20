@@ -19,12 +19,12 @@ export const envValidationSchema = Joi.object({
   // the API base (e.g. `https://api.yourapp.com/api`) and the backend's
   // `GET /auth/verify-email?token=…` endpoint will handle the click.
   // Must be a full URL with scheme — no trailing slash.
-  APP_BASE_URL: Joi.string()
+  API_BASE_URL: Joi.string()
     .uri({ scheme: ['http', 'https'] })
     .pattern(/[^/]$/, { name: 'no-trailing-slash' })
     .default('http://localhost:3000/api'),
 
-  // Customer-facing web frontend base URL — distinct from APP_BASE_URL
+  // Customer-facing web frontend base URL — distinct from API_BASE_URL
   // (which is the API). Used by emails that link customers to pages
   // they actually browse (booking confirmation CTAs, marketing pages,
   // etc.). Default targets the Vite dev port; production must set this

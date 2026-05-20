@@ -125,7 +125,7 @@ jobs:
             cp -u docs/staging/Caddyfile          "$SERVICE_DIR/Caddyfile"
 
             # All compose ops run from the project dir where docker-compose.yml
-            # and the sibling source dirs (admin, web) live.
+            # and the sibling source dirs (web) live.
             cd "$SERVICE_DIR"
 
             # Make sure data services are up before migrations.
@@ -137,8 +137,8 @@ jobs:
             # never gets rebuilt and the workflow silently exits 0.
             docker compose --profile migrate run --rm --build migrate < /dev/null
 
-            # Build + (re)start ONLY the api service. admin/web are untouched
-            # — they have their own deploy workflows. Three-step shape
+            # Build + (re)start ONLY the api service. web is untouched
+            # — it has its own deploy workflow. Three-step shape
             # (build, stop, swap) keeps the slow build off the downtime
             # window; `--wait` blocks until the api healthcheck passes.
             echo "[deploy] building api image (old container still serving traffic)…"

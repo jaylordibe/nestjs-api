@@ -1,7 +1,7 @@
 # Production Deployment
 
-Runs on a generic Linux VM behind Cloudflare + Caddy. Three app
-services — `api` + `admin` + `web` — plus `postgres` + `redis`, all on
+Runs on a generic Linux VM behind Cloudflare + Caddy. Two app
+services — `api` + `web` — plus `postgres` + `redis`, all on
 one docker-compose stack. Staging mirrors this exactly: see
 [`docs/staging/README.md`](../staging/README.md).
 
@@ -87,7 +87,6 @@ missing SPA repo (that service fails to build but doesn't block `api`).
 ```bash
 cd /srv/<service>
 git clone <api-repo-url>   <service>-api
-git clone <admin-repo-url> <service>-admin
 git clone <web-repo-url>   <service>-web
 ```
 
@@ -105,7 +104,7 @@ If you picked **Option B**, also add the static `AWS_*` keys to `.env`
 
 ### 4. Cloudflare
 
-1. **DNS**: A records for `api.`, `admin.`, apex, and `www.` → server's
+1. **DNS**: A records for `api.`, apex, and `www.` → server's
    public IP. Proxy enabled (orange cloud). The Origin Certificate in
    step 3 must cover all of these hostnames (a `*.example.com` wildcard
    plus the apex does; otherwise list each one explicitly).
@@ -183,7 +182,7 @@ chmod 600 .env
 cd /srv/<service>
 docker compose up -d postgres redis
 docker compose --profile migrate run --rm --build migrate
-docker compose up -d --build api admin web
+docker compose up -d --build api web
 docker compose up -d caddy
 
 # Seed the database (first deploy only)
@@ -231,7 +230,7 @@ do **either**:
 
 Either way the same gate covers prod and staging.
 
-The `admin` and `web` repos each need the same three secrets under their
+The `web` repo needs the same three secrets under its
 own **Settings → Environments → production**, plus a `PRODUCTION_URL`
 variable pointing at that SPA's hostname.
 
@@ -250,7 +249,7 @@ CI handles them. On `git push origin main`:
    and runs a smoke test against `PRODUCTION_URL`. If the api never goes
    healthy, container logs are dumped into the workflow run.
 
-The admin and web repos follow the same pattern but each only rebuilds
+The web repo follows the same pattern but only rebuilds
 its own service — pushing to the api repo's `main` branch does NOT build
 or start the SPA containers. Each SPA deploys when its own repo's `main`
 branch is pushed.
@@ -297,7 +296,7 @@ docker compose up -d --build --force-recreate api
 | `526 Invalid SSL certificate` after enabling AOP | `cf-origin-pull-ca.pem` missing, wrong path, or AOP not toggled ON | Re-curl the CA cert, check the dashboard toggle, `docker compose logs caddy` |
 | Caddy logs `client didn't provide a certificate` | AOP enabled in Caddy but OFF in CF dashboard | Toggle ON in CF, or temporarily set `client_auth mode request` while diagnosing |
 | Direct `curl https://<origin-ip>` hangs / connection-reset | Working as intended — non-CF source IPs are dropped by `(cloudflare_only)` | Route through the public CF hostname instead |
-| `admin`/`web` service fails to build on first deploy | Sibling SPA repo not cloned yet (step 2) | Clone the repo into `/srv/<service>/<service>-<name>` and re-run `docker compose up -d --build <name>` |
+| `web` service fails to build on first deploy | Sibling SPA repo not cloned yet (step 2) | Clone the repo into `/srv/<service>/<service>-<name>` and re-run `docker compose up -d --build <name>` |
 | Migrations exit non-zero | Schema drift / missing migration on disk | `docker compose --profile migrate run --rm migrate` (re-run, read output) |
 | API logs `ECONNREFUSED postgres:5432` | Postgres not up yet (race) or container restart loop | `docker compose ps postgres`, `docker compose logs postgres` |
 | Per-IP rate limiting acts globally / all clients same IP | `TRUST_PROXY` wrong | Should be `2` (Cloudflare + Caddy) |

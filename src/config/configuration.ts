@@ -2,8 +2,8 @@ export interface AppConfig {
   nodeEnv: 'development' | 'test' | 'staging' | 'production';
   serviceName: string;
   port: number;
-  appBaseUrl: string;
-  // Customer-facing web frontend base URL. Distinct from `appBaseUrl`
+  apiBaseUrl: string;
+  // Customer-facing web frontend base URL. Distinct from `apiBaseUrl`
   // (the API) — emails that link the customer to a page they actually
   // browse (booking confirmation CTAs, marketing links, etc.) compose
   // their hrefs from `webBaseUrl + path`. No trailing slash.
@@ -83,7 +83,7 @@ export default (): AppConfig => ({
   nodeEnv: (process.env.NODE_ENV as AppConfig['nodeEnv']) ?? 'development',
   serviceName: process.env.SERVICE_NAME!,
   port: parseInt(process.env.PORT ?? '3000', 10),
-  appBaseUrl: process.env.APP_BASE_URL ?? 'http://localhost:3000/api',
+  apiBaseUrl: process.env.API_BASE_URL ?? 'http://localhost:3000/api',
   webBaseUrl: process.env.WEB_BASE_URL ?? 'http://localhost:5173',
   gitSha: process.env.GIT_SHA ?? 'unknown',
   database: {

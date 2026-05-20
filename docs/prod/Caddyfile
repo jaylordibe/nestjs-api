@@ -24,7 +24,7 @@
 # `docs/prod/README.md` ("Authenticated Origin Pulls") to avoid an
 # outage window.
 #
-# Hostnames come from .env (API_HOSTNAME, ADMIN_HOSTNAME, WEB_HOSTNAME).
+# Hostnames come from .env (API_HOSTNAME, WEB_HOSTNAME).
 {
 	# Disable ACME — we use the Cloudflare Origin Cert. The HTTP→HTTPS
 	# redirect that auto_https provides is preserved; only cert provisioning
@@ -90,15 +90,6 @@
 	header @docs Cache-Control "no-store"
 
 	reverse_proxy api:3000
-}
-
-# ─── Admin SPA ─────────────────────────────────────────────────────────────
-{$ADMIN_HOSTNAME} {
-	import cloudflare_only
-	import origin_tls
-	import common_headers
-	encode zstd gzip
-	reverse_proxy admin:80
 }
 
 # ─── Customer-facing web SPA ───────────────────────────────────────────────

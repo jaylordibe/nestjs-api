@@ -33,7 +33,7 @@ All auth/user errors flow through the `Errors.*` factory and emit a stable `erro
 ## Email verification flow (JWT link, stateless)
 
 1. `POST /auth/register` creates the user with `emailVerifiedAt = null`, awaits `sendEmailVerificationLink`, returns `{ message }` — **no access token**. Provider outage surfaces as 5xx at register time.
-2. Link format: `{APP_BASE_URL}/auth/verify-email?token=<jwt>`. JWT carries `{ sub: userId, purpose: 'email_verify' }`, 24h expiry.
+2. Link format: `{API_BASE_URL}/auth/verify-email?token=<jwt>`. JWT carries `{ sub: userId, purpose: 'email_verify' }`, 24h expiry.
 3. Consumption: `jwtService.verify`, check `purpose === 'email_verify'`, set `emailVerifiedAt = now`. Idempotent (re-verify = 200 no-op). Any failure → `Errors.invalidLink()` (opaque 400, all failure modes indistinguishable).
 4. Login gate: `AuthService.login` throws 401 `EMAIL_NOT_VERIFIED` **after** a successful password match if unverified. Wrong-password stays generic `INVALID_CREDENTIALS` — the specific error only leaks to someone who already knows the password.
 5. `POST /auth/resend-verification`: public, throttled, always 200. No enumeration.
@@ -68,7 +68,7 @@ Fires from every password-mutating path (`/me/password`, admin `/users/:id/passw
 
 ## Base URLs (auth/email routing)
 
-- `APP_BASE_URL` — the API host; emails that link to a *backend handler* (the verify-email click) compose hrefs from it.
+- `API_BASE_URL` — the API host; emails that link to a *backend handler* (the verify-email click) compose hrefs from it.
 - `WEB_BASE_URL` — the customer-facing frontend; emails that link the customer to a *page* (confirmation, CTA) use it.
 
 ## Audit-log context

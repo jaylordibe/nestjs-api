@@ -1,7 +1,7 @@
 # Staging Deployment
 
 Runs on a generic Linux VM behind Cloudflare + Caddy — the same shape as
-production. Three app services (`api` + `admin` + `web`) plus
+production. Two app services (`api` + `web`) plus
 `postgres` + `redis` on one docker-compose stack. Production mirrors this:
 see [`docs/prod/README.md`](../prod/README.md).
 
@@ -72,7 +72,6 @@ missing SPA repo (that service fails to build but doesn't block `api`).
 ```bash
 cd /srv/<service>
 git clone <api-repo-url>   <service>-api
-git clone <admin-repo-url> <service>-admin
 git clone <web-repo-url>   <service>-web
 ```
 
@@ -88,7 +87,7 @@ after ~30 days so they don't accumulate.
 
 ### 4. Cloudflare
 
-1. **DNS**: A records for `api.staging.`, `admin.staging.`, the staging
+1. **DNS**: A records for `api.staging.`, the staging
    apex, and `www.staging.` → server's public IP. Proxy enabled (orange
    cloud). The Origin Certificate in step 3 must cover all of these
    hostnames (a `*.staging.example.com` wildcard plus the apex does;
@@ -189,7 +188,7 @@ values, so an unquoted or double-quoted `$` would be expanded or trigger
 cd /srv/<service>
 docker compose up -d postgres redis
 docker compose --profile migrate run --rm --build migrate
-docker compose up -d --build api admin web
+docker compose up -d --build api web
 docker compose up -d caddy
 
 # Seed the database (first deploy only)
@@ -228,7 +227,7 @@ variable `DEPLOY_ENABLED=true` (Settings → Secrets and variables → Actions �
 Variables; repository scope, NOT environment-scoped). The same gate covers
 prod and staging; see `docs/prod/README.md` for details.
 
-The `admin` and `web` repos each need the same three secrets under their
+The `web` repo needs the same three secrets under its
 own **Settings → Environments → staging**, plus a `STAGING_URL` variable
 pointing at that SPA's hostname.
 
@@ -244,7 +243,7 @@ CI handles them. On `git push origin staging`:
    migrations, rebuilds + force-recreates the api service,
    graceful-reloads Caddy, runs a smoke test against `STAGING_URL`.
 
-The admin and web repos follow the same pattern but each only rebuilds
+The web repo follows the same pattern but only rebuilds
 its own service.
 
 ## Manual operations
@@ -287,7 +286,7 @@ docker compose up -d --build --force-recreate api
 | Caddy logs `client didn't provide a certificate` | AOP enabled in Caddy but OFF in CF dashboard | Toggle ON in CF, or temporarily set `client_auth mode request` while diagnosing |
 | `/api/docs` returns 401 in browser | Working as intended — Swagger Basic Auth | Enter the `SWAGGER_BASIC_AUTH_*` credentials |
 | Swagger Basic Auth always rejects / Compose warns "variable is not set" | bcrypt hash double-quoted or unquoted in .env | Single-quote `SWAGGER_BASIC_AUTH_PASSWORD_HASH`, then `docker compose up -d caddy` |
-| `admin`/`web` service fails to build on first deploy | Sibling SPA repo not cloned yet (step 2) | Clone the repo into `/srv/<service>/<service>-<name>` and re-run `docker compose up -d --build <name>` |
+| `web` service fails to build on first deploy | Sibling SPA repo not cloned yet (step 2) | Clone the repo into `/srv/<service>/<service>-<name>` and re-run `docker compose up -d --build <name>` |
 | Migrations exit non-zero | Schema drift / missing migration on disk | `docker compose --profile migrate run --rm migrate` (re-run, read output) |
 | Per-IP rate limiting acts globally | `TRUST_PROXY` wrong | Should be `2` (Cloudflare + Caddy) |
 | S3 uploads fail with 401/403 | Wrong/revoked keys, or identity missing bucket perms | Verify the IAM role / `AWS_*` keys and bucket policy |

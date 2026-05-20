@@ -1,9 +1,12 @@
 # PRODUCTION stack — generic Linux VM behind Cloudflare + Caddy.
 #
-# Three app services (api + admin + web) plus the data services
+# Two app services (api + web) plus the data services
 # (postgres + redis). This file is copied to
 # /srv/${SERVICE_NAME}/docker-compose.yml by the deploy-production
 # workflow (.github/workflows/deploy-production.yml).
+#
+# Additional SPAs (e.g. an admin console) are per-project opt-ins, not
+# part of this baseline — see docs/README.md "Adding a new SPA service".
 #
 # Staging has its own template (docs/staging/docker-compose.yml) which
 # is otherwise identical to this file. The two are intentionally NOT
@@ -12,10 +15,10 @@
 # environment drift to fit its host without leaking config into the other.
 #
 # API-as-deployment-hub: this api repo's deploy workflow re-syncs this
-# file + the Caddyfile and rebuilds the api service. The admin/web
-# bundles are built from SIBLING repos checked out next to this one on
-# the server (${SERVICE_NAME}-admin / ${SERVICE_NAME}-web). Each SPA has
-# its own deploy workflow that only rebuilds its own service.
+# file + the Caddyfile and rebuilds the api service. The web bundle is
+# built from a SIBLING repo checked out next to this one on the server
+# (${SERVICE_NAME}-web). The SPA has its own deploy workflow that only
+# rebuilds its own service.
 #
 # Expected layout on the server (see docs/README.md):
 #   /srv/${SERVICE_NAME}/
@@ -27,7 +30,6 @@
 #       origin.key               (CF Origin Cert key, chmod 600)
 #       cf-origin-pull-ca.pem     (CF Authenticated Origin Pulls CA — see README)
 #     ${SERVICE_NAME}-api/        (this repo — NestJS, has its own Dockerfile)
-#     ${SERVICE_NAME}-admin/      (admin SPA — its own Dockerfile + web-server config)
 #     ${SERVICE_NAME}-web/        (customer SPA — its own Dockerfile + web-server config)
 #
 # Caddy is the only service exposed to the host (80/443). Every other
@@ -36,7 +38,7 @@
 # Bring up (see docs/prod/README.md for the full first-deploy runbook):
 #   docker compose up -d postgres redis
 #   docker compose --profile migrate run --rm --build migrate
-#   docker compose up -d --build api admin web
+#   docker compose up -d --build api web
 #   docker compose up -d caddy
 
 # Cap log size on every long-running service so docker's default unbounded
@@ -155,26 +157,13 @@ services:
       postgres:
         condition: service_healthy
 
-  # ─── Admin SPA ───────────────────────────────────────────────────────────
+  # ─── Customer-facing web SPA ─────────────────────────────────────────────
   # Vite bakes env vars into the bundle at BUILD time, so VITE_* values must
   # be passed as `args` (not `environment`). Add new VITE_* keys to .env and
   # mirror them under both `args:` here and `ARG`+`ENV` in the SPA's Dockerfile.
   # Build context is the sibling repo cloned next to this one on the server;
   # the first deploy tolerates it being absent (this service fails to build
   # but doesn't block api).
-  admin:
-    build:
-      context: ./${SERVICE_NAME}-admin
-      args:
-        VITE_API_BASE_URL: ${ADMIN_VITE_API_BASE_URL}
-    image: ${SERVICE_NAME}-admin:latest
-    container_name: ${SERVICE_NAME}-admin
-    restart: unless-stopped
-    logging: *default-logging
-    expose:
-      - '80'
-
-  # ─── Customer-facing web SPA ─────────────────────────────────────────────
   web:
     build:
       context: ./${SERVICE_NAME}-web
@@ -206,7 +195,6 @@ services:
       - caddy-config:/config
     environment:
       API_HOSTNAME: ${API_HOSTNAME}
-      ADMIN_HOSTNAME: ${ADMIN_HOSTNAME}
       WEB_HOSTNAME: ${WEB_HOSTNAME}
 
 volumes:

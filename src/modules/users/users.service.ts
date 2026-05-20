@@ -64,7 +64,7 @@ export class UsersService {
       { sub: user.id, purpose: 'email_verify' },
       { expiresIn: '24h' },
     );
-    const baseUrl = this.configService.getOrThrow<string>('appBaseUrl');
+    const baseUrl = this.configService.getOrThrow<string>('apiBaseUrl');
     const verifyUrl = `${baseUrl}/auth/verify-email?token=${encodeURIComponent(token)}`;
     await this.emailService.sendEmailVerificationLink(
       user.email,
