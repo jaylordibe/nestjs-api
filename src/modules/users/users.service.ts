@@ -1,11 +1,4 @@
-import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-  Logger,
-  NotFoundException,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Prisma, User } from '@prisma/client';
@@ -13,6 +6,7 @@ import * as bcrypt from 'bcrypt';
 import { buildOrderBy, MetaQueryDto } from '../../common/dto/meta-query.dto';
 import { PaginationMeta } from '../../common/dto/paginated-response.dto';
 import { AuditService } from '../../common/audit/audit.service';
+import { Errors } from '../../common/errors/errors';
 import { EmailService } from '../../common/email/email.service';
 import { SmsService } from '../../common/sms/sms.service';
 import { OtpPurpose } from '../../common/enums/otp-purpose.enum';
@@ -116,14 +110,14 @@ export class UsersService {
     try {
       payload = this.jwtService.verify<VerifyPayload>(token);
     } catch {
-      throw new BadRequestException('Invalid or expired verification link');
+      throw Errors.invalidLink();
     }
     if (payload.purpose !== 'email_verify' || typeof payload.sub !== 'string') {
-      throw new BadRequestException('Invalid or expired verification link');
+      throw Errors.invalidLink();
     }
     const user = await this.findByIdOrNull(payload.sub);
     if (!user) {
-      throw new BadRequestException('Invalid or expired verification link');
+      throw Errors.invalidLink();
     }
     if (user.emailVerifiedAt) {
       return;
@@ -224,7 +218,7 @@ export class UsersService {
   async findById(id: string): Promise<User> {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) {
-      throw new NotFoundException('User not found');
+      throw Errors.resourceNotFound('User');
     }
     return user;
   }
@@ -324,7 +318,7 @@ export class UsersService {
       user.password,
     );
     if (!passwordMatches) {
-      throw new UnauthorizedException('Current password is incorrect');
+      throw Errors.currentPasswordIncorrect();
     }
     const now = new Date();
     await this.prisma.user.update({
@@ -428,7 +422,7 @@ export class UsersService {
       user.password,
     );
     if (!passwordMatches) {
-      throw new UnauthorizedException('Current password is incorrect');
+      throw Errors.currentPasswordIncorrect();
     }
     return this.prisma.user.update({
       where: { id: userId },
@@ -451,7 +445,7 @@ export class UsersService {
       user.password,
     );
     if (!passwordMatches) {
-      throw new UnauthorizedException('Current password is incorrect');
+      throw Errors.currentPasswordIncorrect();
     }
     const passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
     const updated = await this.prisma.user.update({
@@ -472,7 +466,7 @@ export class UsersService {
     actorId: string,
   ): Promise<User> {
     if (userId === actorId) {
-      throw new ForbiddenException(
+      throw Errors.adminSelfTargetForbidden(
         'Use /users/me/password to change your own password',
       );
     }
@@ -507,16 +501,27 @@ export class UsersService {
     });
   }
 
-  // Step 1 of phone update: generate an OTP, store its hash, and dispatch
-  // it to the *new* phone number. The hash binds the code to the target
-  // number (`otp:phoneNumber`) so a code delivered to phone X cannot later
-  // be replayed to claim phone Y on the verify step. Re-issuing replaces
-  // any existing PHONE_VERIFY OTP — the latest request wins.
+  // Step 1 of phone update: verify the password (the kickoff is gated on
+  // a fresh password proof so a stolen JWT alone can't redirect the
+  // user's phone number to attacker-controlled), then generate an OTP,
+  // store its hash, and dispatch it to the *new* phone number. The hash
+  // binds the code to the target number (`otp:phoneNumber`) so a code
+  // delivered to phone X cannot later be replayed to claim phone Y on
+  // the verify step. Re-issuing replaces any existing PHONE_VERIFY OTP —
+  // the latest request wins.
   async requestPhoneVerification(
     userId: string,
+    currentPassword: string,
     phoneNumber: string,
   ): Promise<void> {
-    await this.findById(userId);
+    const user = await this.findById(userId);
+    const passwordMatches = await bcrypt.compare(
+      currentPassword,
+      user.password,
+    );
+    if (!passwordMatches) {
+      throw Errors.currentPasswordIncorrect();
+    }
     const otp = generateOtp();
     const otpHash = await bcrypt.hash(`${otp}:${phoneNumber}`, BCRYPT_ROUNDS);
     await this.prisma.user.update({
@@ -547,14 +552,14 @@ export class UsersService {
       !user.otpExpiresAt ||
       user.otpExpiresAt.getTime() < Date.now()
     ) {
-      throw new BadRequestException('Invalid or expired verification code');
+      throw Errors.invalidOtp();
     }
     const matches = await bcrypt.compare(
       `${dto.otp}:${dto.phoneNumber}`,
       user.otpHash,
     );
     if (!matches) {
-      throw new BadRequestException('Invalid or expired verification code');
+      throw Errors.invalidOtp();
     }
     return this.prisma.user.update({
       where: { id: userId },
@@ -640,11 +645,11 @@ export class UsersService {
     ) {
       // Same opaque error for every failure mode so an attacker can't
       // distinguish "wrong email" from "expired OTP" from "wrong code".
-      throw new BadRequestException('Invalid or expired reset code');
+      throw Errors.invalidOtp();
     }
     const otpMatches = await bcrypt.compare(dto.otp, user.otpHash);
     if (!otpMatches) {
-      throw new BadRequestException('Invalid or expired reset code');
+      throw Errors.invalidOtp();
     }
     const passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
     const updated = await this.prisma.user.update({

@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { DeviceToken, Prisma } from '@prisma/client';
 import { AuditService } from '../../common/audit/audit.service';
+import { Errors } from '../../common/errors/errors';
 import { buildOrderBy, MetaQueryDto } from '../../common/dto/meta-query.dto';
 import { PaginationMeta } from '../../common/dto/paginated-response.dto';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -84,7 +85,7 @@ export class DeviceTokensService {
   async findById(id: string): Promise<DeviceToken> {
     const row = await this.findByIdOrNull(id);
     if (!row) {
-      throw new NotFoundException('Device token not found');
+      throw Errors.resourceNotFound('Device token');
     }
     return row;
   }

@@ -1,9 +1,10 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { randomUUID } from 'crypto';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { AuditService } from '../../common/audit/audit.service';
+import { Errors } from '../../common/errors/errors';
 import { RedisService } from '../../common/redis/redis.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UserResponseDto } from '../users/dto/user-response.dto';
@@ -65,7 +66,7 @@ export class AuthService {
     // accounts can't be distinguished from wrong-password by timing either.
     if (user && user.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
       await bcrypt.compare(dto.password, await this.getDummyHash());
-      throw new UnauthorizedException('Invalid credentials');
+      throw Errors.invalidCredentials();
     }
 
     const passwordMatches = await bcrypt.compare(
@@ -77,19 +78,17 @@ export class AuthService {
       if (user) {
         await this.registerFailedAttempt(user.id, user.failedLoginCount);
       }
-      throw new UnauthorizedException('Invalid credentials');
+      throw Errors.invalidCredentials();
     }
 
     // Verified-email check happens AFTER password verification so that
     // "is this email registered but unverified?" leaks only to someone
     // who already knows the correct password — much smaller enumeration
-    // surface than blocking at the top of the function.
+    // surface than blocking at the top of the function. Surfaces as 401
+    // errorCode EMAIL_NOT_VERIFIED; wrong-password stays generic
+    // INVALID_CREDENTIALS so the two are indistinguishable to an attacker.
     if (!user.emailVerifiedAt) {
-      throw new UnauthorizedException({
-        message:
-          'Please verify your email before logging in. Check your inbox or request a new verification link.',
-        error: 'EmailNotVerified',
-      });
+      throw Errors.emailNotVerified();
     }
 
     if (user.failedLoginCount > 0 || user.lockedUntil) {

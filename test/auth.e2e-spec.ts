@@ -113,6 +113,16 @@ describe('Auth (e2e)', () => {
         .send(payload)
         .expect(409);
       expect(res.body.message).toMatch(/email already in use/i);
+      // Error envelope contract (Phase B): every error carries a stable
+      // machine-readable errorCode plus the standard envelope fields.
+      expect(res.body.errorCode).toBe('UNIQUE_CONSTRAINT_VIOLATION');
+      expect(res.body).toMatchObject({
+        statusCode: 409,
+        error: 'Conflict',
+        details: { field: 'email' },
+        path: '/api/auth/register',
+      });
+      expect(typeof res.body.timestamp).toBe('string');
     });
 
     it('rejects invalid email with 400', async () => {
@@ -169,7 +179,7 @@ describe('Auth (e2e)', () => {
         .post('/api/auth/login')
         .send({ email: 'bob@example.com', password: VALID_PASSWORD })
         .expect(401);
-      expect(res.body.error).toBe('EmailNotVerified');
+      expect(res.body.errorCode).toBe('EMAIL_NOT_VERIFIED');
       expect(res.body.message).toMatch(/verify/i);
     });
 
@@ -197,8 +207,9 @@ describe('Auth (e2e)', () => {
         .send({ email: 'bob@example.com', password: 'wrong-password-1' })
         .expect(401);
       // Unknown-email and wrong-password must be indistinguishable —
-      // no EmailNotVerified leak for attackers who don't have the password.
-      expect(res.body.error).not.toBe('EmailNotVerified');
+      // no EMAIL_NOT_VERIFIED leak for attackers who don't have the password.
+      expect(res.body.errorCode).not.toBe('EMAIL_NOT_VERIFIED');
+      expect(res.body.errorCode).toBe('INVALID_CREDENTIALS');
     });
 
     it('rejects unknown email with 401', async () => {

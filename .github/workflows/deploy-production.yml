@@ -35,39 +35,168 @@ jobs:
     # production to:
     #   1. Require reviewer approval before the job runs (strongly
     #      recommended for prod — enforces a human check).
-    #   2. Scope secrets (PROD_*) to this environment only.
-    #   3. Restrict which branches can deploy to it.
-    # The `url:` is displayed in the Actions UI as a clickable link to
-    # the deployed environment after a successful run.
+    #   2. Scope secrets (PRODUCTION_*) to this environment only.
+    #   3. Restrict which branches can deploy to it (main).
+    # The `url:` is shown in the Actions UI as a clickable link to the
+    # deployed environment after a successful run.
     environment:
       name: production
       url: ${{ vars.PRODUCTION_URL }}
+
+    # The on-server project dir (`/srv/<service>`). Set as a variable in
+    # Settings → Environments → production (PRODUCTION_SERVICE_DIR). Falls
+    # back to /srv/nestjs (the template's default SERVICE_NAME) so a fresh
+    # clone deploys without extra config.
+    env:
+      SERVICE_DIR: ${{ vars.PRODUCTION_SERVICE_DIR || '/srv/nestjs' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Replace the placeholder below with your real deploy flow.
-      # Examples by deploy target:
-      #
-      #   Kubernetes (recommended for most prod apps):
-      #     - uses: azure/setup-kubectl@v4
-      #     - run: kubectl set image deployment/api api=${{ env.IMAGE }}:${{ github.sha }} -n production
-      #
-      #   Container registry push + pull-on-target:
-      #     - uses: docker/login-action@v3
-      #     - uses: docker/build-push-action@v6
-      #     - run: ssh prod "docker compose pull && docker compose up -d"
-      #
-      #   PaaS (Fly, Railway, Render, AWS App Runner):
-      #     - run: curl -fsSL https://fly.io/install.sh | sh
-      #     - run: flyctl deploy --remote-only
-      #
-      # The checkout step above gives you the repo contents at the
-      # commit being deployed; reference secrets via
-      # `${{ secrets.PRODUCTION_* }}` scoped to this environment.
-      - name: Deploy to production
+      # SSH config is set up once at the start of the job so every later
+      # step can ssh without re-doing the keyscan. ~/.ssh persists across
+      # `run` blocks within the same job; the runner is ephemeral so
+      # there's no cleanup needed. The ssh-agent socket is exported to
+      # $GITHUB_ENV so it persists too — without that, the deploy step
+      # couldn't `git fetch` from GitHub on the prod box (no key forwarded
+      # → Permission denied (publickey)).
+      - name: Configure SSH
         run: |
-          echo "TODO: wire your real production deploy here"
-          echo "Commit: ${{ github.sha }}"
-          echo "Actor:  ${{ github.actor }}"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -H "${{ secrets.PRODUCTION_HOST }}" >> ~/.ssh/known_hosts
+          (umask 077; echo "${{ secrets.PRODUCTION_SSH_KEY }}" > ~/.ssh/id_rsa)
+          # ForwardAgent makes the prod box reuse the runner's loaded key
+          # for outbound SSH (e.g. fetching from github.com). Scoped to the
+          # production host only — agent forwarding to untrusted hosts is a
+          # hijack vector, but our prod box is trusted.
+          cat >> ~/.ssh/config <<EOL
+          Host ${{ secrets.PRODUCTION_HOST }}
+            ForwardAgent yes
+          EOL
+          eval "$(ssh-agent -s)"
+          ssh-add ~/.ssh/id_rsa
+          # Persist the agent socket + pid for later steps in this job.
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+
+      # Docker Compose deploy. Migrations run BEFORE `up -d` so the new code
+      # never starts against an old schema; this assumes migrations are
+      # backwards-compatible with the currently-running build (standard
+      # expand/contract pattern). The `migrate` service uses the Dockerfile's
+      # `build` target (has the prisma CLI); the `api` service uses the
+      # pruned `runtime` target.
+      - name: Deploy api to production
+        env:
+          SERVICE_DIR: ${{ env.SERVICE_DIR }}
+        run: |
+          ssh "${{ secrets.PRODUCTION_USER }}@${{ secrets.PRODUCTION_HOST }}" \
+            "SERVICE_DIR='${SERVICE_DIR}'" bash -s <<'EOF'
+            set -euo pipefail
+
+            # API source dir is the api repo cloned next to the infra files.
+            # Inferred from SERVICE_DIR's basename: /srv/nestjs → nestjs-api.
+            SERVICE_NAME="$(basename "$SERVICE_DIR")"
+            API_DIR="$SERVICE_DIR/$SERVICE_NAME-api"
+
+            # Pull the latest API source. Hard-reset is safer than `git pull`
+            # for unattended deploys — survives force-pushes and any drift.
+            cd "$API_DIR"
+            git fetch --prune origin main
+            git reset --hard origin/main
+
+            # Capture the deploy SHA and export it. GIT_SHA is forwarded as
+            # a build arg to BOTH the migrate build and the api build (see
+            # compose file). Both share a `build` Dockerfile stage; setting
+            # GIT_SHA before either build means they hit the same RUN cache
+            # entry and only rebuild once per commit. Echoing it also gives
+            # the log a one-line "what's deploying" header.
+            export GIT_SHA="$(git rev-parse HEAD)"
+            echo "[deploy] deploying commit ${GIT_SHA}"
+
+            # Sync the canonical infra files (tracked in docs/ in this repo)
+            # into the project dir so server and repo never drift. -u skips
+            # copies when contents are identical, keeping mtimes stable.
+            cp -u docs/prod/docker-compose.yml "$SERVICE_DIR/docker-compose.yml"
+            cp -u docs/prod/Caddyfile          "$SERVICE_DIR/Caddyfile"
+
+            # All compose ops run from the project dir where docker-compose.yml
+            # and the sibling source dirs (admin, web) live.
+            cd "$SERVICE_DIR"
+
+            # Make sure data services are up before migrations.
+            docker compose up -d postgres redis
+
+            # Build + run the migration container. Idempotent. Picks up the
+            # GIT_SHA exported above so its build of the shared `build` stage
+            # shares the cache key with the api build below.
+            #
+            # `< /dev/null` is critical: `docker compose run` keeps STDIN
+            # open by default, and the surrounding `ssh ... bash -s <<'EOF'`
+            # is feeding this whole script via bash's STDIN. Without the
+            # redirect, the migrate container attaches to that STDIN and
+            # slurps the rest of the heredoc as its own input — bash never
+            # sees the lines after it and the workflow silently exits 0.
+            docker compose --profile migrate run --rm --build migrate < /dev/null
+
+            # Build + (re)start ONLY the api service. admin/web are untouched
+            # — they have their own deploy workflows.
+            #
+            # Three-step shape (build, stop, swap) separates the slow part
+            # (build) from the part that takes the api offline. Build runs
+            # against the still-serving old container, so the actual gap is
+            # just stop + boot of the new container (~seconds). Stop happens
+            # BEFORE the swap-up so a crash-looping container can't race with
+            # the recreate. `--force-recreate` guards against compose keeping
+            # an old container alive when the image hash didn't change in its
+            # view. `--wait` blocks until the api healthcheck passes and
+            # exits non-zero if it never goes healthy.
+            echo "[deploy] building api image (old container still serving traffic)…"
+            docker compose build api
+            echo "[deploy] stopping existing api container (if any)…"
+            docker compose stop api || true
+            echo "[deploy] starting new api container and waiting for healthcheck…"
+            if ! docker compose up -d --force-recreate --wait api; then
+              echo "::error::api container never went healthy after deploy"
+              docker compose ps -a api
+              docker compose logs --tail=200 api
+              exit 1
+            fi
+            echo "[deploy] api container is healthy"
+
+            # Make sure Caddy is running, then graceful-reload in case the
+            # Caddyfile changed. `|| true` covers first deploy (no container
+            # yet) and unchanged-config no-ops.
+            docker compose up -d caddy
+            docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || true
+
+            # Reclaim disk from previous deploys' dangling images.
+            docker image prune -f
+          EOF
+
+      # Smoke test from the runner. Fails the deploy if the app doesn't come
+      # up healthy within ~60s — prevents a broken build from sitting
+      # silently in production. PRODUCTION_URL is set in the environment vars
+      # (Settings → Environments → production). 60s gives the api container
+      # headroom for a cold Prisma connect on first deploy after a docker
+      # prune. Logs only on status-code transitions (not every attempt) so a
+      # steady stream of identical 502s doesn't flood the workflow log.
+      - name: Smoke test
+        run: |
+          last_code=""
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" \
+              "${{ vars.PRODUCTION_URL }}/api/health/liveness" || echo curl_err)
+            if [ "$code" = "200" ]; then
+              echo "Healthy after ${i} attempt(s)"
+              exit 0
+            fi
+            if [ "$code" != "$last_code" ]; then
+              echo "attempt ${i}: HTTP ${code}"
+              last_code=$code
+            fi
+            sleep 2
+          done
+          echo "Health check failed after 60s — last status: HTTP ${last_code}"
+          exit 1

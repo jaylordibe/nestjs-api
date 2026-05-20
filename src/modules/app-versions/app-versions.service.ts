@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { AppVersion, Prisma } from '@prisma/client';
 import { AuditService } from '../../common/audit/audit.service';
+import { Errors } from '../../common/errors/errors';
 import { buildOrderBy, MetaQueryDto } from '../../common/dto/meta-query.dto';
 import { PaginationMeta } from '../../common/dto/paginated-response.dto';
 import { AppPlatform } from '../../common/enums/app-platform.enum';
@@ -88,7 +89,7 @@ export class AppVersionsService {
   async findById(id: string): Promise<AppVersion> {
     const row = await this.findByIdOrNull(id);
     if (!row) {
-      throw new NotFoundException('App version not found');
+      throw Errors.resourceNotFound('App version');
     }
     return row;
   }
@@ -103,7 +104,8 @@ export class AppVersionsService {
       orderBy: { releaseDate: 'desc' },
     });
     if (!row) {
-      throw new NotFoundException(
+      throw Errors.resourceNotFound(
+        'App version',
         `No app version found for platform "${platform}"`,
       );
     }

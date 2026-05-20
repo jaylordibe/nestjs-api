@@ -295,6 +295,88 @@ describe('Users (e2e)', () => {
       expect(res.body.profileImageUrl).toBe('https://cdn.example.com/me.jpg');
     });
 
+    it('POST /api/users/me/request-phone-verification rejects wrong current password with 401', async () => {
+      // Re-auth gate (Phase C): a stolen JWT alone must not be able to
+      // redirect the user's phone number — the kickoff requires the
+      // current password, mirroring the email-change request endpoint.
+      const { id, token } = await registerAndToken(
+        app,
+        'phone-bad@example.com',
+      );
+      await request(app.getHttpServer())
+        .post('/api/users/me/request-phone-verification')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ phoneNumber: '+14155550100', currentPassword: 'wrong-pass-1' })
+        .expect(401);
+      // No OTP was issued on the failed re-auth.
+      const prisma = app.get(PrismaService);
+      const row = await prisma.user.findUniqueOrThrow({ where: { id } });
+      expect(row.otpHash).toBeNull();
+    });
+
+    it('phone-verification flow stamps phoneNumberVerifiedAt on a valid OTP', async () => {
+      const { id, token } = await registerAndToken(app, 'phone-ok@example.com');
+      const prisma = app.get(PrismaService);
+      const phoneNumber = '+14155550111';
+
+      // Kicking off the flow requires the current password (re-auth).
+      await request(app.getHttpServer())
+        .post('/api/users/me/request-phone-verification')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ phoneNumber, currentPassword: PASSWORD })
+        .expect(200);
+
+      // The stub SMS adapter doesn't surface the code, so plant a known
+      // OTP hash bound to the target number (matching the service's
+      // `${otp}:${phoneNumber}` binding) to drive the verify step.
+      const otp = '135790';
+      await prisma.user.update({
+        where: { id },
+        data: {
+          otpHash: await bcrypt.hash(`${otp}:${phoneNumber}`, 10),
+          otpPurpose: 'phone_verify',
+          otpExpiresAt: new Date(Date.now() + 10 * 60_000),
+        },
+      });
+
+      const res = await request(app.getHttpServer())
+        .patch('/api/users/me/verify-phone')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ phoneNumber, otp })
+        .expect(200);
+      expect(res.body.phoneNumber).toBe(phoneNumber);
+      expect(res.body.phoneNumberVerifiedAt).toEqual(expect.any(String));
+
+      const row = await prisma.user.findUniqueOrThrow({ where: { id } });
+      expect(row.phoneNumberVerifiedAt).not.toBeNull();
+      // OTP triple is cleared after a successful verify (single-use).
+      expect(row.otpHash).toBeNull();
+      expect(row.otpPurpose).toBeNull();
+    });
+
+    it('PATCH /api/users/me/verify-phone rejects a wrong OTP with 400 (opaque)', async () => {
+      const { id, token } = await registerAndToken(
+        app,
+        'phone-otp@example.com',
+      );
+      const prisma = app.get(PrismaService);
+      const phoneNumber = '+14155550122';
+      await prisma.user.update({
+        where: { id },
+        data: {
+          otpHash: await bcrypt.hash(`246810:${phoneNumber}`, 10),
+          otpPurpose: 'phone_verify',
+          otpExpiresAt: new Date(Date.now() + 10 * 60_000),
+        },
+      });
+      const res = await request(app.getHttpServer())
+        .patch('/api/users/me/verify-phone')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ phoneNumber, otp: '000000' })
+        .expect(400);
+      expect(res.body.errorCode).toBe('INVALID_OTP');
+    });
+
     it('POST /api/users/request-password-reset always returns 200 (no enumeration)', async () => {
       await registerAndToken(app, 'reset@example.com');
       await request(app.getHttpServer())
@@ -547,11 +629,13 @@ describe('Users (e2e)', () => {
       expect(res.body.email).toBe('find@example.com');
     });
 
-    it('GET /api/users/:id with non-existent UUID returns 404', async () => {
-      await request(app.getHttpServer())
+    it('GET /api/users/:id with non-existent UUID returns 404 with RESOURCE_NOT_FOUND', async () => {
+      const res = await request(app.getHttpServer())
         .get('/api/users/00000000-0000-0000-0000-000000000000')
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(404);
+      expect(res.body.errorCode).toBe('RESOURCE_NOT_FOUND');
+      expect(res.body.details).toEqual({ resource: 'User' });
     });
 
     it('GET /api/users/:id with invalid UUID returns 400', async () => {

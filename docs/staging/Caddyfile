@@ -1,0 +1,137 @@
+# Reverse proxy for staging. Sits behind Cloudflare in Full (Strict)
+# mode + Authenticated Origin Pulls (mTLS) + an L7 IP allowlist —
+# belt-and-suspenders so the origin is reachable ONLY by Cloudflare.
+# Anyone scanning for the origin IP gets dropped at L7 (non-CF source
+# IP → `abort`) AND at TLS (no CF-signed client cert → handshake fails).
+# This is what makes any Cloudflare-injected headers (`CF-IPCountry`,
+# `CF-Connecting-IP`, `CF-Ray`) trustworthy: only CF can populate them.
+#
+# Cert files expected on the host (see docs/staging/README.md):
+#   /srv/${SERVICE_NAME}/certs/origin.pem            (CF Origin Cert, public)
+#   /srv/${SERVICE_NAME}/certs/origin.key            (CF Origin Cert key, chmod 600)
+#   /srv/${SERVICE_NAME}/certs/cf-origin-pull-ca.pem (CF Authenticated Origin Pulls CA)
+#
+# The first two come from `Cloudflare dashboard → SSL/TLS → Origin
+# Server → Create Certificate` (15-year, CF-signed).
+#
+# The third is Cloudflare's public Origin Pull CA, downloadable from
+# https://developers.cloudflare.com/ssl/static/authenticated_origin_pull_ca.pem
+# (stable, rarely rotated). Pair with the dashboard toggle:
+#   Cloudflare dashboard → SSL/TLS → Origin Server →
+#   Authenticated Origin Pulls → ON
+# Without that toggle, CF won't present its client cert and every CF→
+# origin handshake will fail. Roll out in the order documented in
+# `docs/staging/README.md` ("Authenticated Origin Pulls") to avoid an
+# outage window.
+#
+# Hostnames come from .env (API_HOSTNAME, ADMIN_HOSTNAME, WEB_HOSTNAME).
+{
+	# Disable ACME — we use the Cloudflare Origin Cert. The HTTP→HTTPS
+	# redirect that auto_https provides is preserved; only cert provisioning
+	# is skipped.
+	auto_https disable_certs
+}
+
+# Shared TLS config — every site uses the same Cloudflare Origin Cert
+# AND requires a CF-signed client cert on every TLS handshake (the
+# "Authenticated Origin Pulls" pattern).
+(origin_tls) {
+	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin.key {
+		client_auth {
+			mode require_and_verify
+			trust_pool file /etc/caddy/certs/cf-origin-pull-ca.pem
+		}
+	}
+}
+
+# Cloudflare-IP allowlist — anyone connecting to our origin from a
+# non-CF source IP is silently dropped at L7. Source of truth:
+#   https://www.cloudflare.com/ips-v4
+#   https://www.cloudflare.com/ips-v6
+# CF updates these very rarely (years between additions). If you ever
+# see CF-routed users 403'd, diff this list against the current one
+# and redeploy Caddy. For zero ongoing maintenance, swap to a custom
+# Caddy build with the `caddy-cloudflare-ip` module which fetches the
+# ranges at runtime and refreshes daily.
+(cloudflare_only) {
+	@not_cloudflare not remote_ip 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+	handle @not_cloudflare {
+		abort
+	}
+}
+
+# Common headers for SPA + API responses.
+(common_headers) {
+	header {
+		# HSTS — Cloudflare also sets this, but defense in depth.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Hide upstream details.
+		-Server
+	}
+}
+
+# ─── NestJS API ──────────────────────────────────────────────────────────
+{$API_HOSTNAME} {
+	import cloudflare_only
+	import origin_tls
+	import common_headers
+	encode zstd gzip
+
+	# Swagger HTML/JSON is built once at app boot and embeds the deploy
+	# SHA in the version banner. Cloudflare's default cache happily serves
+	# the previous deploy's docs page for hours after a release. Tell both
+	# the CDN and the browser to never cache these paths so a redeploy is
+	# visible immediately.
+	@docs path /api/docs /api/docs/* /api/docs-json /api/docs-json/*
+	header @docs Cache-Control "no-store"
+
+	# Staging Swagger is gated behind HTTP Basic Auth so anyone who
+	# guesses the staging hostname hits a login prompt before the schema.
+	# Production has Swagger disabled at the Nest layer (see main.ts), so
+	# this directive only lives in the staging Caddyfile. Devs paste the
+	# shared credential into the browser prompt once per session.
+	#
+	# The credentials live in /srv/${SERVICE_NAME}/.env — see the gotcha
+	# in .env.example: wrap the bcrypt hash in SINGLE quotes so Compose
+	# doesn't interpolate the `$` chars. Rotate by re-running
+	# `docker compose exec caddy caddy hash-password`, swapping the value
+	# in .env, and `docker compose up -d caddy`.
+	basic_auth @docs {
+		{$SWAGGER_BASIC_AUTH_USER} {$SWAGGER_BASIC_AUTH_PASSWORD_HASH}
+	}
+
+	reverse_proxy api:3000
+}
+
+# ─── Admin SPA ─────────────────────────────────────────────────────────────
+{$ADMIN_HOSTNAME} {
+	import cloudflare_only
+	import origin_tls
+	import common_headers
+	encode zstd gzip
+	reverse_proxy admin:80
+}
+
+# ─── Customer-facing web SPA ───────────────────────────────────────────────
+# The web bundle declares www.{$WEB_HOSTNAME} as its canonical host
+# (rel=canonical, sitemap.xml, robots.txt, og:url all point at www), so the
+# bare apex must not serve duplicate content. 301-redirect the apex to the
+# canonical www host, preserving path + query; HSTS still rides the redirect
+# response via common_headers.
+{$WEB_HOSTNAME} {
+	import cloudflare_only
+	import origin_tls
+	import common_headers
+	redir https://www.{$WEB_HOSTNAME}{uri} permanent
+}
+
+# Canonical public site.
+www.{$WEB_HOSTNAME} {
+	import cloudflare_only
+	import origin_tls
+	import common_headers
+	encode zstd gzip
+	reverse_proxy web:80
+}

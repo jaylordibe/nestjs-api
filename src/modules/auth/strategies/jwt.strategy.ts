@@ -1,8 +1,9 @@
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { HttpException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { AuthenticatedUser } from '../../../common/decorators/current-user.decorator';
+import { Errors } from '../../../common/errors/errors';
 import { Role } from '../../../common/enums/role.enum';
 import { RedisService } from '../../../common/redis/redis.service';
 import { UsersService } from '../../users/users.service';
@@ -45,14 +46,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // Reject tokens that were signed for a non-auth purpose (e.g.
     // email-verification JWTs). Access tokens never set `purpose`.
     if (payload.purpose !== undefined) {
-      throw new UnauthorizedException();
+      throw Errors.tokenInvalid();
     }
 
     // findByIdOrNull uses the scoped client, so soft-deleted users return
     // null here automatically — no explicit deletedAt check needed.
+    // Missing / inactive / soft-deleted all collapse to USER_INACTIVE so
+    // they're indistinguishable (no enumeration via the auth path).
     const user = await this.usersService.findByIdOrNull(payload.sub);
     if (!user || !user.isActive) {
-      throw new UnauthorizedException();
+      throw Errors.userInactive();
     }
 
     // Invalidate any token issued strictly before the second in which the
@@ -65,7 +68,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         user.passwordChangedAt.getTime() / 1000,
       );
       if (payload.iat < changedAtSeconds) {
-        throw new UnauthorizedException();
+        throw Errors.sessionInvalidated();
       }
     }
 
@@ -80,10 +83,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
           `${LOGOUT_KEY_PREFIX}${payload.jti}`,
         );
         if (revoked) {
-          throw new UnauthorizedException();
+          throw Errors.tokenRevoked();
         }
       } catch (err) {
-        if (err instanceof UnauthorizedException) throw err;
+        if (err instanceof HttpException) throw err;
         this.logger.warn(
           `Logout blocklist check failed (failing open): ${
             err instanceof Error ? err.message : String(err)

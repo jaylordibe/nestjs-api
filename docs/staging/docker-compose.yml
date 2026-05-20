@@ -1,0 +1,208 @@
+# STAGING stack — generic Linux VM behind Cloudflare + Caddy.
+#
+# Three app services (api + admin + web) plus the data services
+# (postgres + redis). This file is copied to
+# /srv/${SERVICE_NAME}/docker-compose.yml by the deploy-staging
+# workflow (.github/workflows/deploy-staging.yml). Production deploys
+# NEVER copy this — they use docs/prod/docker-compose.yml instead.
+#
+# Identical to docs/prod/docker-compose.yml except staging keeps Swagger
+# reachable (it's gated off in prod at the Nest layer) and gates
+# /api/docs* behind HTTP Basic Auth at the Caddy edge — see the two
+# SWAGGER_BASIC_AUTH_* vars forwarded to caddy below and the
+# `basic_auth @docs` block in docs/staging/Caddyfile.
+#
+# The two environments are kept fully separate (no compose override) so
+# each can drift to fit its host without leaking config into the other.
+#
+# API-as-deployment-hub: this api repo's deploy workflow re-syncs this
+# file + the Caddyfile and rebuilds the api service. The admin/web
+# bundles are built from SIBLING repos checked out next to this one on
+# the server (${SERVICE_NAME}-admin / ${SERVICE_NAME}-web).
+#
+# Expected layout on the server (see docs/README.md):
+#   /srv/${SERVICE_NAME}/
+#     docker-compose.yml          (this file)
+#     Caddyfile                   (reverse proxy config)
+#     .env                        (DB creds, JWT secret, hostnames, VITE args, …)
+#     certs/                      (CF Origin Cert + key + AOP CA)
+#       origin.pem                (CF Origin Cert, public)
+#       origin.key               (CF Origin Cert key, chmod 600)
+#       cf-origin-pull-ca.pem     (CF Authenticated Origin Pulls CA — see README)
+#     ${SERVICE_NAME}-api/, ${SERVICE_NAME}-admin/, ${SERVICE_NAME}-web/
+#
+# Caddy is the only service exposed to the host (80/443).
+
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
+services:
+  postgres:
+    image: postgres:18.3
+    container_name: ${SERVICE_NAME}-postgres
+    restart: unless-stopped
+    logging: *default-logging
+    shm_size: 256mb
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_INITDB_ARGS: '--encoding=UTF-8 --locale=C.UTF-8'
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USER} -d ${DB_NAME}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8.6.2
+    container_name: ${SERVICE_NAME}-redis
+    restart: unless-stopped
+    logging: *default-logging
+    command: ['redis-server', '--requirepass', '${REDIS_PASSWORD}', '--appendonly', 'yes']
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ─── NestJS API ──────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./${SERVICE_NAME}-api
+      args:
+        # GIT_SHA is exported by the deploy workflow (`git rev-parse HEAD`
+        # from the api source dir) right before `compose up --build`, and
+        # baked into the image as a build arg. Falls back to `unknown` for
+        # manual on-server builds without the workflow setting it.
+        GIT_SHA: ${GIT_SHA:-unknown}
+    image: ${SERVICE_NAME}-api:latest
+    container_name: ${SERVICE_NAME}-api
+    restart: unless-stopped
+    logging: *default-logging
+    init: true
+    stop_grace_period: 30s
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_URL: redis://default:${REDIS_PASSWORD}@redis:6379
+    expose:
+      - '3000'
+    # Compose `--wait` blocks until this passes, which is the deploy
+    # workflow's signal that the new container has cleared cold-start (Nest
+    # bootstrap + Prisma connect). `start_period` is the grace window where
+    # failing checks DON'T count toward retries — long enough to cover a
+    # cold Prisma TLS handshake. `node -e` is used instead of curl/wget
+    # because the runtime image is alpine + Node and we don't want to
+    # depend on busybox quirks for healthcheck reliability.
+    healthcheck:
+      test: ['CMD', 'node', '-e', "require('http').get('http://localhost:3000/api/health/liveness',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # One-off migration runner. Uses the API Dockerfile's `build` target which
+  # retains the prisma CLI + schema. Behind the `migrate` profile so it
+  # never starts with `up`. Invoke during deploy:
+  #   docker compose --profile migrate run --rm --build migrate
+  #
+  # GIT_SHA is forwarded as a build arg so migrate's build of the `build`
+  # stage uses the same cache key as api's. Without this, migrate (which
+  # runs first in the deploy) would build the shared build stage with
+  # GIT_SHA=unknown, then api's build a moment later — with the actual
+  # SHA — would have a different RUN cache key and rebuild that stage
+  # again. Sharing the arg means both services hit the same cache entry
+  # and only ever rebuild once per commit.
+  migrate:
+    build:
+      context: ./${SERVICE_NAME}-api
+      target: build
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+    image: ${SERVICE_NAME}-migrate:latest
+    profiles: ['migrate']
+    command: yarn prisma:deploy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ─── Admin SPA ───────────────────────────────────────────────────────────
+  # Vite bakes env vars into the bundle at BUILD time, so VITE_* values must
+  # be passed as `args` (not `environment`). Build context is the sibling
+  # repo cloned next to this one on the server; the first deploy tolerates
+  # it being absent (this service fails to build but doesn't block api).
+  admin:
+    build:
+      context: ./${SERVICE_NAME}-admin
+      args:
+        VITE_API_BASE_URL: ${ADMIN_VITE_API_BASE_URL}
+    image: ${SERVICE_NAME}-admin:latest
+    container_name: ${SERVICE_NAME}-admin
+    restart: unless-stopped
+    logging: *default-logging
+    expose:
+      - '80'
+
+  # ─── Customer-facing web SPA ─────────────────────────────────────────────
+  web:
+    build:
+      context: ./${SERVICE_NAME}-web
+      args:
+        VITE_API_BASE_URL: ${WEB_VITE_API_BASE_URL}
+    image: ${SERVICE_NAME}-web:latest
+    container_name: ${SERVICE_NAME}-web
+    restart: unless-stopped
+    logging: *default-logging
+    expose:
+      - '80'
+
+  # ─── Caddy reverse proxy ─────────────────────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    container_name: ${SERVICE_NAME}-caddy
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/etc/caddy/certs:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      API_HOSTNAME: ${API_HOSTNAME}
+      ADMIN_HOSTNAME: ${ADMIN_HOSTNAME}
+      WEB_HOSTNAME: ${WEB_HOSTNAME}
+      # Swagger Basic Auth credentials — see Caddyfile `basic_auth @docs`.
+      # The bcrypt hash starts with `$2a$14$...`; wrap it in SINGLE quotes
+      # in .env so Compose treats it as a literal (double quotes don't
+      # disable interpolation; single quotes do).
+      SWAGGER_BASIC_AUTH_USER: ${SWAGGER_BASIC_AUTH_USER}
+      SWAGGER_BASIC_AUTH_PASSWORD_HASH: ${SWAGGER_BASIC_AUTH_PASSWORD_HASH}
+
+volumes:
+  postgres-data:
+  redis-data:
+  caddy-data:
+  caddy-config:

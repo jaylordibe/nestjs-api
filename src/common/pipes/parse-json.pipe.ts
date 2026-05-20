@@ -1,10 +1,6 @@
-import {
-  BadRequestException,
-  Injectable,
-  PipeTransform,
-  ValidationPipe,
-} from '@nestjs/common';
+import { Injectable, PipeTransform, ValidationPipe } from '@nestjs/common';
 import type { Type } from '@nestjs/common';
+import { Errors } from '../errors/errors';
 
 // Parses a JSON-encoded form field into a validated DTO. Used on multipart
 // endpoints (file upload) where the structured body has to ride along inside
@@ -34,25 +30,25 @@ export class ParseJsonPipe<T extends object> implements PipeTransform {
 
   async transform(value: unknown): Promise<T> {
     if (value === undefined || value === null || value === '') {
-      throw new BadRequestException(
+      throw Errors.badRequest(
         'multipart body is missing the `data` JSON field',
       );
     }
     if (typeof value !== 'string') {
-      throw new BadRequestException('`data` must be a JSON string');
+      throw Errors.badRequest('`data` must be a JSON string');
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(value);
     } catch {
-      throw new BadRequestException('`data` is not valid JSON');
+      throw Errors.badRequest('`data` is not valid JSON');
     }
     if (
       parsed === null ||
       typeof parsed !== 'object' ||
       Array.isArray(parsed)
     ) {
-      throw new BadRequestException('`data` must decode to a JSON object');
+      throw Errors.badRequest('`data` must decode to a JSON object');
     }
     return (await this.validationPipe.transform(parsed, {
       type: 'body',

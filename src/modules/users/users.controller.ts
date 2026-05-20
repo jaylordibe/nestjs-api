@@ -179,9 +179,10 @@ export class UsersController {
     return new UserResponseDto(user);
   }
 
-  // Step 1 of the verified-phone flow — send a one-time code via SMS to
-  // the new number. Throttled per-IP (matches the password-reset request)
-  // to limit abuse of the SMS provider's send budget.
+  // Step 1 of the verified-phone flow — re-auth with the current password,
+  // then send a one-time code via SMS to the new number. Throttled per-IP
+  // (matches the password-reset request) to limit abuse of the SMS
+  // provider's send budget.
   @Post('me/request-phone-verification')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
@@ -191,14 +192,18 @@ export class UsersController {
   ): Promise<{ ok: true }> {
     await this.usersService.requestPhoneVerification(
       current.id,
+      dto.currentPassword,
       dto.phoneNumber,
     );
     return { ok: true };
   }
 
   // Step 2 of the verified-phone flow — verify the OTP and apply the new
-  // number. Stamps `phoneNumberVerifiedAt = now` on success.
+  // number. Stamps `phoneNumberVerifiedAt = now` on success. Throttled at
+  // 5/60s/IP — a 6-digit OTP with a 15-min expiry needs the rate limit to
+  // bound brute-force on the verify endpoint.
   @Patch('me/verify-phone')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   async verifyAuthUserPhone(
     @Body() dto: VerifyAuthUserPhoneDto,
     @CurrentUser() current: AuthenticatedUser,

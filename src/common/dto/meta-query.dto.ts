@@ -1,4 +1,3 @@
-import { BadRequestException } from '@nestjs/common';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import {
@@ -10,6 +9,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { Errors } from '../errors/errors';
 
 export enum SortOrder {
   ASC = 'asc',
@@ -88,7 +88,7 @@ export class MetaQueryDto {
 //   buildOrderBy(query, ['name', 'createdAt', 'updatedAt'], 'createdAt')
 //   → { createdAt: 'desc' }   when query has no sortBy
 //   → { name: 'asc' }         when query is { sortBy: 'name', sortOrder: 'asc' }
-//   → throws BadRequest       when query is { sortBy: 'password' }
+//   → throws 400 (Errors.badRequest) when query is { sortBy: 'password' }
 export function buildOrderBy<TColumn extends string>(
   query: MetaQueryDto,
   allowedColumns: readonly TColumn[],
@@ -97,7 +97,7 @@ export function buildOrderBy<TColumn extends string>(
 ): { [K in TColumn]?: SortOrder } {
   const requested = query.sortBy as TColumn | undefined;
   if (requested !== undefined && !allowedColumns.includes(requested)) {
-    throw new BadRequestException(
+    throw Errors.badRequest(
       `sortBy must be one of: ${allowedColumns.join(', ')}`,
     );
   }

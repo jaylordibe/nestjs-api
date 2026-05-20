@@ -31,41 +31,153 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
-    # GitHub environment — lets you configure environment-scoped
-    # secrets (STAGING_HOST, STAGING_USER, STAGING_SSH_KEY) and
-    # optionally require reviewer approval for deploys via
-    # Settings → Environments → staging.
+    # GitHub environment — lets you configure environment-scoped secrets
+    # (STAGING_HOST, STAGING_USER, STAGING_SSH_KEY) and optionally require
+    # reviewer approval via Settings → Environments → staging.
     environment:
       name: staging
       url: ${{ vars.STAGING_URL }}
+
+    # The on-server project dir (`/srv/<service>`). Set as a variable in
+    # Settings → Environments → staging (STAGING_SERVICE_DIR). Falls back
+    # to /srv/nestjs (the template's default SERVICE_NAME) so a fresh
+    # clone deploys without extra config.
+    env:
+      SERVICE_DIR: ${{ vars.STAGING_SERVICE_DIR || '/srv/nestjs' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Loads the SSH private key into ssh-agent without writing it to
-      # disk — cleaner than `echo "$KEY" > ~/.ssh/id_rsa`. Agent is
-      # scoped to this job; no cleanup needed (runners are ephemeral).
-      - name: Configure SSH agent
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
-
-      # Trust the staging host's fingerprint. Hashing with `-H` avoids
-      # leaking hostnames in known_hosts. Omits `-t rsa` so ssh-keyscan
-      # negotiates the strongest algorithm the server offers (usually
-      # ed25519 on modern boxes).
-      - name: Trust host key
+      # SSH config is set up once at the start of the job so every later
+      # step can ssh without re-doing the keyscan. ~/.ssh persists across
+      # `run` blocks within the same job; the runner is ephemeral so
+      # there's no cleanup needed. The ssh-agent socket is exported to
+      # $GITHUB_ENV so it persists too — without that, the deploy step
+      # couldn't `git fetch` from GitHub on the staging box (no key
+      # forwarded → Permission denied (publickey)).
+      - name: Configure SSH
         run: |
           mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
           ssh-keyscan -H "${{ secrets.STAGING_HOST }}" >> ~/.ssh/known_hosts
+          (umask 077; echo "${{ secrets.STAGING_SSH_KEY }}" > ~/.ssh/id_rsa)
+          # ForwardAgent makes the staging box reuse the runner's loaded key
+          # for outbound SSH (e.g. fetching from github.com). Scoped to the
+          # staging host only — agent forwarding to untrusted hosts is a
+          # hijack vector, but our staging box is trusted.
+          cat >> ~/.ssh/config <<EOL
+          Host ${{ secrets.STAGING_HOST }}
+            ForwardAgent yes
+          EOL
+          eval "$(ssh-agent -s)"
+          ssh-add ~/.ssh/id_rsa
+          # Persist the agent socket + pid for later steps in this job.
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
 
-      - name: Deploy to staging
+      # Docker Compose deploy. Migrations run BEFORE `up -d` so the new code
+      # never starts against an old schema; this assumes migrations are
+      # backwards-compatible with the currently-running build (standard
+      # expand/contract pattern). The `migrate` service uses the Dockerfile's
+      # `build` target (has the prisma CLI); the `api` service uses the
+      # pruned `runtime` target.
+      #
+      # Staging uses its own dedicated compose file + Caddyfile (NOT
+      # docs/prod/) — staging keeps Swagger reachable behind Caddy Basic
+      # Auth; prod hides it. The two are kept fully separate to avoid drift.
+      - name: Deploy api to staging
+        env:
+          SERVICE_DIR: ${{ env.SERVICE_DIR }}
         run: |
-          # Replace this with your real deploy logic. Example options:
-          #   - SSH + `git pull && pm2 reload` on a VM
-          #   - `docker compose pull && docker compose up -d`
-          #   - `kubectl rollout restart deployment/api`
-          #   - `fly deploy` / `railway up` / etc.
           ssh "${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }}" \
-            "pwd && echo 'TODO: real deploy commands here' && exit"
+            "SERVICE_DIR='${SERVICE_DIR}'" bash -s <<'EOF'
+            set -euo pipefail
+
+            # API source dir is the api repo cloned next to the infra files.
+            # Inferred from SERVICE_DIR's basename: /srv/nestjs → nestjs-api.
+            SERVICE_NAME="$(basename "$SERVICE_DIR")"
+            API_DIR="$SERVICE_DIR/$SERVICE_NAME-api"
+
+            # Pull the latest API source. Hard-reset is safer than `git pull`
+            # for unattended deploys — survives force-pushes and any drift.
+            cd "$API_DIR"
+            git fetch --prune origin staging
+            git reset --hard origin/staging
+
+            # Capture the deploy SHA and export it. GIT_SHA is forwarded as
+            # a build arg to BOTH the migrate build and the api build (see
+            # compose file). Both share a `build` Dockerfile stage; setting
+            # GIT_SHA before either build means they hit the same RUN cache
+            # entry and only rebuild once per commit.
+            export GIT_SHA="$(git rev-parse HEAD)"
+            echo "[deploy] deploying commit ${GIT_SHA}"
+
+            # Sync the canonical infra files (tracked in docs/ in this repo)
+            # into the project dir so server and repo never drift. -u skips
+            # copies when contents are identical, keeping mtimes stable.
+            cp -u docs/staging/docker-compose.yml "$SERVICE_DIR/docker-compose.yml"
+            cp -u docs/staging/Caddyfile          "$SERVICE_DIR/Caddyfile"
+
+            # All compose ops run from the project dir where docker-compose.yml
+            # and the sibling source dirs (admin, web) live.
+            cd "$SERVICE_DIR"
+
+            # Make sure data services are up before migrations.
+            docker compose up -d postgres redis
+
+            # Build + run the migration container. Idempotent. `< /dev/null`
+            # is critical: without it the migrate container attaches to the
+            # heredoc STDIN and slurps the rest of the script, so the api
+            # never gets rebuilt and the workflow silently exits 0.
+            docker compose --profile migrate run --rm --build migrate < /dev/null
+
+            # Build + (re)start ONLY the api service. admin/web are untouched
+            # — they have their own deploy workflows. Three-step shape
+            # (build, stop, swap) keeps the slow build off the downtime
+            # window; `--wait` blocks until the api healthcheck passes.
+            echo "[deploy] building api image (old container still serving traffic)…"
+            docker compose build api
+            echo "[deploy] stopping existing api container (if any)…"
+            docker compose stop api || true
+            echo "[deploy] starting new api container and waiting for healthcheck…"
+            if ! docker compose up -d --force-recreate --wait api; then
+              echo "::error::api container never went healthy after deploy"
+              docker compose ps -a api
+              docker compose logs --tail=200 api
+              exit 1
+            fi
+            echo "[deploy] api container is healthy"
+
+            # Make sure Caddy is running, then graceful-reload in case the
+            # Caddyfile changed. `|| true` covers first deploy (no container
+            # yet) and unchanged-config no-ops.
+            docker compose up -d caddy
+            docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || true
+
+            # Reclaim disk from previous deploys' dangling images.
+            docker image prune -f
+          EOF
+
+      # Smoke test from the runner. Fails the deploy if the app doesn't come
+      # up healthy within ~60s. STAGING_URL is set in the environment vars
+      # (Settings → Environments → staging). Logs only on status-code
+      # transitions so a stream of identical 502s doesn't flood the log.
+      - name: Smoke test
+        run: |
+          last_code=""
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" \
+              "${{ vars.STAGING_URL }}/api/health/liveness" || echo curl_err)
+            if [ "$code" = "200" ]; then
+              echo "Healthy after ${i} attempt(s)"
+              exit 0
+            fi
+            if [ "$code" != "$last_code" ]; then
+              echo "attempt ${i}: HTTP ${code}"
+              last_code=$code
+            fi
+            sleep 2
+          done
+          echo "Health check failed after 60s — last status: HTTP ${last_code}"
+          exit 1

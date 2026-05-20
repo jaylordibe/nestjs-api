@@ -1,6 +1,6 @@
-import { BadRequestException } from '@nestjs/common';
 import { memoryStorage } from 'multer';
 import type { Request } from 'express';
+import { Errors } from '../errors/errors';
 
 // Whitelist of mime types accepted by image-upload endpoints. Kept narrow
 // on purpose — every additional type is one more renderer/decoder the
@@ -29,7 +29,7 @@ function imageMimeFilter(
     return;
   }
   cb(
-    new BadRequestException(
+    Errors.badRequest(
       `Unsupported image type: ${file.mimetype}. Allowed: ${[...ALLOWED_IMAGE_MIME_TYPES].join(', ')}`,
     ),
     false,

@@ -14,8 +14,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { LoggerModule } from 'nestjs-pino';
 import { AuditModule } from './common/audit/audit.module';
 import { EmailModule } from './common/email/email.module';
-import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
-import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
+import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { RedisModule } from './common/redis/redis.module';
 import { ScheduledJobsModule } from './common/scheduled-jobs/scheduled-jobs.module';
 import { SmsModule } from './common/sms/sms.module';
@@ -43,6 +42,9 @@ import { UsersModule } from './modules/users/users.module';
     // Structured JSON logs in prod/staging; pretty-printed in local dev.
     // Every request gets an X-Request-Id (reused if the client supplies one)
     // for trace correlation. Auth headers are redacted from logs.
+    // (See providers below: APP_PIPE = ValidationPipe, APP_INTERCEPTOR =
+    // ClassSerializerInterceptor, APP_FILTER = GlobalExceptionFilter,
+    // APP_GUARD = ThrottlerGuard.)
     LoggerModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {
@@ -135,8 +137,11 @@ import { UsersModule } from './modules/users/users.module';
       }),
     },
     { provide: APP_INTERCEPTOR, useClass: ClassSerializerInterceptor },
-    { provide: APP_FILTER, useClass: AllExceptionsFilter },
-    { provide: APP_FILTER, useClass: PrismaExceptionFilter },
+    // Single global filter — catches Prisma errors, every HttpException
+    // (tagged via Errors.* or framework-raised), and unknown throwables,
+    // emitting the standard error envelope. Replaces the legacy
+    // AllExceptionsFilter + PrismaExceptionFilter pair.
+    { provide: APP_FILTER, useClass: GlobalExceptionFilter },
   ],
 })
 export class AppModule {}

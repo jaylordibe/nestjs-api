@@ -1,404 +1,102 @@
 # CLAUDE.md
 
-Guidance for Claude Code working in this repo.
+Guidance for Claude Code working in this repo. **This file is the always-on core** — it's loaded into context on every request, so it holds only what applies to *almost every* change. Situational, deep playbooks live in **skills** (`.claude/skills/`) and **docs** (`docs/`); load them when the task calls for them rather than duplicating their content here. See **Deep references** at the bottom.
+
+## Engineering bar
+
+Every change in this repo is reviewed against a **senior software architect / lead engineer** bar. Code must be **standard, recommended, secure, and maintainable**. Apply this default without being asked:
+
+- **Design for the proper end state, not the minimum change.** If 4 call sites share a pattern, migrate all 4. Don't leave the codebase half-migrated with a "TODO: do the rest later" — the rest is part of the work.
+- **Reach for established patterns over invention.** RFC standards, well-known API conventions (Stripe, Google Cloud), OWASP guidance, NestJS idioms — name the reference when justifying a choice.
+- **Make conventions self-enforcing.** New conventions ship with a guardrail (ESLint rule, type contract, central factory, exhaustive switch, hook, etc.) so the next contributor can't drift. Documentation alone is not enough.
+- **Single source of truth.** One filter, one envelope, one factory, one config file. Two files doing the same thing is a smell — consolidate.
+- **Security is non-negotiable.** Every endpoint and DTO needs a thought about attack surface (enumeration leaks, timing attacks, replay, FK escalation, role abuse, log redaction). See the `nestjs-auth-security` skill for the hardening floor.
+- **Delete what you replace.** Old filters, old throws, old code paths — gone. No `// removed` comments, no `// legacy` directories, no parallel implementations.
+- **Plans are ADRs.** Plan-mode output should read like an Architectural Decision Record: Context → Approach (with rationale + rejected alternatives) → File-by-file changes → Tests → Verification → What this deliberately does NOT do. Not a checklist.
+- **Tests are part of the change.** A feature without e2e coverage on the contract isn't done. Update the existing assertions when the contract changes — don't add a duplicate test alongside the stale one.
+- **Verify before declaring done.** `yarn build` + `yarn lint` + the **affected** e2e spec(s) must pass on every change; run the **full** `yarn test:e2e` only when a module is complete or the user asks. Type-check and a passing suite verify correctness, but don't claim a UI/feature works without actually exercising it.
+
+When a small ask conflicts with this bar (e.g. "just fix this one site"), surface the conflict and propose the proper-scope plan first — don't silently scope down.
 
 ## Project
 
-NestJS 11 (TypeScript, Express) + Prisma 7 + PostgreSQL + Redis. JWT auth with RBAC (`ADMIN`, `USER`). GitHub template: set `SERVICE_NAME` in `.env`, add feature modules. URLs unversioned (`/api/...`).
+NestJS 11 (TypeScript, Express) + Prisma 7 + PostgreSQL + Redis. JWT auth with RBAC (`ADMIN`, `USER`). GitHub template: set `SERVICE_NAME` in `.env`, add feature modules. URLs unversioned (`/api/...`). Swagger at `/api/docs`.
 
 Package manager: **yarn** (yarn.lock committed). Scripts: `start:dev`, `start:prod`, `build`, `lint`, `format`, `test`, `test:e2e`, `prisma:generate`, `prisma:migrate`, `prisma:deploy`, `prisma:seed`, `prisma:studio`. `docker compose up -d` brings up pinned Postgres 18.3 + Redis 8.6.2 (host ports **5433** / **6378**).
+
+`SERVICE_NAME` is the single source of truth — drives `DB_NAME` default (`${SERVICE_NAME}_local`), container name, and JWT `iss`/`aud`.
 
 ## Architecture
 
 ```
 src/
-  main.ts              # bootstrap: helmet, prefix /api, trust proxy, CORS, shutdown hooks
-  app.module.ts        # ConfigModule + ThrottlerModule + PrismaModule + feature modules;
-                       # registers APP_PIPE (ValidationPipe), APP_INTERCEPTOR (ClassSerializerInterceptor),
-                       # APP_FILTER (AllExceptionsFilter then PrismaExceptionFilter — LIFO), APP_GUARD (ThrottlerGuard)
+  main.ts              # bootstrap: helmet, prefix /api, trust proxy, CORS, Swagger (gated), shutdown hooks
+  app.module.ts        # ConfigModule + ThrottlerModule + ScheduleModule + PrismaModule + features;
+                       # APP_PIPE (ValidationPipe), APP_INTERCEPTOR (ClassSerializerInterceptor),
+                       # APP_FILTER (GlobalExceptionFilter), APP_GUARD (ThrottlerGuard)
   config/              # configuration.ts (typed factory), env.validation.ts (Joi)
   prisma/              # @Global() PrismaModule + PrismaService + soft-delete extension
   common/
-    decorators/        # Roles, CurrentUser (+ AuthenticatedUser type), Public, IsUtcIsoString
+    decorators/        # Roles, CurrentUser (+ AuthenticatedUser), Public, IsUtcIsoString
     guards/            # RolesGuard (reads ROLES_KEY metadata)
-    filters/           # AllExceptionsFilter + PrismaExceptionFilter (P2002→409, P2025→404)
+    filters/           # GlobalExceptionFilter (single unified filter)
+    errors/            # ErrorCode enum, Errors factory, app-exception types, README (the error contract)
     pipes/             # ParseJsonPipe (multipart JSON-string body field)
     dto/               # MetaQueryDto (page/perPage/search/sortBy/sortOrder + buildOrderBy), PaginatedResponseDto<T>
     enums/             # Role, Gender, OtpPurpose, AppPlatform, DeviceType, DeviceOs
-    email/             # EmailService (@Global), adapters (stub/resend), Handlebars templates
-    sms/               # SmsService (@Global), adapters (stub/twilio)
-    storage/           # FileStorageService (@Global), adapters (stub/s3), image-upload.config
-    audit/             # AuditService (@Global) — best-effort audit_logs writes
-    redis/             # RedisService (@Global) — ioredis client (JWT logout blocklist)
-    scheduled-jobs/    # @Cron host module (example heartbeat — replace with real jobs)
+    email/  sms/  storage/   # @Global() provider abstractions (stub + real adapters)
+    audit/  redis/  scheduled-jobs/
   modules/
-    auth/              # AuthService, AuthController, JwtStrategy, JwtAuthGuard
-    users/             # canonical resource pattern
-    health/            # terminus: /health/liveness + /health/readiness
-    public/            # guest-mode surface (no JwtAuthGuard, class-level @Throttle)
+    auth/ users/ app-versions/ device-tokens/ health/ public/
 prisma/schema.prisma   # PostgreSQL datasource
 prisma/scripts/        # one-off ts-node admin scripts (backfills, imports)
 prisma/seeds/          # static seed data JSON consumed by prisma/seed.ts
 ```
 
-All endpoints under `/api`. See Swagger at `/api/docs`.
+## Cross-cutting conventions (apply to almost every change)
 
-## Generating a new resource
-
-Every new resource follows the users pattern exactly.
-
-### Required schema columns (physical order)
-
-```prisma
-model Order {
-  id         String    @id @default(uuid()) @db.Uuid
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-  createdBy  String?   @db.Uuid
-  updatedBy  String?   @db.Uuid
-  deletedAt  DateTime? // only for soft-delete resources
-  deletedBy  String?   @db.Uuid // pairs with deletedAt
-  isActive   Boolean   @default(true) // only when resource has distinct suspension state
-  // resource-specific fields below
-  @@map("orders")
-}
-```
-
-**Always required**: `id`, `createdAt`, `updatedAt`, `createdBy`, `updatedBy`. Order groups at/by pairs, then lifecycle, then state.
-
-**Opt-in pairwise**:
-- `deletedAt` + `deletedBy` — add when using soft delete. `deletedBy` survives restore-re-delete cycles.
-- `isActive` — only when there's a real suspension concept distinct from deletion. Don't add reflexively.
-
-### Business state vs lifecycle
-
-`isActive` = **suspension** (business state). `deletedAt` = **deletion** (lifecycle). Keep separate. For `User`: soft-delete and gdpr-erase never touch `isActive`; auth rejects on any of soft-deleted, `!isActive`, or `lockedUntil > now` (three independent reasons, none conflated).
-
-### No DB enums
-
-Enum-like columns stored as `String`. Constrain via TS enum in `src/common/enums/` + `@IsEnum()` on DTO. Changing a TS enum doesn't require a migration.
-
-**Style**: UPPER_SNAKE keys, lowercase_snake string values. DB stores lowercase; TS uses enum. Cast at DB→app boundary: `user.role as Role`.
-
-### Module layout
-
-```
-src/modules/<resource>/
-  dto/
-    create-<resource>.dto.ts     # class-validator; no audit/system fields
-    update-<resource>.dto.ts     # extends PartialType(Create<Resource>Dto)
-    <resource>-response.dto.ts   # @Exclude() sensitive cols
-  <resource>.module.ts
-  <resource>.service.ts
-  <resource>.controller.ts
-```
-
-Register in `app.module.ts` imports. `PrismaModule` is `@Global()`.
-
-### Standard endpoints (always these six, in this order)
-
-| Verb   | Path                | Method          | Returns                                       |
-|--------|---------------------|-----------------|-----------------------------------------------|
-| POST   | `/<resource>`       | `create`        | `<Resource>ResponseDto`                       |
-| GET    | `/<resource>`       | `findPaginated` | `PaginatedResponseDto<<Resource>ResponseDto>` |
-| GET    | `/<resource>/all`   | `findAll`       | `<Resource>ResponseDto[]`                     |
-| GET    | `/<resource>/:id`   | `findOne`       | `<Resource>ResponseDto`                       |
-| PATCH  | `/<resource>/:id`   | `update`        | `<Resource>ResponseDto`                       |
-| DELETE | `/<resource>/:id`   | `remove`        | `void` (204)                                  |
-
-Rules:
-- **Declaration order matters** — `@Get('all')` (and any static path) must appear before `@Get(':id')`, else captured by UUID param → 400 via `ParseUUIDPipe`.
-- **Pagination** uses `MetaQueryDto`. Defaults `page=1`, `perPage=20`, max `perPage=100`. Also exposes `search`, `sortBy`, `sortOrder` (lowercase `asc`/`desc`). Meta: `{ page, perPage, total, totalPages }`.
-- **Sort allowlist via `buildOrderBy(query, allowed, defaultColumn, defaultOrder?)`** — pass the per-resource allowlist `as const`; throws 400 on disallowed `sortBy`. Never feed `query.sortBy` directly to Prisma's `orderBy`.
-- **`/all` unpaginated** — for dropdowns/exports under a few thousand rows.
-- **PATCH not PUT.** `Update<Resource>Dto = PartialType(Create<Resource>Dto)`.
-- **DELETE returns 204** via `@HttpCode(HttpStatus.NO_CONTENT)`.
-- **UUID params** use `@Param('id', new ParseUUIDPipe())`.
-
-### Controller skeleton
-
-```ts
-@Controller('orders')
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.ADMIN)
-export class OrdersController {
-  constructor(private readonly ordersService: OrdersService) {}
-
-  @Post()
-  async create(@Body() dto: CreateOrderDto, @CurrentUser() current: AuthenticatedUser) {
-    return new OrderResponseDto(await this.ordersService.create(dto, current.id));
-  }
-
-  @Get()
-  async findPaginated(@Query() query: PaginationQueryDto) {
-    const { data, meta } = await this.ordersService.findPaginated(query);
-    return { data: data.map((r) => new OrderResponseDto(r)), meta };
-  }
-
-  // Must be before @Get(':id').
-  @Get('all')
-  async findAll(@Query() query: MetaQueryDto) {
-    const rows = await this.ordersService.findAll(query);
-    return rows.map((r) => new OrderResponseDto(r));
-  }
-
-  @Get(':id')
-  async findOne(@Param('id', new ParseUUIDPipe()) id: string) {
-    return new OrderResponseDto(await this.ordersService.findById(id));
-  }
-
-  @Patch(':id')
-  async update(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: UpdateOrderDto, @CurrentUser() current: AuthenticatedUser) {
-    return new OrderResponseDto(await this.ordersService.update(id, dto, current.id));
-  }
-
-  @Delete(':id')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  async remove(@Param('id', new ParseUUIDPipe()) id: string): Promise<void> {
-    await this.ordersService.remove(id);
-  }
-}
-```
-
-### Service skeleton
-
-- `create(dto, actorId)` — set `createdBy: actorId, updatedBy: actorId`.
-- `findAll(query?)` — accepts `MetaQueryDto` for sort/search; **no pagination** (returns the full filtered set). Default-arg pattern (`query: MetaQueryDto = new MetaQueryDto()`) lets internal callers omit it.
-- `findPaginated(query)` — `findMany` + `count()` in **one** `prisma.$transaction([...])` so total matches page.
-- **Both share a private `buildListArgs(query)`** that calls `buildOrderBy(query, ['col1', 'col2'] as const, 'createdAt')`. Keeping both list endpoints in lockstep on sort allowlist + any future search clause prevents one-side drift.
-- `findById(id)` — throws `NotFoundException`. Pair with `findByIdOrNull(id)` (JwtStrategy needs non-throwing → 401 not 404).
-- `update(id, dto, actorId)` — set `updatedBy`, don't touch `createdBy`. Re-check existence for 404 not P2025.
-- `remove(id, actorId)` — hard `delete` for transient; `update({ deletedAt: new Date(), deletedBy: actorId })` for retention. See **Delete semantics**.
-- **Don't try/catch Prisma errors.** Global `PrismaExceptionFilter` maps P2002→409 (field-aware message via `err.meta.target`), P2025→404, else 500.
-
-### Audit fields
-
-`createdBy`/`updatedBy` do **not** auto-populate — every mutating method takes `actorId: string | null` and writes it. Controllers pass `@CurrentUser().id`. For unauthenticated creates pass `null`. Deliberate explicit-arg pattern — actor visible at every callsite.
-
-### Response DTO
-
-Always construct via `new <Resource>ResponseDto(row)`. Never return raw Prisma rows — secrets leak.
-
-**Audit columns are hidden from frontend.** Only `createdAt`/`updatedAt` exposed. `createdBy`, `updatedBy`, `deletedAt`, `deletedBy` kept in DB but stripped from API. **Pair `@ApiHideProperty()` with `@Exclude()`** — independent systems (Swagger build-time vs class-transformer runtime). Both needed to keep docs + wire in sync.
-
-```ts
-export class OrderResponseDto {
-  id!: string;
-  createdAt!: Date;
-  updatedAt!: Date;
-  @ApiHideProperty() @Exclude() createdBy!: string | null;
-  @ApiHideProperty() @Exclude() updatedBy!: string | null;
-  @ApiHideProperty() @Exclude() deletedAt!: Date | null; // only if soft-delete
-  @ApiHideProperty() @Exclude() deletedBy!: string | null;
-  isActive!: boolean; // only if resource has suspension
-  @ApiHideProperty() @Exclude() secretColumn!: string | null;
-  constructor(row: Order) { Object.assign(this, row); }
-}
-```
-
-**E2E tests**: assertions on audit columns must read DB directly (`app.get(PrismaService).<model>.findUniqueOrThrow(...)`), not API body.
-
-### Migration
-
-`yarn prisma:migrate dev --name add_<resource>`. **Until any deployed env has applied migrations, edit migration files in place freely.** After first real deploy, Prisma records checksums in `_prisma_migrations` and drift-errors on changes — only add new migrations from then on.
-
-### E2E test
-
-Required for every resource. Min coverage: six endpoints + access control (401 unauthenticated, 403 wrong role) + pagination (meta shape, invalid params → 400).
-
-## Cross-cutting conventions
-
-- **Security headers**: `helmet()` in `main.ts`.
-- **Rate limiting**: `@nestjs/throttler` global `APP_GUARD`, Redis storage in dev/staging/prod (in-memory in test). Default 100/60s/IP. Per-route: `@Throttle({ default: { limit, ttl } })`. Disable: `@SkipThrottle()` (used on `/health/*`).
-- **Trust proxy**: `TRUST_PROXY` env, default `"false"`. Behind proxy set to `"1"` or CIDR list. **Never `"true"` in prod** (spoofable `X-Forwarded-For`). Joi rejects `"false"`/`"true"` in production.
+- **Error envelope + factory**: every error emits `{ statusCode, error, errorCode, message, details, path, timestamp, requestId }`. **Throw via the `Errors.*` factory** (`src/common/errors/errors.ts`), never `new BadRequestException(...)` / `NotFoundException` / `UnauthorizedException` / etc. directly — **ESLint enforces this** (`no-restricted-syntax`). Clients (web + mobile) program against `errorCode` (stable, machine-readable), never `message` (free to rotate/localize). Adding a scenario + full contract + the client auto-logout rule: `src/common/errors/README.md`.
+- **Prisma errors**: handled by the single global filter (P2002 → 409 `UNIQUE_CONSTRAINT_VIOLATION` with `details.field`, P2003 → 400 `FK_REFERENCE_INVALID`, P2025 → 404 `RESOURCE_NOT_FOUND`). Services don't try/catch these.
 - **Validation**: global `ValidationPipe({ whitelist, forbidNonWhitelisted, transform, transformOptions: { enableImplicitConversion: true } })`. Extra fields → 400. Query numbers auto-convert.
-- **Response serialization**: global `ClassSerializerInterceptor`. Return DTO instances. Never raw rows.
-- **`@Exclude()` vs `@ApiHideProperty()`**: separate layers. Sensitive response fields need **both**.
-- **Auth payload**: JWT carries `{ sub, email, role }`. `JwtStrategy.validate` re-fetches via `UsersService.findByIdOrNull` (non-throwing → 401 not 404), checks `isActive`, returns `AuthenticatedUser`. `@CurrentUser()` returns this, NOT a full `User`.
-- **RBAC**: `@UseGuards(JwtAuthGuard, RolesGuard)` at class, `@Roles(Role.ADMIN)` on handlers (or omit for any authenticated user). `RolesGuard` is no-op without `@Roles()`. Mixed public/private: use `@Public()` on public handlers.
-- **Cross-module forward refs**: when cycles exist (UsersController → AuthService, AuthModule → UsersModule), use `forwardRef` in both imports and `@Inject`.
-- **Prisma access**: through `PrismaService` (DI). `@Global()`.
-- **Prisma errors**: global `PrismaExceptionFilter` handles P2002/P2025. Services don't try/catch these. `APP_FILTER` is LIFO — register specific filters *after* `AllExceptionsFilter`.
-- **Config access**: `configService.getOrThrow<T>('jwt.secret')` etc. Dot-paths into `configuration.ts`. Don't read `process.env` outside that file.
-- **`SERVICE_NAME`** is single source of truth. Drives `DB_NAME` default (`${SERVICE_NAME}_local`), container name, JWT `iss`/`aud`.
-- **`APP_BASE_URL` vs `WEB_BASE_URL`**: `APP_BASE_URL` is the API; `WEB_BASE_URL` is the customer-facing frontend. Emails that link the customer to a *page* (booking confirmation, marketing CTA) compose hrefs from `WEB_BASE_URL`. Emails that link to a *backend handler* (verify-email click) use `APP_BASE_URL`.
-- **`GIT_SHA`**: deploy-injected commit hash, surfaced in Swagger version (`1.0+<short-sha>`). Empty → `"unknown"` for local. Pair Swagger version with `/api/health/*` to verify which build is serving.
-- **Multipart uploads**: `imageUploadOptions` in `common/storage/image-upload.config.ts` — pass to `FilesInterceptor`. JPEG/PNG/WEBP/GIF whitelist, 10 MB cap, memoryStorage so the buffer reaches `FileStorageService.save()` with a UUID filename.
-- **Mixed multipart + JSON DTO**: a multipart endpoint with a structured body uses `ParseJsonPipe`: `@Body('data', new ParseJsonPipe(CreateXDto)) dto: CreateXDto`. The DTO rides as a JSON-string field next to the file fields and runs through the same global ValidationPipe rules.
-- **UTC date inputs**: use `@IsUtcIsoString()` instead of `@IsDateString()` whenever a column is a timestamp. Rejects naive strings and non-UTC offsets — closes the silent-timezone-drift gap.
-
-### Public / guest-mode surface
-
-Routes intended for anonymous traffic live in `src/modules/public/` rather than scattered `@Public()` decorators across feature controllers. The whole controller carries a class-level `@Throttle({ default: { limit: 10, ttl: 60_000 } })` (one ceiling for the whole guest surface — auditable in one place) and no `JwtAuthGuard`. Use this for things like contact-form submissions, public listings, integration proxies. User-specific routes always stay behind auth.
-
-### Storage (file uploads)
-
-`FileStorageService` (@Global) is provider-agnostic. `STORAGE_PROVIDER`: `stub` (default — logs + returns `stub://...` URLs, used in dev and tests so no real persistence happens) or `s3` (AWS S3 or any S3-compatible backend: Cloudflare R2, DigitalOcean Spaces, MinIO).
-
-`FileStorageService.save(file, subdir)` returns `{ url, storageKey }`. Pattern:
-1. Save the file → get `{ url, storageKey }`.
-2. Persist `url` on the DB row.
-3. On DB write failure, `service.delete(storageKey)` to roll back.
-
-Resource `remove()` paths should call `service.deleteByUrl(row.url)` so the bucket doesn't accumulate orphans. URLs that don't match this provider's `publicUrlBase` are silently ignored, so external CDN URLs imported from elsewhere are safe to call against.
-
-Adding a new provider: implement `FileStorageAdapter`, add it to the factory in `file-storage.module.ts`, and extend `STORAGE_PROVIDER` in env validation.
-
-### SMS
-
-`SmsService` (@Global) mirrors `EmailService`. `SMS_PROVIDER`: `stub` (default — logs to stdout) or `twilio` (requires `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`). Only the selected adapter is constructed, so the stub path doesn't fail at boot when Twilio creds are unset.
-
-Templated helpers (e.g. `sendPhoneVerificationOtp`) live on `SmsService`; adapters only see a fully-formed message body. Add new flows by adding a typed helper, not by inlining `.send({ body: ... })` at the call site.
-
-### Scheduled jobs
-
-`ScheduleModule.forRoot()` registered at the app level. Cross-cutting jobs go in `src/common/scheduled-jobs/`; feature-owned jobs live alongside the service that owns their data. Conventions:
-
-1. Public method (`runOnce()`) is the testable seam — `@Cron`-decorated method just calls it.
-2. Skip in test: `if (configService.get('nodeEnv') === 'test') return;`.
-3. Per-row try/catch + dedupe column for batch jobs — fire often, dedupe per row.
-4. Idempotency required — assume the job fires twice for the same instant (clock skew, restart, manual `runOnce()` from a runbook).
-
-## Security model
-
-Deliberate hardening decisions — know these before relaxing:
-
-- **`JWT_SECRET`** Joi `.min(32).required().invalid(...)` — rejects the ex-template-default at boot. Regenerate: `openssl rand -hex 48`.
-- **`JWT_EXPIRES_IN` = 30d** — consumer-app default. Security relies on `passwordChangedAt` invalidation, not short expiry. For banking/admin: drop to `1h` + add refresh flow.
-- **JWT `iss`/`aud`** bound to `SERVICE_NAME` on sign AND verify. Tokens can't be replayed across services.
-- **Token invalidation on password change**: `User.passwordChangedAt` written on create + every password update. `JwtStrategy` rejects tokens with `iat` strictly earlier than `passwordChangedAt` (sub-second tolerance prevents false-reject on freshly-issued).
-- **Per-token revocation (logout)**: JWT carries `jti`. `POST /auth/logout` writes `logout:jti:<jti>` to Redis with TTL = token remaining lifetime (auto-expires). `JwtStrategy` does `EXISTS` per request. **Fail-open on Redis outage** — warning logged, request allowed. For forced session kill during incident, use `logout-all` (Postgres-backed).
-- **Session-wide revocation (logout-all)**: `POST /auth/logout-all` bumps `passwordChangedAt` → existing `iat` check kills all outstanding tokens. Postgres-only, unaffected by Redis.
-- **Admin self-target refused** on `PATCH /users/:id/password` — throws 403 when `userId === actorId`. Admins must use `/me/password` (requires current password) — blocks hijack → takeover.
-- **Lockout**: 5 failed logins → `lockedUntil = now + 15m`. Successful login clears.
-- **Login timing normalized**: unknown email still runs bcrypt compare against dummy hash — no enumeration via wall-clock.
-- **bcrypt cost = 12**. `@MinLength(12)` + `@MaxLength(72)` (bcrypt truncation guard) + regex (letter + digit) on every new-password field (not `currentPassword`).
-- **`@Public()`**: use sparingly. Any public endpoint with user input needs its own `@Throttle(...)`.
-- **Generic 500**: `AllExceptionsFilter` returns `"Internal server error"` for non-`HttpException`; real message logged server-side.
-- **Response DTO `@Exclude()`**: password, otpHash, passwordChangedAt, failedLoginCount, lockedUntil on `UserResponseDto`. Never bypass the DTO.
-- **Soft-deleted blocked from auth**: `AuthService.login` and `JwtStrategy.validate` both go through `prisma.scoped` — soft-deleted users indistinguishable from unknown (same 401, same timing via dummy bcrypt).
-
-New resources with user-facing secrets (API keys, tokens): never plaintext, `@Exclude()` from DTO, unique errors via global filter.
-
-## Delete semantics
-
-Soft delete is not default — pick explicitly per resource.
-
-**Hard delete when**: row is transient/operational (push tokens, sessions, OTPs); unique constraint would block re-registration; FK cascades desired; no retention/audit value.
-
-**Soft delete (`deletedAt` + `deletedBy`) when**: referenced by historical data (users, bookings, orders, payments); admin mistakes need reversibility; compliance retention applies; care about "who owned this at event time."
-
-**GDPR erase is a third mode** — soft-delete retains PII; real erasure overwrites identifying cols. `User.gdprErase` is canonical: mark `deletedAt`, nullify PII, rehash password so no valid credential survives. Row stays (FK'd audit_logs/bookings remain valid) but carries nothing identifying.
-
-**Current policy:**
-
-| Resource | Admin delete | Self delete | gdpr-erase | isActive? | Why |
-|---|---|---|---|---|---|
-| `users` | soft | soft | anonymize + soft | yes (suspension) | Retention + recovery; `isActive` reserved for admin suspension |
-| `app_versions` | hard | — | — | no | Release signal, not history |
-| `device_tokens` | hard | — | — | no | Transient; unique `token` would block re-reg; FK cascade handles user delete |
-| `audit_logs` | never via API | — | — | no | Append-only |
-
-**New resource**: decide up front. Soft → add both columns, `remove()` does `update({ deletedAt, deletedBy })`, access-control paths filter `deletedAt IS NULL`. Hard → leave cols out, `remove()` does `prisma.<model>.delete`.
-
-**Never rely on "remembered" filters for security** — enforced via global Prisma extension (next section).
-
-## Soft-delete filter: `prisma.scoped` vs raw `prisma`
-
-`PrismaService` exposes two views on same pool:
-
-- **`this.prisma.user.*`** — raw, sees everything including soft-deleted. Admin/forensic/recovery code paths.
-- **`this.prisma.scoped.user.*`** — filtered, auto-injects `deletedAt: null`. Every user-facing code path.
-
-Mechanism: extension in `src/prisma/prisma-soft-delete.extension.ts` intercepts reads on any model in `SOFT_DELETE_MODELS` — injects `where: { deletedAt: null }` for `findFirst`/`findMany`/`count`; fetches-then-nullifies for `findUnique`/`findUniqueOrThrow` (unique where-type limitation). Writes pass through on both views (so admin restore via `update({ deletedAt: null })` still works).
-
-**Adding a soft-delete model**: declare `deletedAt` + `deletedBy`, add model name to `SOFT_DELETE_MODELS`. That's it.
-
-**Hot-path enforcement**: `AuthService.login` + `JwtStrategy.validate` use `prisma.scoped`. No explicit `if (user.deletedAt)` check in auth path — dead code since query never returns deleted.
-
-**When to use raw**: admin `GET /users/:id` (recovery), `UsersService.findById` (admin fetch), retention jobs, forensic joins. `findByIdOrNull` and `findByEmail` use `scoped`.
-
-## Operational posture
-
-- **Logging**: pino (`nestjs-pino`). JSON in prod/staging, pretty in dev. `X-Request-Id` on every request (reused if client-sent, else UUID). Redacted: `authorization`, `cookie`, `req.body.password`, `req.body.newPassword`, `req.body.currentPassword`, `req.body.otp`. Extend `redact.paths` in `app.module.ts` for new sensitive bodies.
-- **Rate-limiter storage**: Redis in dev/staging/prod (shared counters across pods). In-memory in test.
-- **Password-change notification email** fires from every password-mutating path (`/me/password`, admin `/users/:id/password`, admin `PATCH /users/:id` with password, password-reset OTP). Not fired on initial create or `gdprErase`. Best-effort (logs failure, doesn't block).
-- **Email**: `EmailService` abstraction. `EMAIL_PROVIDER`: `stub` (default, logs to stdout) or `resend` (requires `RESEND_API_KEY` + `EMAIL_FROM` on DKIM/SPF/DMARC-configured domain). Only selected adapter's constructor runs at boot.
-- **Email templates**: `src/common/email/templates/<name>.html.hbs` (+ optional `.text.hbs`). Subjects in typed `TEMPLATE_SUBJECTS` map in `template-engine.ts` (static or `(vars) => ...`). Templates compile at init — typo in `{{var}}` surfaces at startup. Call via `emailService.sendTemplate('<name>', to, vars)` (type-checked). **Adding a template**: (1) add key + var shape to `EmailTemplates`, (2) add subject to `TEMPLATE_SUBJECTS`, (3) drop file in `./templates/`. Missing map entry = compile error. `.hbs` copied into `dist/` via `nest-cli.json` assets.
-- **Audit logs**: `AuditService.record({ action, actorId, targetUserId, metadata })`. Wired into admin create/update/delete, admin password reset, self password reset. Best-effort (try/catch in service).
-- **API docs**: `/api/docs` via `@nestjs/swagger`. Compiler plugin enabled (`classValidatorShim: true`, `introspectComments: true`) — DTOs **don't need manual `@ApiProperty()`**. Reach for explicit decorators only for examples/overrides/polymorphic unions. Use `@ApiTags('Group')` for UI grouping, `@ApiBearerAuth()` for JWT routes.
-- **Extended mapped types for Swagger**: `PartialType` / `PickType` / `OmitType` / `IntersectionType` must import from `@nestjs/swagger` (not `@nestjs/mapped-types`) — otherwise inherited DTOs render empty in `/api/docs`.
-- **Production env enforcement** via Joi `.when('NODE_ENV', { is: 'production', ... })`: `CORS_ORIGIN` can't be `*`; `TRUST_PROXY` can't be `false`/`true` (force `"1"` or CIDR). Fails boot with pointed message.
-
-## Email verification flow (JWT link, stateless)
-
-1. `POST /auth/register` creates user with `emailVerifiedAt = null`, awaits `sendEmailVerificationLink`, returns `{ user, message }` — **no access token**. Provider outage surfaces as 5xx at register time.
-2. Link format: `{APP_BASE_URL}/auth/verify-email?token=<jwt>`. JWT carries `{ sub: userId, purpose: 'email_verify' }`, 24h expiry.
-3. Consumption: `jwtService.verify`, check `purpose === 'email_verify'`, set `emailVerifiedAt = now`. Idempotent (re-verify = 200 no-op).
-4. Login gate: `AuthService.login` throws `401 { error: 'EmailNotVerified' }` after successful password match if unverified. Wrong-password still generic "Invalid credentials" — specific error only leaks to someone who knows the password.
-5. `POST /auth/resend-verification`: public, throttled 3/min, always 200. No enumeration.
-
-**Cross-checks**:
-- `JwtStrategy` rejects any token with `purpose` claim — stolen verification link can't be access token.
-- Verification JWT uses same `JWT_SECRET` but bound by `purpose` claim.
-- `resendEmailVerification` is silent no-op for soft-deleted/already-verified users.
-
-## OTP lifecycle (password reset only)
-
-Single `otpHash`/`otpPurpose`/`otpExpiresAt` triple per user.
-
-1. `requestPasswordReset`: 6-digit code → `bcrypt.hash` → `otpHash`. `otpPurpose = 'password_reset'`, `otpExpiresAt = now + 15m`. Raw code via email.
-2. `resetPassword`: verify purpose + expiry, `bcrypt.compare`, apply (hash new password), null all three OTP fields.
-
-Attacker guards: (a) `requestPasswordReset` always 200; (b) `resetPassword` opaque "Invalid or expired" for every failure; (c) strict per-IP throttle; (d) `otpPurpose` check.
-
-New OTP flow: add purpose to `OtpPurpose` enum, dedicated endpoints — don't overload.
+- **Datetime inputs**: timestamp fields use `@IsUtcIsoString()` (`src/common/decorators/is-utc-iso-string.decorator.ts`) — accepts only `…Z`/`…±00:00`, never `@IsDateString()`. Calendar-date-only fields (`birthday`, `fromDate`/`toDate`) keep `@IsDateString()`.
+- **Response serialization**: global `ClassSerializerInterceptor`. Always return `new <Resource>ResponseDto(row)` — never raw Prisma rows (secrets leak).
+- **`@Exclude()` + `@ApiHideProperty()`**: sensitive response fields need **both** (class-transformer runtime vs Swagger build-time are independent layers).
+- **No DB enums**: enum-like columns are `String`; constrain via TS enum in `src/common/enums/` + `@IsEnum()`. UPPER_SNAKE keys, lowercase_snake values; cast at the DB→app boundary (`user.role as Role`). Changing a TS enum needs no migration.
+- **RBAC**: `@UseGuards(JwtAuthGuard, RolesGuard)` at class, `@Roles(Role.ADMIN)` on handlers (omit for any authenticated user — `RolesGuard` is a no-op without `@Roles()`). `@Public()` for public handlers. `@CurrentUser()` returns `AuthenticatedUser`, NOT a full `User`. JWT carries `{ sub, email, role }`; `JwtStrategy.validate` re-fetches via `findByIdOrNull` (non-throwing → 401 not 404) and checks `isActive`.
+- **Audit fields**: `createdBy`/`updatedBy` do **not** auto-populate. Every mutating service method takes `actorId: string | null` and writes it; controllers pass `@CurrentUser().id` (or `null` for unauthenticated creates).
+- **Prisma access**: through `PrismaService` (`@Global()`). `prisma.scoped.*` auto-injects `deletedAt: null` for soft-delete models (every user-facing read); raw `prisma.*` sees soft-deleted (admin/forensic/recovery). Adding a soft-delete model + the full mechanism: `nestjs-new-resource` skill.
+- **Six standard endpoints**: `POST /` (create), `GET /` (findPaginated), `GET /all` (findAll, unpaginated), `GET /:id`, `PATCH /:id`, `DELETE /:id` (204). `@Get('all')` must be declared **before** `@Get(':id')`. Lists use `MetaQueryDto` (`perPage` max 100); `findAll`+`findPaginated` share a private `buildListArgs` so sort/search never drift. Full pattern: `nestjs-new-resource` skill.
+- **Config access**: `configService.getOrThrow<T>('dot.path')` into `configuration.ts`. Never read `process.env` outside that file. `APP_BASE_URL` = the API host (backend-handler links like verify-email); `WEB_BASE_URL` = the customer frontend (page links).
+- **Swagger**: the compiler plugin infers DTOs (no manual `@ApiProperty` needed). `@ApiTags` + `@ApiBearerAuth()` on JWT routes. Extended mapped types (`PartialType`/`PickType`/`OmitType`/`IntersectionType`) import from `@nestjs/swagger`, not `@nestjs/mapped-types`, or inherited DTOs render empty. Swagger is gated off in production (`main.ts`).
+- **Rate limiting**: global `ThrottlerGuard`, 100/60s/IP (Redis storage in dev/staging/prod, in-memory in test). Per-route `@Throttle({ default: { limit, ttl } })`; `@SkipThrottle()` for `/health/*`. Any `@Public()` or OTP/SMS/email-dispatching endpoint needs its own `@Throttle`.
+- **Logging**: pino (`nestjs-pino`), JSON in prod/staging, pretty in dev. `X-Request-Id` per request (reused or fresh UUID). Redacts `authorization`, `cookie`, password/OTP body fields — extend `redact.paths` in `app.module.ts` for new sensitive bodies.
+- **Provider abstractions** (`EmailService`, `SmsService`, `FileStorageService`, all `@Global()`): each has a `stub` default + a real adapter, selected by env (`EMAIL_PROVIDER`, `SMS_PROVIDER`, `STORAGE_PROVIDER`). Only the selected adapter is constructed at boot. Call typed helpers (`emailService.sendTemplate(...)`, `smsService.sendPhoneVerificationOtp(...)`), not raw `.send(...)`. Email templates compile at boot — `{{var}}` typos fail startup.
+- **Multipart uploads**: `imageUploadOptions` (`common/storage/image-upload.config.ts`) → `FilesInterceptor`; a structured body rides as a JSON-string field parsed by `ParseJsonPipe`. See `docs/resource-pattern.md`.
+- **Cross-module cycles**: use `forwardRef` in **both** the imports and the `@Inject`.
 
 ## TypeScript gotchas
 
-- **Decorator + `isolatedModules`**: types in decorated signatures must use `import type` (or separate type-only line). Value + type in one statement → TS1272.
-  ```ts
-  import { CurrentUser } from '../../common/decorators/current-user.decorator';
-  import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
-  ```
-- **`@nestjs/jwt` `expiresIn`**: typed `number | StringValue`. Runtime `string` from ConfigService needs `as unknown as number` cast (see `auth.module.ts`).
+- **Decorator + `isolatedModules`**: types in decorated signatures must use `import type` (or a separate type-only line) — value + type in one statement → TS1272. Same for `@Inject(TOKEN)` params: `TOKEN` is a value (regular import), its type is `import type`.
+- **`@nestjs/jwt` `expiresIn`**: typed `number | StringValue`. Runtime `string` from ConfigService needs `as unknown as number` (see `auth.module.ts`).
+- **Enum vs string column comparison**: DB columns are `String`; cast at the boundary first — `const existingStatus = existing.status as Status;` then compare (`no-unsafe-enum-comparison`).
 
-## Testing
+## Lint / format
 
-**E2E** (`test/*.e2e-spec.ts`) run against real Postgres test DB — no mocks.
-
-Harness in `test/setup/`:
-- `global-setup.ts` — once before suite: loads `.env.test`, connects to `postgres` admin DB, terminates connections, **drops + recreates** `${SERVICE_NAME}_test`, runs `prisma migrate deploy`. Every `yarn test:e2e` starts from zero.
-- `load-env.ts` — Jest `setupFiles`: `.env.test` via dotenv + dotenv-expand, `override: false` (CI env wins).
-- `test-app.ts` — `createTestApp()` boots full `AppModule` + applies same globals as `main.ts` (helmet, `/api` prefix). Other globals via `APP_*` providers apply automatically.
-- `db.ts` — `truncateAll(app)` runs `TRUNCATE ... RESTART IDENTITY CASCADE` on every public table (skips `_prisma_migrations`). Call in `beforeEach`.
-
-`.env.test` committed. Throttler disabled in test env via `skipIf`.
-
-**Adding e2e spec**:
-1. `beforeAll: app = await createTestApp()`, `afterAll: await app.close()`.
-2. `beforeEach: await truncateAll(app)`.
-3. `request(app.getHttpServer()).post('/api/...').send(...).expect(...)`.
-4. Seed admin via `PrismaService.user.create({ role: 'admin' })` (register always creates `user` role). Values lowercase — `Role.ADMIN = 'admin'`.
-
-## Lint/format
-
-ESLint uses typescript-eslint **recommendedTypeChecked** (type-aware, slow on large diffs). Overrides in `eslint.config.mjs`:
-- `@typescript-eslint/no-explicit-any` — off
-- `@typescript-eslint/no-floating-promises` — warn
-- `@typescript-eslint/no-unsafe-argument` — warn
-- Prettier as ESLint rule, `endOfLine: "auto"`
-
-Recurring rules:
-- `no-unsafe-enum-comparison` on enum-to-numeric: cast `(status as number) >= 500`.
-- `no-unsafe-member-access` on supertest `res.body` (is `any`): narrow `const body = res.body as { ... };`.
+ESLint uses typescript-eslint **recommendedTypeChecked** (type-aware, slow on large diffs). Overrides: `no-explicit-any` off; `no-floating-promises` warn; `no-unsafe-argument` warn; Prettier as a rule with `endOfLine: "auto"`; `no-restricted-syntax` bans direct `new *Exception` construction outside `src/common/errors/` (use `Errors.*`). Recurring: cast enum-to-numeric (`(status as number) >= 500`); narrow supertest `res.body` (`const body = res.body as { ... }`).
 
 ## Prisma 7
 
-Uses `@prisma/adapter-pg` (required in Prisma 7).
+Uses `@prisma/adapter-pg`. `schema.prisma` is `provider = "postgresql"` only (no `url`); `prisma.config.ts` loads `.env` with dotenv-expand and exposes `{ schema, migrations.path, datasource.url }`; `PrismaService` builds `PrismaPg({ connectionString })` and passes it to `super({ adapter })`. `pg` is a **runtime** dependency — bump adapter + `pg` together. **Until any deployed env has applied migrations, edit migration files in place freely**; after the first real deploy they're checksummed in `_prisma_migrations`, so only add new migrations (use `--create-only` for raw-SQL constructs).
 
-- **`prisma/schema.prisma`**: `provider = "postgresql"` only, no `url`.
-- **`prisma.config.ts`**: loads `.env` with dotenv-expand, exposes `{ schema, migrations.path, datasource.url }`. Prisma CLI auto-discovers.
-- **`PrismaService`**: constructor injects `ConfigService`, builds `PrismaPg({ connectionString })`, passes to `super({ adapter })`.
+## Deep references
 
-`pg` is a **runtime** dependency (not just test). Bump adapter + `pg` together.
+Load these on demand — they hold the long-form playbooks so this core stays lean:
+
+| Task | Where |
+|---|---|
+| Add/scaffold a CRUD resource (schema, six endpoints, list queries, response DTOs + relations, delete semantics, soft-delete filter) | `nestjs-new-resource` skill (+ code skeletons in `docs/resource-pattern.md`) |
+| Auth / login / JWT / OTP / email-verify / phone-verify / lockout / timing hardening / security review | `nestjs-auth-security` skill |
+| Scheduled `@Cron` job | `nestjs-scheduled-job` skill |
+| Write e2e specs (harness, coverage, cadence, error-envelope assertions) | `nestjs-e2e-test` skill |
+| Error envelope contract + ErrorCode catalog + client logout rule | `src/common/errors/README.md` |
+| Deployment / infra (Caddy + per-env compose + GitHub Actions) | `docs/README.md` → `docs/prod/` + `docs/staging/` |

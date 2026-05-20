@@ -32,6 +32,26 @@ export default tseslint.config(
       'prettier/prettier': ['error', { endOfLine: 'auto' }],
     },
   },
+  // Channel every domain exception through the Errors factory. Direct
+  // construction of Nest's built-in HttpException subclasses bypasses
+  // the standard error envelope (errorCode, details). The factory at
+  // src/common/errors/errors.ts is the one place allowed to do this;
+  // everywhere else must call `Errors.*`. See src/common/errors/README.md.
+  {
+    files: ['src/**/*.ts'],
+    ignores: ['src/common/errors/**/*.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "NewExpression[callee.name=/^(BadRequestException|UnauthorizedException|ForbiddenException|NotFoundException|ConflictException|ServiceUnavailableException)$/]",
+          message:
+            'Do not construct HttpException subclasses directly. Use the `Errors.*` factory in src/common/errors/errors.ts so the response carries a stable errorCode. See src/common/errors/README.md.',
+        },
+      ],
+    },
+  },
   {
     files: ['test/**/*.ts'],
     rules: {
