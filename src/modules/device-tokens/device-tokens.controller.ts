@@ -55,16 +55,6 @@ export class DeviceTokensController {
     };
   }
 
-  // Must be before @Get(':id') — NestJS matches routes in declaration order.
-  @Get('all')
-  @Roles(Role.ADMIN)
-  async findAll(
-    @Query() query: MetaQueryDto,
-  ): Promise<DeviceTokenResponseDto[]> {
-    const rows = await this.deviceTokensService.findAll(query);
-    return rows.map((r) => new DeviceTokenResponseDto(r));
-  }
-
   @Get(':id')
   @Roles(Role.ADMIN)
   async findOne(

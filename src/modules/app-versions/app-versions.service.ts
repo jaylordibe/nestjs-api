@@ -46,10 +46,6 @@ export class AppVersionsService {
     return created;
   }
 
-  findAll(query: MetaQueryDto = new MetaQueryDto()): Promise<AppVersion[]> {
-    return this.prisma.appVersion.findMany(this.buildListArgs(query));
-  }
-
   async findPaginated(
     query: MetaQueryDto,
   ): Promise<{ data: AppVersion[]; meta: PaginationMeta }> {

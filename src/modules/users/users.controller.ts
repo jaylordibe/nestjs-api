@@ -254,13 +254,6 @@ export class UsersController {
     };
   }
 
-  @Get('all')
-  @Roles(Role.ADMIN)
-  async findAll(@Query() query: MetaQueryDto): Promise<UserResponseDto[]> {
-    const users = await this.usersService.findAll(query);
-    return users.map((u) => new UserResponseDto(u));
-  }
-
   @Get(':id')
   @Roles(Role.ADMIN)
   async findOne(

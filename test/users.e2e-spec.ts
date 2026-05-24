@@ -507,26 +507,6 @@ describe('Users (e2e)', () => {
       expect(page2.body.data[0].id).not.toBe(page1.body.data[0].id);
     });
 
-    it('GET /api/users/all returns the full unpaginated list', async () => {
-      await request(app.getHttpServer())
-        .post('/api/users')
-        .set('Authorization', `Bearer ${adminToken}`)
-        .send({
-          email: 'second@example.com',
-          password: PASSWORD,
-          firstName: 'Second',
-          lastName: 'User',
-        });
-
-      const res = await request(app.getHttpServer())
-        .get('/api/users/all')
-        .set('Authorization', `Bearer ${adminToken}`)
-        .expect(200);
-      expect(Array.isArray(res.body)).toBe(true);
-      expect(res.body).toHaveLength(2);
-      expect(res.body[0]).not.toHaveProperty('password');
-    });
-
     it('GET /api/users rejects invalid pagination params with 400', async () => {
       await request(app.getHttpServer())
         .get('/api/users?page=0')

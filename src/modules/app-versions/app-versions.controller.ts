@@ -60,17 +60,8 @@ export class AppVersionsController {
   }
 
   // Must be before @Get(':id') — NestJS matches routes in declaration order.
-  @Get('all')
-  @Public()
-  async findAll(
-    @Query() query: MetaQueryDto,
-  ): Promise<AppVersionResponseDto[]> {
-    const rows = await this.appVersionsService.findAll(query);
-    return rows.map((r) => new AppVersionResponseDto(r));
-  }
-
-  // Also before @Get(':id'). Clients hit `/latest?platform=mobile` at app
-  // launch to decide whether to prompt an update.
+  // Clients hit `/latest?platform=mobile` at app launch to decide whether to
+  // prompt an update.
   @Get('latest')
   @Public()
   async findLatest(

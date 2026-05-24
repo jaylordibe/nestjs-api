@@ -166,10 +166,6 @@ export class UsersService {
     return user;
   }
 
-  findAll(query: MetaQueryDto = new MetaQueryDto()): Promise<User[]> {
-    return this.prisma.user.findMany(this.buildListArgs(query));
-  }
-
   async findPaginated(
     query: MetaQueryDto,
   ): Promise<{ data: User[]; meta: PaginationMeta }> {
@@ -194,11 +190,10 @@ export class UsersService {
     };
   }
 
-  // Shared between findAll + findPaginated so they always agree on sort
-  // allowlist and default ordering. Pass-through for the buildOrderBy()
-  // 400 on disallowed sortBy. Extend this with a `where` clause built
-  // from `query.search` when adding search to a resource — keeps both
-  // list endpoints in lockstep.
+  // Single source of truth for findPaginated's sort allowlist and default
+  // ordering. Pass-through for the buildOrderBy() 400 on disallowed sortBy.
+  // Extend this with a `where` clause built from `query.search` when adding
+  // search to a resource.
   private buildListArgs(query: MetaQueryDto): {
     orderBy: Prisma.UserOrderByWithRelationInput;
   } {

@@ -16,12 +16,10 @@ export enum SortOrder {
   DESC = 'desc',
 }
 
-// Generic query shape for every list endpoint (findAll + findPaginated).
-// All fields optional — services pick the subset they care about:
-// findAll typically honors search/sortBy/sortOrder; findPaginated honors
-// all five. Add new cross-cutting query params here as they emerge
-// (cursor, includeDeleted, dateFrom, etc.) so every list endpoint picks
-// them up in lockstep.
+// Generic query shape for the findPaginated list endpoint. All fields
+// optional — services pick the subset they care about. Add new cross-cutting
+// query params here as they emerge (cursor, includeDeleted, dateFrom, etc.)
+// so every list endpoint picks them up in lockstep.
 //
 // `page` and `perPage` carry inline defaults so services can read them
 // directly (`query.page` / `query.perPage`) without `?? 1` / `?? 20`

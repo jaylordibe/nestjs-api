@@ -159,25 +159,6 @@ describe('AppVersions (e2e)', () => {
     expect(res.body.data).toHaveLength(1);
   });
 
-  it('GET /api/app-versions/all returns the full unpaginated list publicly', async () => {
-    const { token } = await seedAdmin(app);
-    for (const platform of ['web', 'mobile', 'desktop']) {
-      await request(app.getHttpServer())
-        .post('/api/app-versions')
-        .set('Authorization', `Bearer ${token}`)
-        .send({
-          version: '1.0.0',
-          platform,
-          releaseDate: '2026-04-15T00:00:00.000Z',
-        })
-        .expect(201);
-    }
-    const res = await request(app.getHttpServer())
-      .get('/api/app-versions/all')
-      .expect(200);
-    expect(res.body).toHaveLength(3);
-  });
-
   it('PATCH /api/app-versions/:id updates fields (admin)', async () => {
     const { token } = await seedAdmin(app);
     const created = await request(app.getHttpServer())

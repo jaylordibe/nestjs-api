@@ -1,6 +1,6 @@
 ---
 name: nestjs-new-resource
-description: Use when adding or scaffolding a new CRUD resource/module (controller + service + DTOs + Prisma model + migration + e2e) following the canonical users pattern. Covers required schema columns, the six standard endpoints, list queries (sort/search/filters), actor-scoped lists, audit fields, response DTOs with relation includes, delete semantics (hard vs soft vs gdpr), and the prisma.scoped vs raw soft-delete filter.
+description: Use when adding or scaffolding a new CRUD resource/module (controller + service + DTOs + Prisma model + migration + e2e) following the canonical users pattern. Covers required schema columns, the standard endpoints, list queries (sort/search/filters), actor-scoped lists, audit fields, response DTOs with relation includes, delete semantics (hard vs soft vs gdpr), and the prisma.scoped vs raw soft-delete filter.
 ---
 
 # New resource (canonical pattern)
@@ -55,20 +55,19 @@ src/modules/<resource>/
 
 Register in `app.module.ts` imports. `PrismaModule` is `@Global()`.
 
-## Standard endpoints (always these six, in this order)
+## Standard endpoints (always these five, in this order)
 
 | Verb   | Path                | Method          | Returns                                       |
 |--------|---------------------|-----------------|-----------------------------------------------|
 | POST   | `/<resource>`       | `create`        | `<Resource>ResponseDto`                       |
 | GET    | `/<resource>`       | `findPaginated` | `PaginatedResponseDto<<Resource>ResponseDto>` |
-| GET    | `/<resource>/all`   | `findAll`       | `<Resource>ResponseDto[]`                     |
 | GET    | `/<resource>/:id`   | `findOne`       | `<Resource>ResponseDto`                       |
 | PATCH  | `/<resource>/:id`   | `update`        | `<Resource>ResponseDto`                       |
 | DELETE | `/<resource>/:id`   | `remove`        | `void` (204)                                  |
 
 Rules:
-- **Declaration order matters** — `@Get('all')` (and any static path) must appear before `@Get(':id')`, else it's captured by the UUID param → 400 via `ParseUUIDPipe`.
-- **`/all` is unpaginated** — for dropdowns / exports under a few thousand rows. It still honors sort/search via the shared `buildListArgs`.
+- **No unpaginated `GET /all` / `findAll`.** Full-table reads OOM/crash the system once a table grows — there is no "fetch everything" endpoint. Always paginate via `GET /` (`findPaginated`); for dropdowns, page through it or add a narrow filtered query.
+- **Declaration order matters** — any static path (e.g. a `@Get('latest')`) must appear before `@Get(':id')`, else it's captured by the UUID param → 400 via `ParseUUIDPipe`.
 - **List queries** use `MetaQueryDto` (`page`, `perPage`, `search`, `sortBy`, `sortOrder`). `page` defaults to 1, `perPage` to 20 (max 100) — defaults are class-field initializers so service code reads `query.page` directly without `?? 1`. Meta: `{ page, perPage, total, totalPages }`.
 - **PATCH not PUT.** `Update<Resource>Dto = PartialType(Create<Resource>Dto)` (import `PartialType` from `@nestjs/swagger`).
 - **DELETE returns 204** via `@HttpCode(HttpStatus.NO_CONTENT)`.
@@ -79,9 +78,8 @@ Controller + service skeletons: `docs/resource-pattern.md`.
 ## Service skeleton
 
 - `create(dto, actorId)` — set `createdBy: actorId, updatedBy: actorId`.
-- `findAll(query?)` — accepts `MetaQueryDto` for sort/search; **no pagination**. Default-arg pattern (`query: MetaQueryDto = new MetaQueryDto()`) lets internal callers omit it.
 - `findPaginated(query)` — `findMany` + `count()` in **one** `prisma.$transaction([...])` so total matches page. Same `where` on both calls.
-- **Both share a private `buildListArgs(query)`** that calls `buildOrderBy(query, [...] as const, 'createdAt')`. Keeps both list endpoints in lockstep on sort allowlist + any future search clause.
+- **`findPaginated` builds its query via a private `buildListArgs(query)`** that calls `buildOrderBy(query, [...] as const, 'createdAt')`. Single source of truth for the sort allowlist + any future search clause.
 - `findById(id)` — throws `Errors.resourceNotFound(...)`. Pair with `findByIdOrNull(id)` (JwtStrategy needs non-throwing → 401 not 404).
 - `update(id, dto, actorId)` — set `updatedBy`, don't touch `createdBy`. Re-check existence (`findById`) for 404 not P2025.
 - `remove(id, actorId)` — hard `delete` for transient; `update({ deletedAt: new Date(), deletedBy: actorId })` for retention. See **Delete semantics** below.
@@ -172,4 +170,4 @@ Mechanism: extension in `src/prisma/prisma-soft-delete.extension.ts` intercepts 
 
 ## E2E test
 
-Required for every resource. Min coverage: six endpoints + access control (401 unauthenticated, 403 wrong role) + pagination (meta shape, invalid params → 400). See the `nestjs-e2e-test` skill for the harness.
+Required for every resource. Min coverage: the five endpoints + access control (401 unauthenticated, 403 wrong role) + pagination (meta shape, invalid params → 400). See the `nestjs-e2e-test` skill for the harness.

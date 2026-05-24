@@ -42,10 +42,6 @@ export class DeviceTokensService {
     return created;
   }
 
-  findAll(query: MetaQueryDto = new MetaQueryDto()): Promise<DeviceToken[]> {
-    return this.prisma.deviceToken.findMany(this.buildListArgs(query));
-  }
-
   async findPaginated(
     query: MetaQueryDto,
   ): Promise<{ data: DeviceToken[]; meta: PaginationMeta }> {

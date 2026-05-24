@@ -24,14 +24,6 @@ export class OrdersController {
     return { data: data.map((r) => new OrderResponseDto(r)), meta };
   }
 
-  // Must be declared BEFORE @Get(':id'), else captured by the UUID param
-  // and rejected with 400 via ParseUUIDPipe.
-  @Get('all')
-  async findAll(@Query() query: MetaQueryDto) {
-    const rows = await this.ordersService.findAll(query);
-    return rows.map((r) => new OrderResponseDto(r));
-  }
-
   @Get(':id')
   async findOne(@Param('id', new ParseUUIDPipe()) id: string) {
     return new OrderResponseDto(await this.ordersService.findById(id));
@@ -50,13 +42,9 @@ export class OrdersController {
 }
 ```
 
-## Service skeleton (findAll + findPaginated share buildListArgs)
+## Service skeleton (findPaginated builds its query via buildListArgs)
 
 ```ts
-findAll(query: MetaQueryDto = new MetaQueryDto()): Promise<Order[]> {
-  return this.prisma.order.findMany(this.buildListArgs(query));
-}
-
 async findPaginated(query: MetaQueryDto): Promise<{ data: Order[]; meta: PaginationMeta }> {
   const { page, perPage } = query;
   const args = this.buildListArgs(query);
@@ -67,8 +55,8 @@ async findPaginated(query: MetaQueryDto): Promise<{ data: Order[]; meta: Paginat
   return { data, meta: { page, perPage, total, totalPages: Math.ceil(total / perPage) } };
 }
 
-// Single source of truth for sort allowlist + (future) search clause, so
-// findAll and findPaginated never drift apart.
+// Single source of truth for findPaginated's sort allowlist + (future)
+// search clause.
 private buildListArgs(query: MetaQueryDto): { orderBy: Prisma.OrderOrderByWithRelationInput } {
   return { orderBy: buildOrderBy(query, ['name', 'createdAt', 'updatedAt'] as const, 'createdAt') };
 }
