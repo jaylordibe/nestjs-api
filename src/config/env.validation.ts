@@ -34,11 +34,6 @@ export const envValidationSchema = Joi.object({
     .pattern(/[^/]$/, { name: 'no-trailing-slash' })
     .default('http://localhost:5173'),
 
-  // Commit hash of the running build. Populated by the deploy workflow
-  // (Docker build arg → ENV); local dev leaves it 'unknown'. Surfaced in
-  // Swagger's version string so a stale image is immediately visible.
-  GIT_SHA: Joi.string().default('unknown'),
-
   DB_USER: Joi.string().required(),
   DB_PASSWORD: Joi.string().allow('').required(),
   DB_HOST: Joi.string().hostname().required(),
