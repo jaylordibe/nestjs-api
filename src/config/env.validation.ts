@@ -74,13 +74,20 @@ export const envValidationSchema = Joi.object({
   // `resend` routes through resend.com and requires RESEND_API_KEY and
   // EMAIL_FROM (the latter must be a verified sender on that domain).
   EMAIL_PROVIDER: Joi.string().valid('stub', 'resend').default('stub'),
+  // EMAIL_FROM / RESEND_API_KEY tolerate empty strings when EMAIL_PROVIDER is
+  // not `resend`, so a committed `.env` template can ship with `RESEND_API_KEY=""`
+  // placeholders without breaking boot on the stub provider. The required check
+  // only kicks in when resend is actually selected. (Mirrors the SMS/Twilio
+  // fields below.)
   EMAIL_FROM: Joi.string().when('EMAIL_PROVIDER', {
     is: 'resend',
     then: Joi.required(),
+    otherwise: Joi.string().allow('').optional(),
   }),
   RESEND_API_KEY: Joi.string().when('EMAIL_PROVIDER', {
     is: 'resend',
     then: Joi.required(),
+    otherwise: Joi.string().allow('').optional(),
   }),
 
   // SMS provider selection. `stub` (default) logs to stdout — OTPs are
@@ -151,6 +158,7 @@ export const envValidationSchema = Joi.object({
     .optional(),
   STORAGE_S3_FORCE_PATH_STYLE: Joi.string()
     .valid('true', 'false')
+    .allow('')
     .default('false'),
 
   // In production, refuse the wildcard origin — Same-Origin with
