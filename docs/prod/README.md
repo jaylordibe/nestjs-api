@@ -185,8 +185,11 @@ docker compose --profile migrate run --rm --build migrate
 docker compose up -d --build api web
 docker compose up -d caddy
 
-# Seed the database (first deploy only)
-docker compose exec api yarn prisma:seed
+# Seed the database (first deploy only). Runs on the `migrate` service, NOT
+# `api`: the seeder is `ts-node prisma/seed.ts`, and the pruned api runtime
+# image has no ts-node / prisma CLI / source. The migrate service uses the
+# Dockerfile `build` target, which has them. Reads SEED_* from .env.
+docker compose --profile migrate run --rm migrate yarn prisma:seed
 
 # Smoke test:
 curl -fsS "https://${API_HOSTNAME:-api.example.com}/api/health/liveness"
@@ -267,7 +270,7 @@ docker compose logs -f caddy
 docker compose --profile migrate run --rm --build migrate
 
 # Seed the database (first deploy only)
-docker compose exec api yarn prisma:seed
+docker compose --profile migrate run --rm migrate yarn prisma:seed
 
 # Open a Postgres shell
 docker compose exec postgres psql -U "$(grep ^DB_USER .env | cut -d= -f2)" \
