@@ -24,7 +24,7 @@ async function seedAdmin(
   });
   const res = await request(app.getHttpServer())
     .post('/api/auth/login')
-    .send({ email: 'admin@example.com', password: PASSWORD });
+    .send({ identifier: 'admin@example.com', password: PASSWORD });
   return { id: admin.id, token: res.body.accessToken as string };
 }
 
@@ -45,7 +45,7 @@ async function registerUser(
   });
   const login = await request(app.getHttpServer())
     .post('/api/auth/login')
-    .send({ email, password: PASSWORD });
+    .send({ identifier: email, password: PASSWORD });
   return login.body.accessToken as string;
 }
 

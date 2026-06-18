@@ -177,7 +177,7 @@ describe('Auth (e2e)', () => {
     it('blocks login when email is not verified (specific error)', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'bob@example.com', password: VALID_PASSWORD })
+        .send({ identifier: 'bob@example.com', password: VALID_PASSWORD })
         .expect(401);
       expect(res.body.errorCode).toBe('EMAIL_NOT_VERIFIED');
       expect(res.body.message).toMatch(/verify/i);
@@ -187,7 +187,7 @@ describe('Auth (e2e)', () => {
       await markVerified(app, 'bob@example.com');
       const res = await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'bob@example.com', password: VALID_PASSWORD })
+        .send({ identifier: 'bob@example.com', password: VALID_PASSWORD })
         .expect(200);
       expect(res.body.accessToken).toEqual(expect.any(String));
       expect(res.body.user.email).toBe('bob@example.com');
@@ -197,14 +197,29 @@ describe('Auth (e2e)', () => {
       await markVerified(app, 'bob@example.com');
       await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'BOB@example.com', password: VALID_PASSWORD })
+        .send({ identifier: 'BOB@example.com', password: VALID_PASSWORD })
+        .expect(200);
+    });
+
+    it('logs in with a username identifier (not just email)', async () => {
+      await markVerified(app, 'bob@example.com');
+      // Register doesn't set a username; assign one directly so we can prove
+      // the email-OR-username lookup resolves the username branch too.
+      const prisma = app.get(PrismaService);
+      await prisma.user.update({
+        where: { email: 'bob@example.com' },
+        data: { username: 'bobby' },
+      });
+      await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ identifier: 'bobby', password: VALID_PASSWORD })
         .expect(200);
     });
 
     it('rejects wrong password with generic 401 (no verification hint)', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'bob@example.com', password: 'wrong-password-1' })
+        .send({ identifier: 'bob@example.com', password: 'wrong-password-1' })
         .expect(401);
       // Unknown-email and wrong-password must be indistinguishable —
       // no EMAIL_NOT_VERIFIED leak for attackers who don't have the password.
@@ -215,7 +230,7 @@ describe('Auth (e2e)', () => {
     it('rejects unknown email with 401', async () => {
       await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'nope@example.com', password: VALID_PASSWORD })
+        .send({ identifier: 'nope@example.com', password: VALID_PASSWORD })
         .expect(401);
     });
 
@@ -224,13 +239,13 @@ describe('Auth (e2e)', () => {
       for (let i = 0; i < 5; i++) {
         await request(app.getHttpServer())
           .post('/api/auth/login')
-          .send({ email: 'bob@example.com', password: 'wrong-password-1' })
+          .send({ identifier: 'bob@example.com', password: 'wrong-password-1' })
           .expect(401);
       }
       // Correct password is now rejected until lockout expires.
       await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'bob@example.com', password: VALID_PASSWORD })
+        .send({ identifier: 'bob@example.com', password: VALID_PASSWORD })
         .expect(401);
     });
   });
@@ -288,7 +303,7 @@ describe('Auth (e2e)', () => {
     it('blocks a disposable-email login as generic INVALID_CREDENTIALS (no disposable leak)', async () => {
       const res = await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: DISPOSABLE, password: VALID_PASSWORD })
+        .send({ identifier: DISPOSABLE, password: VALID_PASSWORD })
         .expect(401);
       // Collapsed into the same code as unknown-email / wrong-password so the
       // disposable check isn't distinguishable.
@@ -368,7 +383,10 @@ describe('Auth (e2e)', () => {
         .expect(200);
       await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'verify-flow@example.com', password: VALID_PASSWORD })
+        .send({
+          identifier: 'verify-flow@example.com',
+          password: VALID_PASSWORD,
+        })
         .expect(200);
     });
 
@@ -459,10 +477,10 @@ describe('Auth (e2e)', () => {
 
       const first = await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'logout@example.com', password: VALID_PASSWORD });
+        .send({ identifier: 'logout@example.com', password: VALID_PASSWORD });
       const second = await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'logout@example.com', password: VALID_PASSWORD });
+        .send({ identifier: 'logout@example.com', password: VALID_PASSWORD });
 
       const tokenA = first.body.accessToken;
       const tokenB = second.body.accessToken;
@@ -508,11 +526,17 @@ describe('Auth (e2e)', () => {
 
       const loginA = await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'logout-all@example.com', password: VALID_PASSWORD });
+        .send({
+          identifier: 'logout-all@example.com',
+          password: VALID_PASSWORD,
+        });
       await new Promise((resolve) => setTimeout(resolve, 1100));
       const loginB = await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'logout-all@example.com', password: VALID_PASSWORD });
+        .send({
+          identifier: 'logout-all@example.com',
+          password: VALID_PASSWORD,
+        });
 
       const tokenA = loginA.body.accessToken;
       const tokenB = loginB.body.accessToken;
@@ -535,7 +559,10 @@ describe('Auth (e2e)', () => {
       await new Promise((resolve) => setTimeout(resolve, 1100));
       const loginC = await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'logout-all@example.com', password: VALID_PASSWORD })
+        .send({
+          identifier: 'logout-all@example.com',
+          password: VALID_PASSWORD,
+        })
         .expect(200);
       await request(app.getHttpServer())
         .get('/api/users/me')
@@ -557,7 +584,7 @@ describe('Auth (e2e)', () => {
       await markVerified(app, 'carol@example.com');
       const login = await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'carol@example.com', password: VALID_PASSWORD });
+        .send({ identifier: 'carol@example.com', password: VALID_PASSWORD });
       token = login.body.accessToken as string;
     });
 

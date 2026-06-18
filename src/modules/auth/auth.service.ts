@@ -82,26 +82,30 @@ export class AuthService {
   async login(dto: LoginDto): Promise<LoginResponse> {
     // Reject disposable-email logins up-front, collapsed into the generic
     // INVALID_CREDENTIALS so an attacker can't tell the disposable check (vs
-    // unknown email / wrong password) is what rejected them. A dummy bcrypt
-    // compare on the same code path the unknown-email branch uses keeps the
-    // response timing indistinguishable. The block is captured in audit_logs.
-    if (isDisposableEmail(dto.email)) {
+    // unknown identifier / wrong password) is what rejected them. A dummy
+    // bcrypt compare on the same code path the unknown-identifier branch uses
+    // keeps response timing indistinguishable. The block is captured in
+    // audit_logs. A username identifier (no `@`) is a no-op here.
+    if (isDisposableEmail(dto.identifier)) {
       await bcrypt.compare(dto.password, await this.getDummyHash());
       await this.auditService.record({
         action: 'user.login_blocked_disposable_email',
         actorId: null,
         metadata: {
-          email: dto.email,
-          domain: extractEmailDomain(dto.email) ?? '',
+          identifier: dto.identifier,
+          domain: extractEmailDomain(dto.identifier) ?? '',
         },
       });
       throw Errors.invalidCredentials();
     }
-    const user = await this.usersService.findByEmail(dto.email);
+    // The identifier is an email or a username — both resolve through one
+    // lookup so the two paths are indistinguishable (status code, errorCode,
+    // timing).
+    const user = await this.usersService.findByEmailOrUsername(dto.identifier);
 
-    // findByEmail uses the scoped client — soft-deleted users return null,
-    // so this branch treats them identically to "email doesn't exist"
-    // (down to the dummy bcrypt compare for timing).
+    // findByEmailOrUsername uses the scoped client — soft-deleted users
+    // return null, so this branch treats them identically to "identifier
+    // doesn't exist" (down to the dummy bcrypt compare for timing).
 
     // Check lockout *before* doing work. Still do a dummy compare so locked
     // accounts can't be distinguished from wrong-password by timing either.

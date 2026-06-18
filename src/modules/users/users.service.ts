@@ -232,6 +232,17 @@ export class UsersService {
     });
   }
 
+  // Login lookup: the identifier may be an email or a username (both stored
+  // lowercase; usernames can never contain '@' so the namespaces are
+  // disjoint). Scoped client — soft-deleted users come back null, identical
+  // to "unknown identifier".
+  findByEmailOrUsername(identifier: string): Promise<User | null> {
+    const normalized = identifier.toLowerCase();
+    return this.prisma.scoped.user.findFirst({
+      where: { OR: [{ email: normalized }, { username: normalized }] },
+    });
+  }
+
   async update(
     id: string,
     dto: UpdateUserDto,

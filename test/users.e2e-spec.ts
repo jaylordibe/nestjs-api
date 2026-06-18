@@ -15,7 +15,7 @@ async function loginAs(
 ): Promise<string> {
   const res = await request(app.getHttpServer())
     .post('/api/auth/login')
-    .send({ email, password });
+    .send({ identifier: email, password });
   return res.body.accessToken as string;
 }
 
@@ -68,7 +68,7 @@ async function registerAndToken(
   });
   const login = await request(app.getHttpServer())
     .post('/api/auth/login')
-    .send({ email, password: PASSWORD });
+    .send({ identifier: email, password: PASSWORD });
   return { id: row.id, token: login.body.accessToken as string };
 }
 
@@ -166,7 +166,7 @@ describe('Users (e2e)', () => {
       // Login refuses the account even with the right password.
       await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'self-del@example.com', password: PASSWORD })
+        .send({ identifier: 'self-del@example.com', password: PASSWORD })
         .expect(401);
     });
 
@@ -190,7 +190,7 @@ describe('Users (e2e)', () => {
 
       await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'erase@example.com', password: PASSWORD })
+        .send({ identifier: 'erase@example.com', password: PASSWORD })
         .expect(401);
     });
 
@@ -281,7 +281,7 @@ describe('Users (e2e)', () => {
 
       await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'pw@example.com', password: 'new-password-1' })
+        .send({ identifier: 'pw@example.com', password: 'new-password-1' })
         .expect(200);
     });
 
@@ -412,11 +412,11 @@ describe('Users (e2e)', () => {
       // Old password rejected, new password works.
       await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'flow@example.com', password: PASSWORD })
+        .send({ identifier: 'flow@example.com', password: PASSWORD })
         .expect(401);
       await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'flow@example.com', password: 'brand-new-pw-1' })
+        .send({ identifier: 'flow@example.com', password: 'brand-new-pw-1' })
         .expect(200);
     });
 
@@ -687,7 +687,7 @@ describe('Users (e2e)', () => {
 
       await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'target@example.com', password: 'admin-reset-1' })
+        .send({ identifier: 'target@example.com', password: 'admin-reset-1' })
         .expect(200);
     });
 
@@ -727,7 +727,7 @@ describe('Users (e2e)', () => {
       // But the deleted user can't log in.
       await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ email: 'gone@example.com', password: PASSWORD })
+        .send({ identifier: 'gone@example.com', password: PASSWORD })
         .expect(401);
     });
   });
