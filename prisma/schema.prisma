@@ -57,6 +57,13 @@ model AuditLog {
 
   @@index([actorId, createdAt])
   @@index([targetUserId, createdAt])
+  // `?action=…` filter + default `ORDER BY createdAt DESC`, and pure
+  // date-range queries (no actor/target/action filter). Mirror the
+  // (actorId, createdAt) / (targetUserId, createdAt) shape above. A trigram
+  // GIN index on `metadata::text` for substring search is added via raw SQL
+  // in the migration (Prisma can't express trigram operator classes).
+  @@index([action, createdAt])
+  @@index([createdAt])
   @@map("audit_logs")
 }
 

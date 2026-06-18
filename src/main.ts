@@ -60,6 +60,12 @@ async function bootstrap(): Promise<void> {
         // Render request bodies with a starting example matching the
         // schema so operators see realistic input shapes in Try-it-out.
         tryItOutEnabled: true,
+        // Sort the sidebar A→Z so an endpoint is easy to find: `tagsSorter`
+        // orders the @ApiTags groups, `operationsSorter: 'alpha'` orders the
+        // routes by path within each group (use 'method' to order by HTTP verb
+        // instead). Without these, both render in controller-declaration order.
+        tagsSorter: 'alpha',
+        operationsSorter: 'alpha',
       },
     });
   }

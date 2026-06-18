@@ -100,6 +100,16 @@ export const Errors = {
       errorCode: ErrorCode.INVALID_LINK,
       message: 'Invalid or expired verification link',
     }),
+  // Direct rejection of a disposable / temporary email domain. NOTE: auth
+  // register/login deliberately do NOT use this — they drop/collapse silently
+  // to avoid leaking which domains are blocked (enumeration). Reserve this for
+  // contexts where surfacing the reason is acceptable (e.g. an admin form).
+  emailDomainDisallowed: (domain: string): BadRequestException =>
+    new BadRequestException({
+      errorCode: ErrorCode.EMAIL_DOMAIN_DISALLOWED,
+      message: 'This email provider is not allowed',
+      details: { domain },
+    }),
   // Generic bad-request escape hatch for input that's malformed in a way
   // class-validator can't express (e.g. a JSON-string multipart field that
   // doesn't parse). Carries VALIDATION_FAILED — clients treat it like any

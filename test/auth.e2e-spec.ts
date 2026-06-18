@@ -235,6 +235,112 @@ describe('Auth (e2e)', () => {
     });
   });
 
+  // Disposable / temporary email providers (mailinator, 10minutemail, …) are
+  // blocked at the auth boundary — silently on register (no enumeration of
+  // which domains are blocked) and as a generic INVALID_CREDENTIALS on login.
+  // Both paths leave an internal audit_logs entry for ops.
+  describe('disposable-email blocking (register + login)', () => {
+    const DISPOSABLE = 'throwaway@mailinator.com';
+
+    it('silently drops a disposable-email registration — byte-identical 201/body to a real one, no user row', async () => {
+      const realRes = await request(app.getHttpServer())
+        .post('/api/auth/register')
+        .send({
+          email: 'real-cmp@example.com',
+          password: VALID_PASSWORD,
+          firstName: 'Real',
+          lastName: 'User',
+        })
+        .expect(201);
+
+      const blockedRes = await request(app.getHttpServer())
+        .post('/api/auth/register')
+        .send({
+          email: DISPOSABLE,
+          password: VALID_PASSWORD,
+          firstName: 'Throw',
+          lastName: 'Away',
+        })
+        .expect(201);
+
+      // Wire-shape parity — an attacker can't distinguish blocked from real.
+      expect(blockedRes.body).toEqual(realRes.body);
+      expect(blockedRes.body).toEqual({
+        message: expect.stringContaining('verify'),
+      });
+      expect(blockedRes.body.errorCode).toBeUndefined();
+
+      // No row written for the disposable email; the real one exists.
+      const prisma = app.get(PrismaService);
+      expect(await prisma.user.count({ where: { email: DISPOSABLE } })).toBe(0);
+      expect(
+        await prisma.user.count({ where: { email: 'real-cmp@example.com' } }),
+      ).toBe(1);
+
+      // Audit log captured the silent rejection (with the domain).
+      const audit = await prisma.auditLog.findFirstOrThrow({
+        where: { action: 'user.register_blocked_disposable_email' },
+      });
+      const meta = audit.metadata as { domain?: string };
+      expect(meta.domain).toBe('mailinator.com');
+    });
+
+    it('blocks a disposable-email login as generic INVALID_CREDENTIALS (no disposable leak)', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: DISPOSABLE, password: VALID_PASSWORD })
+        .expect(401);
+      // Collapsed into the same code as unknown-email / wrong-password so the
+      // disposable check isn't distinguishable.
+      expect(res.body.errorCode).toBe('INVALID_CREDENTIALS');
+
+      const prisma = app.get(PrismaService);
+      const audit = await prisma.auditLog.findFirst({
+        where: { action: 'user.login_blocked_disposable_email' },
+      });
+      expect(audit).not.toBeNull();
+    });
+  });
+
+  // Every audit_logs entry written inside an HTTP request gets a server-vouched
+  // `metadata.request` envelope, populated by the ClsModule middleware
+  // (app.module.ts) and merged in AuditService. The disposable-register path
+  // records an audit log within request context, so it exercises the envelope
+  // without needing an authenticated session.
+  describe('audit request-context envelope (ClsModule)', () => {
+    it('auto-attaches metadata.request (requestId/method/path/userAgent/ip) to audit rows', async () => {
+      await request(app.getHttpServer())
+        .post('/api/auth/register')
+        .set('User-Agent', 'AuditEnvelopeProbe/1.0')
+        .set('X-Request-Id', 'test-req-id-123')
+        .send({
+          email: 'throwaway-env@mailinator.com',
+          password: VALID_PASSWORD,
+          firstName: 'A',
+          lastName: 'B',
+        })
+        .expect(201);
+
+      const prisma = app.get(PrismaService);
+      const audit = await prisma.auditLog.findFirstOrThrow({
+        where: { action: 'user.register_blocked_disposable_email' },
+      });
+      const meta = audit.metadata as {
+        request?: Record<string, unknown>;
+      };
+      expect(meta.request).toBeDefined();
+      // requestId mirrors the supplied X-Request-Id (same value pino logs use).
+      expect(meta.request).toMatchObject({
+        requestId: 'test-req-id-123',
+        method: 'POST',
+        path: '/api/auth/register',
+        userAgent: 'AuditEnvelopeProbe/1.0',
+      });
+      // ip is resolved server-side (req.ip / CF header) — present, a string.
+      expect(typeof meta.request?.ip).toBe('string');
+    });
+  });
+
   describe('POST /api/auth/verify-email', () => {
     async function registerAndSignEmailVerifyToken(
       email: string,

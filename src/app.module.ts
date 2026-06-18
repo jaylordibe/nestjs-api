@@ -9,10 +9,15 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import { randomUUID } from 'crypto';
+import type { Request } from 'express';
 import Redis from 'ioredis';
 import type { IncomingMessage, ServerResponse } from 'http';
+import { ClsModule } from 'nestjs-cls';
 import { LoggerModule } from 'nestjs-pino';
+import { UAParser } from 'ua-parser-js';
 import { AuditModule } from './common/audit/audit.module';
+import { Errors } from './common/errors/errors';
+import { flattenValidationErrors } from './common/errors/flatten-validation-errors';
 import { EmailModule } from './common/email/email.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { RedisModule } from './common/redis/redis.module';
@@ -38,6 +43,106 @@ import { UsersModule } from './modules/users/users.module';
       load: [configuration],
       validationSchema: envValidationSchema,
       validationOptions: { abortEarly: true },
+    }),
+    // Continuation-local storage: opens an async-local context for every
+    // HTTP request so downstream services (AuditService, …) can read request
+    // metadata without threading it through every callsite or switching to
+    // `Scope.REQUEST` (which would propagate request scope through the whole
+    // DI graph and tank perf). `idGenerator` mirrors the LoggerModule's
+    // `genReqId` logic below — the same UUID is reused if the client sent
+    // `X-Request-Id`, otherwise we mint one — so pino logs and
+    // audit_logs.metadata.request.requestId agree for a given request.
+    //
+    // `setup` captures everything AuditService merges into `metadata.request`
+    // on every `record()` call. Two tiers of forensic value:
+    //   - Tier 1 (zero-ops): `req.ip`, `User-Agent` (+ parsed
+    //     browser/os/device via `ua-parser-js`), `Accept-Language`, `method`,
+    //     `path`. Pure local parsing; works in dev and behind any proxy.
+    //   - Tier 2 (free behind Cloudflare): `CF-Connecting-IP` overrides
+    //     `req.ip`; `CF-IPCountry` gives a 2-letter ISO country; `CF-Ray` is
+    //     the cross-system trace id. Trusted blindly because the origin is
+    //     allowlisted to CF IPs at the infra layer — don't expose the origin
+    //     directly or an attacker can spoof these.
+    // Every field is optional and AuditService skips empties, so a sparse
+    // envelope (local dev, non-browser UAs) is never noisy.
+    ClsModule.forRoot({
+      global: true,
+      middleware: {
+        mount: true,
+        generateId: true,
+        idGenerator: (req: Request) => {
+          const headerId = req.headers['x-request-id'];
+          return typeof headerId === 'string' && headerId.length > 0
+            ? headerId
+            : randomUUID();
+        },
+        setup: (cls, req: Request) => {
+          // Tier 1: User-Agent + parsed browser/OS/device.
+          const uaHeader = req.headers['user-agent'];
+          const userAgent =
+            typeof uaHeader === 'string' && uaHeader.length > 0
+              ? uaHeader
+              : undefined;
+          if (userAgent) {
+            cls.set('userAgent', userAgent);
+            const parsed = UAParser(userAgent);
+            if (parsed.browser.name) {
+              cls.set('browser', {
+                name: parsed.browser.name,
+                version: parsed.browser.version,
+              });
+            }
+            if (parsed.os.name) {
+              cls.set('os', {
+                name: parsed.os.name,
+                version: parsed.os.version,
+              });
+            }
+            // Skip the `device` key for desktop UAs (all three sub-fields are
+            // undefined for Chrome on Mac, etc.). Only mobile / tablet /
+            // console / smarttv / wearable / xr / embedded UAs populate any.
+            const deviceType = parsed.device.type;
+            const deviceVendor = parsed.device.vendor;
+            const deviceModel = parsed.device.model;
+            if (deviceType || deviceVendor || deviceModel) {
+              cls.set('device', {
+                type: deviceType,
+                vendor: deviceVendor,
+                model: deviceModel,
+              });
+            }
+          }
+
+          const acceptLanguage = req.headers['accept-language'];
+          if (typeof acceptLanguage === 'string' && acceptLanguage.length > 0) {
+            cls.set('acceptLanguage', acceptLanguage);
+          }
+
+          // Tier 2: Cloudflare-injected headers. `CF-Connecting-IP` is the
+          // canonical client IP; falls back to `req.ip` (Express-resolved via
+          // `trust proxy`) for non-CF traffic / local dev.
+          const cfConnectingIp = req.headers['cf-connecting-ip'];
+          cls.set(
+            'ip',
+            typeof cfConnectingIp === 'string' && cfConnectingIp.length > 0
+              ? cfConnectingIp
+              : req.ip,
+          );
+
+          const cfCountry = req.headers['cf-ipcountry'];
+          if (typeof cfCountry === 'string' && cfCountry.length > 0) {
+            cls.set('country', cfCountry);
+          }
+
+          const cfRay = req.headers['cf-ray'];
+          if (typeof cfRay === 'string' && cfRay.length > 0) {
+            cls.set('cfRay', cfRay);
+          }
+
+          cls.set('method', req.method);
+          cls.set('path', req.originalUrl || req.url);
+        },
+      },
     }),
     // Structured JSON logs in prod/staging; pretty-printed in local dev.
     // Every request gets an X-Request-Id (reused if the client supplies one)
@@ -134,6 +239,12 @@ import { UsersModule } from './modules/users/users.module';
         forbidNonWhitelisted: true,
         transform: true,
         transformOptions: { enableImplicitConversion: true },
+        // Route class-validator failures through the standard error envelope
+        // (400 VALIDATION_FAILED) with flattened, form-name-keyed details
+        // (`{ field, constraints }[]`) instead of Nest's default ad-hoc
+        // message array — so clients program against one consistent shape.
+        exceptionFactory: (errors) =>
+          Errors.validationFailed(flattenValidationErrors(errors)),
       }),
     },
     { provide: APP_INTERCEPTOR, useClass: ClassSerializerInterceptor },

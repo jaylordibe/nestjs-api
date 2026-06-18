@@ -50,6 +50,10 @@ export enum ErrorCode {
   INVALID_OTP = 'INVALID_OTP',
   /** Bad or expired JWT-based link (verify-email). */
   INVALID_LINK = 'INVALID_LINK',
+  /** Email is on a disposable / temporary provider. `details` is
+   *  `{ domain: string }`. Used by direct rejections; auth register/login
+   *  deliberately stay silent (no enumeration) — see AuthService. */
+  EMAIL_DOMAIN_DISALLOWED = 'EMAIL_DOMAIN_DISALLOWED',
   /** Prisma P2003 — foreign-key references a record that doesn't exist.
    *  `details` is `{ field: string }`. */
   FK_REFERENCE_INVALID = 'FK_REFERENCE_INVALID',

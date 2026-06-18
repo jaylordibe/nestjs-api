@@ -5,6 +5,10 @@ import { randomUUID } from 'crypto';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { AuditService } from '../../common/audit/audit.service';
 import { Errors } from '../../common/errors/errors';
+import {
+  extractEmailDomain,
+  isDisposableEmail,
+} from '../../common/util/disposable-email.util';
 import { RedisService } from '../../common/redis/redis.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UserResponseDto } from '../users/dto/user-response.dto';
@@ -36,6 +40,12 @@ export class AuthService {
   // use so it matches BCRYPT_ROUNDS without hardcoding the value.
   private dummyHash: string | null = null;
 
+  // The success response message — extracted so the silent disposable-email
+  // path returns BYTE-IDENTICAL output to a real registration. Any divergence
+  // (different message/shape) would tell an attacker which branch they hit.
+  private static readonly REGISTER_OK_MESSAGE =
+    'Check your email to verify your account before logging in.';
+
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
@@ -45,17 +55,48 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto): Promise<RegisterResponse> {
+    // Disposable-email registrations are silently dropped: same 201 + same
+    // message as a real registration, but no user is created and no
+    // verification email is sent. Attackers probing for "which domains are
+    // blocked" see uniform success and can't enumerate. An internal
+    // `audit_logs` entry captures the attempt so ops can track patterns.
+    if (isDisposableEmail(dto.email)) {
+      await this.auditService.record({
+        action: 'user.register_blocked_disposable_email',
+        actorId: null,
+        metadata: {
+          email: dto.email,
+          domain: extractEmailDomain(dto.email) ?? '',
+        },
+      });
+      return { message: AuthService.REGISTER_OK_MESSAGE };
+    }
     const user = await this.usersService.create(dto, null);
     // Fire the verification email immediately. The call is awaited so a
     // provider outage surfaces as a 5xx at registration time instead of
     // a silent "email never arrives" issue users only notice later.
     await this.usersService.sendEmailVerificationLink(user);
-    return {
-      message: 'Check your email to verify your account before logging in.',
-    };
+    return { message: AuthService.REGISTER_OK_MESSAGE };
   }
 
   async login(dto: LoginDto): Promise<LoginResponse> {
+    // Reject disposable-email logins up-front, collapsed into the generic
+    // INVALID_CREDENTIALS so an attacker can't tell the disposable check (vs
+    // unknown email / wrong password) is what rejected them. A dummy bcrypt
+    // compare on the same code path the unknown-email branch uses keeps the
+    // response timing indistinguishable. The block is captured in audit_logs.
+    if (isDisposableEmail(dto.email)) {
+      await bcrypt.compare(dto.password, await this.getDummyHash());
+      await this.auditService.record({
+        action: 'user.login_blocked_disposable_email',
+        actorId: null,
+        metadata: {
+          email: dto.email,
+          domain: extractEmailDomain(dto.email) ?? '',
+        },
+      });
+      throw Errors.invalidCredentials();
+    }
     const user = await this.usersService.findByEmail(dto.email);
 
     // findByEmail uses the scoped client — soft-deleted users return null,
