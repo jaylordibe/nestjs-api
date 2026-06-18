@@ -69,7 +69,7 @@
     "helmet": "^8.1.0",
     "ioredis": "^5.10.1",
     "joi": "^18.1.2",
-    "multer": "^2.0.1",
+    "multer": "^2.2.0",
     "nestjs-cls": "^6.2.0",
     "nestjs-pino": "^4.6.1",
     "passport": "^0.7.0",
@@ -87,7 +87,8 @@
     "picomatch": "^4.0.4",
     "@hono/node-server": "^1.19.13",
     "fast-uri": "^3.1.2",
-    "fast-xml-builder": "^1.1.7"
+    "fast-xml-builder": "^1.1.7",
+    "multer": "^2.2.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
