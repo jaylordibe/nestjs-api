@@ -1,0 +1,230 @@
+name: Security DAST
+
+# Dynamic Application Security Testing (OWASP ZAP), kept OUT of test.yml on
+# purpose. test.yml is the fast, deterministic merge/deploy gate (lint, build,
+# unit/e2e, dependency audit, Trivy image scan). DAST is the opposite shape: it
+# boots a live app and probes it over HTTP — slow, stateful (active rules send
+# real POST/PUT/DELETE), and noisy until tuned. So it runs on its own cadence
+# against a fully ephemeral app (its own Postgres + Redis), never against a
+# shared/real environment.
+on:
+  # Weekly, Monday 03:00 UTC. Cron is UTC-only on GitHub Actions.
+  schedule:
+    - cron: '0 3 * * 1'
+  # On-demand from the Actions tab.
+  workflow_dispatch:
+
+concurrency:
+  group: dast-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  zap-api-scan:
+    name: ZAP API scan (ephemeral app)
+    runs-on: ubuntu-latest
+    # ZAP API scans over the full OpenAPI surface take a while; 30 min is
+    # generous headroom over the normal run and bounds a hung scan.
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:18.3
+        env:
+          POSTGRES_USER: nestjs
+          POSTGRES_PASSWORD: ci-postgres-password
+          POSTGRES_DB: nestjs_local
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nestjs"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:8.6.2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    # Mirrors test.yml's CI-only constants so the app boots identically, with
+    # two deliberate deltas for the scan:
+    #  - GIT_SHA is stamped so the Swagger doc version reflects the build.
+    #  - THROTTLE_LIMIT is raised to effectively unlimited. The global
+    #    ThrottlerGuard (100/60s/IP) would otherwise answer most of ZAP's
+    #    rapid-fire requests with 429 and gut scan coverage.
+    env:
+      NODE_ENV: test
+      PORT: 3001
+      SERVICE_NAME: nestjs
+      DB_USER: nestjs
+      DB_PASSWORD: ci-postgres-password
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_NAME: nestjs_test
+      DATABASE_URL: postgresql://nestjs:ci-postgres-password@localhost:5432/nestjs_test?schema=public
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ci-redis-password-not-actually-used
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: ci-jwt-secret-not-for-production-use-only-for-testing
+      JWT_EXPIRES_IN: 1h
+      EMAIL_PROVIDER: stub
+      CORS_ORIGIN: '*'
+      THROTTLE_TTL_MS: 60000
+      THROTTLE_LIMIT: 1000000
+      GIT_SHA: ${{ github.sha }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile --silent
+        env:
+          NODE_OPTIONS: --no-deprecation
+
+      - name: Generate Prisma client
+        run: yarn prisma:generate
+
+      # Creates the nestjs_test database (Prisma creates the target DB if
+      # absent) and applies all migrations — the schema ZAP will exercise.
+      - name: Apply migrations
+        run: yarn prisma:deploy
+
+      - name: Build
+        run: yarn build
+
+      # Boot the compiled server detached. The process survives into later
+      # steps on GitHub runners; we capture its PID + logs for teardown/debug.
+      - name: Start API
+        run: |
+          node dist/main > app.log 2>&1 &
+          echo $! > app.pid
+
+      # Block until the liveness probe answers, so ZAP never scans a
+      # half-booted app. Dump logs and fail fast if it never comes up.
+      - name: Wait for API to be healthy
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl -sf http://localhost:3001/api/health/liveness > /dev/null; then
+              echo "API is up."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::API did not become healthy in time."
+          cat app.log
+          exit 1
+
+      # Create a throwaway admin in the scan DB and mint a bearer token for it,
+      # so the scan exercises endpoints BEHIND auth (not just the 401 wall).
+      # Minted directly (not via /auth/login) to dodge lockout/bot protections;
+      # the token carries no jti so a stray POST /auth/logout can't revoke it
+      # mid-scan. The token is masked in logs and passed to the next step via
+      # the step output.
+      - name: Mint admin JWT for authenticated scan
+        id: token
+        run: |
+          TOKEN="$(npx ts-node --transpile-only prisma/scripts/zap-mint-admin-token.ts)"
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      # OpenAPI-driven scan: ZAP reads /api/docs-json and exercises every
+      # declared endpoint — far better coverage than spidering a headless API.
+      #  --network host  -> the ZAP container reaches the app on localhost:3001
+      #  -f openapi      -> import the definition as OpenAPI
+      #  -I              -> do not fail the build on WARN-level alerts; gating
+      #                     is opt-in per-rule via .zap/rules.tsv (set to FAIL)
+      #  -c rules.tsv    -> the single tuning/gating seam (copied into wrk dir)
+      #  -z "-configfile" -> a ZAP replacer rule that injects
+      #                     `Authorization: Bearer <token>` on EVERY request, so
+      #                     the scan runs authenticated as admin. It MUST go in a
+      #                     properties file, NOT inline `-z -config ...`: ZAP's
+      #                     -z parser splits on spaces, so the space in
+      #                     "Bearer <token>" breaks the inline form (the token
+      #                     becomes a stray arg). A properties value keeps the
+      #                     space intact. Verified by header-echo test.
+      # Output dir is pre-created world-writable because the ZAP container runs
+      # as uid 1000 and must read the configfile + write reports in the mount.
+      - name: Run ZAP API scan
+        env:
+          TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          mkdir -p zap-out
+          cp .zap/rules.tsv zap-out/rules.tsv
+          # Replacer config — properties file so "Bearer <token>" survives the
+          # space. Lives in the bind mount so the container can read it; the
+          # artifact upload globs only zap-report.*, so the token isn't uploaded.
+          {
+            echo 'replacer.full_list(0).description=auth'
+            echo 'replacer.full_list(0).enabled=true'
+            echo 'replacer.full_list(0).matchtype=REQ_HEADER'
+            echo 'replacer.full_list(0).matchstr=Authorization'
+            echo 'replacer.full_list(0).regex=false'
+            echo "replacer.full_list(0).replacement=Bearer ${TOKEN}"
+          } > zap-out/auth.properties
+          chmod -R 0777 zap-out
+          docker run --rm --network host \
+            -v "$PWD/zap-out:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-api-scan.py \
+              -t http://localhost:3001/api/docs-json \
+              -f openapi \
+              -I \
+              -c rules.tsv \
+              -r zap-report.html \
+              -w zap-report.md \
+              -J zap-report.json \
+              -z "-configfile /zap/wrk/auth.properties"
+
+      # Surface the markdown summary in the run's Summary tab for a quick read
+      # without downloading the artifact.
+      - name: Publish scan summary
+        if: always()
+        run: |
+          if [ -f zap-out/zap-report.md ]; then
+            {
+              echo "## OWASP ZAP API scan"
+              echo
+              cat zap-out/zap-report.md
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload ZAP report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-api-scan-report
+          path: |
+            zap-out/zap-report.html
+            zap-out/zap-report.md
+            zap-out/zap-report.json
+          if-no-files-found: warn
+
+      - name: Upload API logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-logs
+          path: app.log
+          if-no-files-found: ignore
+
+      - name: Stop API
+        if: always()
+        run: |
+          if [ -f app.pid ]; then
+            kill "$(cat app.pid)" 2>/dev/null || true
+          fi

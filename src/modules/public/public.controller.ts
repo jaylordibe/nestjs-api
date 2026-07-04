@@ -1,6 +1,7 @@
 import { Controller, Get } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import { PingResponseDto } from './dto/ping-response.dto';
 
 // Guest-mode public surface for the web + mobile apps. Routes here are
 // open to anonymous traffic. No `@UseGuards(JwtAuthGuard)`.
@@ -30,7 +31,8 @@ export class PublicController {
   // a plain JSON shape. Tag in Swagger groups it under "Public" so the
   // docs page makes the boundary obvious to consumers.
   @Get('ping')
-  ping(): { ok: true; timestamp: string } {
+  @ApiOkResponse({ type: PingResponseDto })
+  ping(): PingResponseDto {
     return { ok: true, timestamp: new Date().toISOString() };
   }
 }

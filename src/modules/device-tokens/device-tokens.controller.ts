@@ -12,7 +12,13 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiCreatedResponse,
+  ApiOkResponse,
+  ApiTags,
+} from '@nestjs/swagger';
+import { ApiPaginatedResponse } from '../../common/decorators/api-paginated-response.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -35,6 +41,7 @@ export class DeviceTokensController {
 
   @Post()
   @Roles(Role.ADMIN)
+  @ApiCreatedResponse({ type: DeviceTokenResponseDto })
   async create(
     @Body() dto: CreateDeviceTokenDto,
     @CurrentUser() current: AuthenticatedUser,
@@ -45,18 +52,20 @@ export class DeviceTokensController {
 
   @Get()
   @Roles(Role.ADMIN)
+  @ApiPaginatedResponse(DeviceTokenResponseDto)
   async findPaginated(
     @Query() query: MetaQueryDto,
   ): Promise<PaginatedResponseDto<DeviceTokenResponseDto>> {
     const { data, meta } = await this.deviceTokensService.findPaginated(query);
     return {
-      data: data.map((r) => new DeviceTokenResponseDto(r)),
+      data: data.map((row) => new DeviceTokenResponseDto(row)),
       meta,
     };
   }
 
   @Get(':id')
   @Roles(Role.ADMIN)
+  @ApiOkResponse({ type: DeviceTokenResponseDto })
   async findOne(
     @Param('id', new ParseUUIDPipe()) id: string,
   ): Promise<DeviceTokenResponseDto> {
@@ -66,6 +75,7 @@ export class DeviceTokensController {
 
   @Patch(':id')
   @Roles(Role.ADMIN)
+  @ApiOkResponse({ type: DeviceTokenResponseDto })
   async update(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateDeviceTokenDto,

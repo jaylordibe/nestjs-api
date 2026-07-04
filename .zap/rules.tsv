@@ -1,0 +1,22 @@
+# OWASP ZAP scan rules — the single source of truth for tuning the DAST scan
+# run by .github/workflows/security-dast.yml. Edit this file to silence known
+# false positives or to turn a finding into a hard build failure.
+#
+# Format (TAB-separated, one rule per line; '#' starts a comment):
+#   <RULE_ID>	<ACTION>	<OPTIONAL NOTE>
+#
+# ACTION:
+#   WARN   — report it, do NOT fail the run (this is the default for every
+#            rule, so you never need to add a WARN line; list one only as
+#            documentation that the finding is known/accepted).
+#   IGNORE — suppress it entirely (confirmed false positive / not applicable).
+#   FAIL   — escalate to a build failure. This is the gating knob: the scan
+#            runs with `-I`, so ONLY rules marked FAIL here red-light the job.
+#
+# Find a rule's ID in the "Plugin ID" column of the HTML/JSON report artifact.
+#
+# Examples (uncomment + adjust as you triage real findings):
+#   10096	IGNORE	Timestamp disclosure — epoch-like numbers in JSON, false positive on this API
+#   10027	IGNORE	Suspicious comments — source-map / library noise, not our code
+#   40018	FAIL	SQL injection — never acceptable, fail the build
+#   90022	FAIL	Application error disclosure — leaking stack traces, fail the build

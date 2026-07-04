@@ -14,21 +14,10 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { UserResponseDto } from '../users/dto/user-response.dto';
 import { UsersService } from '../users/users.service';
 import { LoginDto } from './dto/login.dto';
+import { LoginResponseDto } from './dto/login-response.dto';
 import { RegisterDto } from './dto/register.dto';
+import { RegisterResponseDto } from './dto/register-response.dto';
 import { JwtPayload, LOGOUT_KEY_PREFIX } from './strategies/jwt.strategy';
-
-export interface LoginResponse {
-  accessToken: string;
-  user: UserResponseDto;
-}
-
-export interface RegisterResponse {
-  // Intentionally just a message — no user object, no access token. Keeps
-  // the pre-verification response surface minimal (nothing useful for an
-  // attacker probing whether an email is registered) and reinforces that
-  // the user must verify + log in before they have a session.
-  message: string;
-}
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
@@ -54,7 +43,7 @@ export class AuthService {
     private readonly auditService: AuditService,
   ) {}
 
-  async register(dto: RegisterDto): Promise<RegisterResponse> {
+  async register(dto: RegisterDto): Promise<RegisterResponseDto> {
     // Disposable-email registrations are silently dropped: same 201 + same
     // message as a real registration, but no user is created and no
     // verification email is sent. Attackers probing for "which domains are
@@ -79,7 +68,7 @@ export class AuthService {
     return { message: AuthService.REGISTER_OK_MESSAGE };
   }
 
-  async login(dto: LoginDto): Promise<LoginResponse> {
+  async login(dto: LoginDto): Promise<LoginResponseDto> {
     // Reject disposable-email logins up-front, collapsed into the generic
     // INVALID_CREDENTIALS so an attacker can't tell the disposable check (vs
     // unknown identifier / wrong password) is what rejected them. A dummy
@@ -222,7 +211,7 @@ export class AuthService {
 
   private buildLoginResponse(
     user: Awaited<ReturnType<UsersService['findById']>>,
-  ): LoginResponse {
+  ): LoginResponseDto {
     const payload: JwtPayload = { sub: user.id };
     return {
       // jwtid sets the `jti` claim. One per token, used by /auth/logout to

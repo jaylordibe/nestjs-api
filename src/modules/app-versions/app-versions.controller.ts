@@ -12,7 +12,13 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiCreatedResponse,
+  ApiOkResponse,
+  ApiTags,
+} from '@nestjs/swagger';
+import { ApiPaginatedResponse } from '../../common/decorators/api-paginated-response.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
@@ -39,6 +45,7 @@ export class AppVersionsController {
 
   @Post()
   @Roles(Role.ADMIN)
+  @ApiCreatedResponse({ type: AppVersionResponseDto })
   async create(
     @Body() dto: CreateAppVersionDto,
     @CurrentUser() current: AuthenticatedUser,
@@ -49,12 +56,13 @@ export class AppVersionsController {
 
   @Get()
   @Public()
+  @ApiPaginatedResponse(AppVersionResponseDto)
   async findPaginated(
     @Query() query: MetaQueryDto,
   ): Promise<PaginatedResponseDto<AppVersionResponseDto>> {
     const { data, meta } = await this.appVersionsService.findPaginated(query);
     return {
-      data: data.map((r) => new AppVersionResponseDto(r)),
+      data: data.map((row) => new AppVersionResponseDto(row)),
       meta,
     };
   }
@@ -64,6 +72,7 @@ export class AppVersionsController {
   // prompt an update.
   @Get('latest')
   @Public()
+  @ApiOkResponse({ type: AppVersionResponseDto })
   async findLatest(
     @Query() query: LatestAppVersionQueryDto,
   ): Promise<AppVersionResponseDto> {
@@ -75,6 +84,7 @@ export class AppVersionsController {
 
   @Get(':id')
   @Public()
+  @ApiOkResponse({ type: AppVersionResponseDto })
   async findOne(
     @Param('id', new ParseUUIDPipe()) id: string,
   ): Promise<AppVersionResponseDto> {
@@ -84,6 +94,7 @@ export class AppVersionsController {
 
   @Patch(':id')
   @Roles(Role.ADMIN)
+  @ApiOkResponse({ type: AppVersionResponseDto })
   async update(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateAppVersionDto,

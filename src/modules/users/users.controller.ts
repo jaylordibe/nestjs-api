@@ -12,11 +12,18 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiCreatedResponse,
+  ApiOkResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import { ApiPaginatedResponse } from '../../common/decorators/api-paginated-response.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { MetaQueryDto } from '../../common/dto/meta-query.dto';
+import { OperationAcknowledgementDto } from '../../common/dto/operation-acknowledgement.dto';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { Public } from '../../common/decorators/public.decorator';
 import { Role } from '../../common/enums/role.enum';
@@ -51,6 +58,7 @@ export class UsersController {
   @Public()
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @ApiOkResponse({ type: OperationAcknowledgementDto })
   async requestPasswordReset(
     @Body() dto: RequestPasswordResetDto,
   ): Promise<{ ok: true }> {
@@ -63,6 +71,7 @@ export class UsersController {
   @Public()
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @ApiOkResponse({ type: OperationAcknowledgementDto })
   async resetPassword(@Body() dto: ResetPasswordDto): Promise<{ ok: true }> {
     await this.usersService.resetPassword(dto);
     return { ok: true };
@@ -75,6 +84,7 @@ export class UsersController {
   // when the OTP flow was replaced with a JWT link.
 
   @Get('me')
+  @ApiOkResponse({ type: UserResponseDto })
   async getAuthUser(
     @CurrentUser() current: AuthenticatedUser,
   ): Promise<UserResponseDto> {
@@ -83,6 +93,7 @@ export class UsersController {
   }
 
   @Patch('me')
+  @ApiOkResponse({ type: UserResponseDto })
   async updateAuthUserInfo(
     @Body() dto: UpdateAuthUserInfoDto,
     @CurrentUser() current: AuthenticatedUser,
@@ -120,6 +131,7 @@ export class UsersController {
   // Extend this as new tables are added (bookings, messages, etc.) so the
   // dump stays complete.
   @Get('me/export')
+  @ApiOkResponse({ type: UserResponseDto })
   async exportAuthUser(
     @CurrentUser() current: AuthenticatedUser,
   ): Promise<UserResponseDto> {
@@ -128,6 +140,7 @@ export class UsersController {
   }
 
   @Patch('me/username')
+  @ApiOkResponse({ type: UserResponseDto })
   async updateAuthUsername(
     @Body() dto: UpdateAuthUsernameDto,
     @CurrentUser() current: AuthenticatedUser,
@@ -141,6 +154,7 @@ export class UsersController {
   }
 
   @Patch('me/email')
+  @ApiOkResponse({ type: UserResponseDto })
   async updateAuthUserEmail(
     @Body() dto: UpdateAuthUserEmailDto,
     @CurrentUser() current: AuthenticatedUser,
@@ -154,6 +168,7 @@ export class UsersController {
   }
 
   @Patch('me/password')
+  @ApiOkResponse({ type: UserResponseDto })
   async updateAuthUserPassword(
     @Body() dto: UpdateAuthUserPasswordDto,
     @CurrentUser() current: AuthenticatedUser,
@@ -167,6 +182,7 @@ export class UsersController {
   }
 
   @Patch('me/profile-image')
+  @ApiOkResponse({ type: UserResponseDto })
   async updateAuthUserProfileImage(
     @Body() dto: UpdateAuthUserProfileImageDto,
     @CurrentUser() current: AuthenticatedUser,
@@ -186,6 +202,7 @@ export class UsersController {
   @Post('me/request-phone-verification')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @ApiOkResponse({ type: OperationAcknowledgementDto })
   async requestPhoneVerification(
     @Body() dto: RequestPhoneVerificationDto,
     @CurrentUser() current: AuthenticatedUser,
@@ -204,6 +221,7 @@ export class UsersController {
   // bound brute-force on the verify endpoint.
   @Patch('me/verify-phone')
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @ApiOkResponse({ type: UserResponseDto })
   async verifyAuthUserPhone(
     @Body() dto: VerifyAuthUserPhoneDto,
     @CurrentUser() current: AuthenticatedUser,
@@ -220,6 +238,7 @@ export class UsersController {
   // clears `phoneNumberVerifiedAt` so the row no longer claims a verified
   // phone. Use the OTP flow above when you need verification.
   @Patch('me/phone')
+  @ApiOkResponse({ type: UserResponseDto })
   async updateAuthUserPhone(
     @Body() dto: UpdateAuthUserPhoneDto,
     @CurrentUser() current: AuthenticatedUser,
@@ -234,6 +253,7 @@ export class UsersController {
 
   @Post()
   @Roles(Role.ADMIN)
+  @ApiCreatedResponse({ type: UserResponseDto })
   async create(
     @Body() dto: CreateUserDto,
     @CurrentUser() current: AuthenticatedUser,
@@ -244,18 +264,20 @@ export class UsersController {
 
   @Get()
   @Roles(Role.ADMIN)
+  @ApiPaginatedResponse(UserResponseDto)
   async findPaginated(
     @Query() query: MetaQueryDto,
   ): Promise<PaginatedResponseDto<UserResponseDto>> {
     const { data, meta } = await this.usersService.findPaginated(query);
     return {
-      data: data.map((u) => new UserResponseDto(u)),
+      data: data.map((user) => new UserResponseDto(user)),
       meta,
     };
   }
 
   @Get(':id')
   @Roles(Role.ADMIN)
+  @ApiOkResponse({ type: UserResponseDto })
   async findOne(
     @Param('id', new ParseUUIDPipe()) id: string,
   ): Promise<UserResponseDto> {
@@ -265,6 +287,7 @@ export class UsersController {
 
   @Patch(':id')
   @Roles(Role.ADMIN)
+  @ApiOkResponse({ type: UserResponseDto })
   async update(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateUserDto,
@@ -276,6 +299,7 @@ export class UsersController {
 
   @Patch(':id/password')
   @Roles(Role.ADMIN)
+  @ApiOkResponse({ type: UserResponseDto })
   async updatePassword(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdatePasswordDto,

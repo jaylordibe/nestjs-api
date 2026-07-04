@@ -11,15 +11,25 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiCreatedResponse,
+  ApiOkResponse,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import { OperationAcknowledgementDto } from '../../common/dto/operation-acknowledgement.dto';
 import { UsersService } from '../users/users.service';
-import { AuthService, LoginResponse, RegisterResponse } from './auth.service';
+import { AuthService } from './auth.service';
+import { EmailVerificationResponseDto } from './dto/email-verification-response.dto';
 import { LoginDto } from './dto/login.dto';
+import { LoginResponseDto } from './dto/login-response.dto';
 import { RegisterDto } from './dto/register.dto';
+import { RegisterResponseDto } from './dto/register-response.dto';
 import { ResendVerificationDto } from './dto/resend-verification.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -35,14 +45,16 @@ export class AuthController {
 
   @Post('register')
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  register(@Body() dto: RegisterDto): Promise<RegisterResponse> {
+  @ApiCreatedResponse({ type: RegisterResponseDto })
+  register(@Body() dto: RegisterDto): Promise<RegisterResponseDto> {
     return this.authService.register(dto);
   }
 
   @Post('login')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
-  login(@Body() dto: LoginDto): Promise<LoginResponse> {
+  @ApiOkResponse({ type: LoginResponseDto })
+  login(@Body() dto: LoginDto): Promise<LoginResponseDto> {
     return this.authService.login(dto);
   }
 
@@ -51,9 +63,10 @@ export class AuthController {
   @Post('verify-email')
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
+  @ApiOkResponse({ type: EmailVerificationResponseDto })
   async verifyEmailPost(
     @Body() dto: VerifyEmailDto,
-  ): Promise<{ verified: true }> {
+  ): Promise<EmailVerificationResponseDto> {
     await this.usersService.verifyEmailByToken(dto.token);
     return { verified: true };
   }
@@ -68,6 +81,11 @@ export class AuthController {
   // not letting Nest serialize anything.
   @Get('verify-email')
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @ApiResponse({
+    status: HttpStatus.FOUND,
+    description:
+      'Redirects (302) to the web app email-verification result page — ?status=success or ?status=error&reason=<slug>. No response body.',
+  })
   async verifyEmailGet(
     @Query() dto: VerifyEmailDto,
     @Res() res: Response,
@@ -96,6 +114,7 @@ export class AuthController {
   @Post('resend-verification')
   @Throttle({ default: { limit: 3, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
+  @ApiOkResponse({ type: OperationAcknowledgementDto })
   async resendVerification(
     @Body() dto: ResendVerificationDto,
   ): Promise<{ ok: true }> {

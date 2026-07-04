@@ -7,8 +7,9 @@ import {
   HealthIndicatorFunction,
   MemoryHealthIndicator,
 } from '@nestjs/terminus';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
+import { HealthVersionResponseDto } from './dto/health-version-response.dto';
 import { PrismaHealthIndicator } from './indicators/prisma.health';
 
 // Captured at module load — i.e. when the container's Node process
@@ -61,7 +62,8 @@ export class HealthController {
   // container — usually because `docker compose up -d` ran without
   // `--build`, or layer caching reused a stale `dist/`.
   @Get('version')
-  version(): { commit: string; startedAt: string } {
+  @ApiOkResponse({ type: HealthVersionResponseDto })
+  version(): HealthVersionResponseDto {
     return {
       commit: this.configService.getOrThrow<string>('gitSha'),
       startedAt: PROCESS_BOOT_TIME,
