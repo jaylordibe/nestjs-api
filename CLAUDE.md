@@ -16,6 +16,7 @@ You are **always** writing as a **senior software architect / senior software en
 - **Security is non-negotiable.** Every endpoint and DTO needs a thought about attack surface (enumeration leaks, timing attacks, replay, FK escalation, role abuse, log redaction). See the `nestjs-auth-security` skill for the hardening floor.
 - **Delete what you replace.** Old filters, old throws, old code paths — gone. No `// removed` comments, no `// legacy` directories, no parallel implementations.
 - **Plans are ADRs.** Plan-mode output should read like an Architectural Decision Record: Context → Approach (with rationale + rejected alternatives) → File-by-file changes → Tests → Verification → What this deliberately does NOT do. Not a checklist.
+- **"What do you think / what do you recommend" means PLAN, not execute.** When the user asks for your thoughts, opinion, or a recommendation, respond with senior-level planning — the analysis, the options with trade-offs, and your recommended approach — then **stop and wait**. Do NOT start editing files, writing migrations, or otherwise implementing. Implementation begins only when the user explicitly says to go ahead (e.g. "implement it", "do it", "go"). A plan or recommendation is never itself a green light.
 - **Tests are part of the change.** A feature without e2e coverage on the contract isn't done. Update the existing assertions when the contract changes — don't add a duplicate test alongside the stale one.
 - **Verify before declaring done.** `yarn build` + `yarn lint` + the **affected** e2e spec(s) must pass on every change; run the **full** `yarn test:e2e` only when a module is complete or the user asks. Type-check and a passing suite verify correctness, but don't claim a UI/feature works without actually exercising it.
 
@@ -93,6 +94,12 @@ ESLint uses typescript-eslint **recommendedTypeChecked** (type-aware, slow on la
 ## Prisma 7
 
 Uses `@prisma/adapter-pg`. `schema.prisma` is `provider = "postgresql"` only (no `url`); `prisma.config.ts` loads `.env` with dotenv-expand and exposes `{ schema, migrations.path, datasource.url }`; `PrismaService` builds `PrismaPg({ connectionString })` and passes it to `super({ adapter })`. `pg` is a **runtime** dependency — bump adapter + `pg` together. **Until any deployed env has applied migrations, edit migration files in place freely**; after the first real deploy they're checksummed in `_prisma_migrations`, so only add new migrations (use `--create-only` for raw-SQL constructs).
+
+### Migrations while work is in progress (STRICT)
+- **NEVER apply migrations on the local dev DB during in-progress work or planning.** Do **not** run `prisma:deploy` / `prisma migrate dev` / `prisma migrate reset` to "check" a schema change. `yarn build` (which runs `prisma generate` off `schema.prisma`) is enough to verify the code compiles against the new shape — no DB apply needed.
+- **NEVER reset, drop, re-seed, or otherwise destroy local DB data on your own initiative** — not even "just local." The local dev DB holds the user's data; a reset is allowed **only** with the user's explicit permission (ask first) or on their direct instruction. If a migration must actually run to verify something, it runs against the **separate test DB** — the e2e harness owns it (`test/setup/global-setup.ts` drops/recreates the `.env.test` `DB_NAME` on every `test:e2e` run, never touching local). Test DB ≠ local DB — verify there.
+- **Consolidate a multi-step schema change into ONE migration file** and apply it only when the whole batch is finalized — and even then, prefer to let the **user** apply it to their local/prod. Applying mid-flight locks the file's checksum, so folding in later changes means editing an already-applied migration (breaks `migrate deploy`).
+- If a migration was applied to local by mistake, **surgically un-apply it** (inverse DDL + delete its `_prisma_migrations` row) preserving all rows — never `migrate reset`.
 
 ## Deep references
 
