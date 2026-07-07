@@ -30,6 +30,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { AppVersionsModule } from './modules/app-versions/app-versions.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { DeviceTokensModule } from './modules/device-tokens/device-tokens.module';
+import { EnumsModule } from './modules/enums/enums.module';
 import { HealthModule } from './modules/health/health.module';
 import { PublicModule } from './modules/public/public.module';
 import { UsersModule } from './modules/users/users.module';
@@ -227,6 +228,7 @@ import { UsersModule } from './modules/users/users.module';
     UsersModule,
     AppVersionsModule,
     DeviceTokensModule,
+    EnumsModule,
     HealthModule,
     PublicModule,
   ],
