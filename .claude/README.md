@@ -44,6 +44,8 @@ The repo commits **`.mcp.json`** declaring an Atlassian (Jira / Confluence) MCP 
 
 Once done, Stage 1 of `/ticket TICKET-123` auto-fetches the issue. Without it, paste the ticket text into `/ticket` instead — the rest of the pipeline is identical. **Not using Jira?** Delete `.mcp.json` (or swap in your tracker's MCP server); the pipeline still works with pasted text.
 
+> **Scaffolding a real project from this template?** Rename the server from the generic `atlassian` (in `.mcp.json` and the two references above) to a project-specific name like `atlassian-<your-project>`. Claude Code keys the OAuth token by server name, so two projects sharing the name `atlassian` would share one Atlassian account/workspace — distinct names keep them separate.
+
 ## Deferred
 
 - An `implementer` agent + git-worktree fan-out for parallel implementation (only worth building when a ticket genuinely needs concurrent, isolated edits).
