@@ -69,6 +69,16 @@ export const envValidationSchema = Joi.object({
     }),
   JWT_EXPIRES_IN: Joi.string().default('30d'),
 
+  // Backstop TTL for the per-user permission-grants cache in Redis. Role and
+  // membership changes invalidate explicitly, so this only bounds the window
+  // of a missed invalidation. Lower it if you distrust the invalidation paths;
+  // raising it past a few minutes trades staleness for very little.
+  AUTHORIZATION_GRANTS_CACHE_TTL_SECONDS: Joi.number()
+    .integer()
+    .min(1)
+    .max(3600)
+    .default(300),
+
   // Email provider selection. `stub` (default) logs to stdout — OTPs are
   // visible in the app log so local flows can be completed manually.
   // `resend` routes through resend.com and requires RESEND_API_KEY and

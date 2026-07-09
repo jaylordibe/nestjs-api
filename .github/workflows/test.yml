@@ -117,6 +117,24 @@ jobs:
       - name: E2E tests
         run: yarn test:e2e
 
+      # The application refuses to boot when the permission catalog in the code
+      # and the rows in the database disagree. Catch that here, on a throwaway
+      # database, rather than at deploy time when the healthcheck would fail and
+      # the old container is already stopped.
+      #
+      # `rbac:sync` projects the catalog; `rbac:check` then asserts the two match
+      # in BOTH directions (nothing missing, no orphans). Exits non-zero on drift.
+      - name: Authorization catalog is in sync
+        env:
+          DATABASE_URL: postgresql://nestjs:ci-postgres-password@localhost:5432/nestjs_rbac_ci?schema=public
+          DB_NAME: nestjs_rbac_ci
+        run: |
+          PGPASSWORD=ci-postgres-password psql -h localhost -U nestjs -d postgres \
+            -c "DROP DATABASE IF EXISTS nestjs_rbac_ci;" -c "CREATE DATABASE nestjs_rbac_ci;"
+          yarn prisma:deploy
+          yarn rbac:sync
+          yarn rbac:check
+
       # Informational: lists everything moderate and above. Never fails.
       # Known moderate: `uuid` via `resend > svix > uuid` (CVE fixed in
       # uuid >= 14.0.0, but uuid 11+ is ESM-only and breaks the CJS

@@ -21,7 +21,14 @@ description: Use when writing or updating e2e specs (test/*.e2e-spec.ts) — the
 1. `beforeAll: app = await createTestApp()`, `afterAll: await app.close()`.
 2. `beforeEach: await truncateAll(app)`.
 3. `request(app.getHttpServer()).post('/api/...').send(...).expect(...)`.
-4. Seed admin via `PrismaService.user.create({ role: 'admin', emailVerifiedAt: new Date() })` (register defaults to the `user` role and leaves `emailVerifiedAt` null — set it directly or login is blocked by the verification gate). Values are lowercase — `Role.ADMIN = 'admin'`.
+4. Seed principals via the SHARED fixtures in `test/setup/rbac.ts` — never hand-roll them:
+   - `seedRbacCatalog(app)` in `beforeEach`, **after** `truncateAll` (which wipes `roles`/`permissions`; without them even `POST /auth/register` fails, because a new user is granted PLATFORM_USER in the same transaction).
+   - `createPlatformAdmin(app)` → holds `manage all`.
+   - `createRegularUser(app, email)` → PLATFORM_USER only (self-service grants).
+   - `createPlatformUser(app, { email, roles: [SeededRoleName.PLATFORM_SUPPORT] })` → any staff role.
+   - `registerAndLogin(app, email)` when the spec is exercising the register flow itself.
+
+   There is no `role` column on `users` and no `Role` enum. Authorization lives in `user_roles` / `business_members`. These helpers stamp `emailVerifiedAt` directly, because register leaves it null and login is blocked by the verification gate.
 
 ## Required coverage per resource
 

@@ -1,53 +1,14 @@
 import { INestApplication } from '@nestjs/common';
-import * as bcrypt from 'bcrypt';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { createTestApp } from './setup/test-app';
 import { truncateAll } from './setup/db';
-
-const PASSWORD = 'correct-horse-battery-1';
-
-async function seedAdmin(
-  app: INestApplication<App>,
-): Promise<{ id: string; token: string }> {
-  const prisma = app.get(PrismaService);
-  const admin = await prisma.user.create({
-    data: {
-      email: 'admin@example.com',
-      password: await bcrypt.hash(PASSWORD, 10),
-      firstName: 'Admin',
-      lastName: 'User',
-      role: 'admin',
-      emailVerifiedAt: new Date(),
-    },
-  });
-  const res = await request(app.getHttpServer())
-    .post('/api/auth/login')
-    .send({ identifier: 'admin@example.com', password: PASSWORD });
-  return { id: admin.id, token: res.body.accessToken as string };
-}
-
-async function registerUser(
-  app: INestApplication<App>,
-  email = 'user@example.com',
-): Promise<string> {
-  await request(app.getHttpServer()).post('/api/auth/register').send({
-    email,
-    password: PASSWORD,
-    firstName: 'Regular',
-    lastName: 'User',
-  });
-  const prisma = app.get(PrismaService);
-  await prisma.user.update({
-    where: { email },
-    data: { emailVerifiedAt: new Date() },
-  });
-  const login = await request(app.getHttpServer())
-    .post('/api/auth/login')
-    .send({ identifier: email, password: PASSWORD });
-  return login.body.accessToken as string;
-}
+import {
+  createPlatformAdmin,
+  createRegularUser,
+  seedRbacCatalog,
+} from './setup/rbac';
 
 describe('AppVersions (e2e)', () => {
   let app: INestApplication<App>;
@@ -58,6 +19,7 @@ describe('AppVersions (e2e)', () => {
 
   beforeEach(async () => {
     await truncateAll(app);
+    await seedRbacCatalog(app);
   });
 
   afterAll(async () => {
@@ -65,7 +27,7 @@ describe('AppVersions (e2e)', () => {
   });
 
   it('POST /api/app-versions rejects non-admin with 403', async () => {
-    const userToken = await registerUser(app);
+    const userToken = (await createRegularUser(app)).token;
     await request(app.getHttpServer())
       .post('/api/app-versions')
       .set('Authorization', `Bearer ${userToken}`)
@@ -78,7 +40,7 @@ describe('AppVersions (e2e)', () => {
   });
 
   it('POST /api/app-versions creates an app version (admin)', async () => {
-    const { token } = await seedAdmin(app);
+    const { token } = await createPlatformAdmin(app);
     const res = await request(app.getHttpServer())
       .post('/api/app-versions')
       .set('Authorization', `Bearer ${token}`)
@@ -108,7 +70,7 @@ describe('AppVersions (e2e)', () => {
   });
 
   it('POST /api/app-versions rejects invalid platform with 400', async () => {
-    const { token } = await seedAdmin(app);
+    const { token } = await createPlatformAdmin(app);
     await request(app.getHttpServer())
       .post('/api/app-versions')
       .set('Authorization', `Bearer ${token}`)
@@ -121,7 +83,7 @@ describe('AppVersions (e2e)', () => {
   });
 
   it('POST /api/app-versions rejects duplicate platform+version with 409', async () => {
-    const { token } = await seedAdmin(app);
+    const { token } = await createPlatformAdmin(app);
     const payload = {
       version: '1.0.0',
       platform: 'web',
@@ -140,7 +102,7 @@ describe('AppVersions (e2e)', () => {
   });
 
   it('GET /api/app-versions is public and paginated', async () => {
-    const { token } = await seedAdmin(app);
+    const { token } = await createPlatformAdmin(app);
     await request(app.getHttpServer())
       .post('/api/app-versions')
       .set('Authorization', `Bearer ${token}`)
@@ -160,7 +122,7 @@ describe('AppVersions (e2e)', () => {
   });
 
   it('PATCH /api/app-versions/:id updates fields (admin)', async () => {
-    const { token } = await seedAdmin(app);
+    const { token } = await createPlatformAdmin(app);
     const created = await request(app.getHttpServer())
       .post('/api/app-versions')
       .set('Authorization', `Bearer ${token}`)
@@ -181,7 +143,7 @@ describe('AppVersions (e2e)', () => {
   });
 
   it('GET /api/app-versions/latest returns the newest active version for a platform', async () => {
-    const { token } = await seedAdmin(app);
+    const { token } = await createPlatformAdmin(app);
     // Older mobile release
     await request(app.getHttpServer())
       .post('/api/app-versions')
@@ -225,7 +187,7 @@ describe('AppVersions (e2e)', () => {
   it('GET /api/app-versions/latest falls back to the next-newest after a bad release is deleted', async () => {
     // This table is a signal, not history: a bad release gets deleted
     // rather than deactivated. `latest` reads the newest remaining row.
-    const { token } = await seedAdmin(app);
+    const { token } = await createPlatformAdmin(app);
     const newer = await request(app.getHttpServer())
       .post('/api/app-versions')
       .set('Authorization', `Bearer ${token}`)
@@ -269,7 +231,7 @@ describe('AppVersions (e2e)', () => {
   });
 
   it('DELETE /api/app-versions/:id removes the row (admin)', async () => {
-    const { token } = await seedAdmin(app);
+    const { token } = await createPlatformAdmin(app);
     const created = await request(app.getHttpServer())
       .post('/api/app-versions')
       .set('Authorization', `Bearer ${token}`)

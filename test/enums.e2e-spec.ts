@@ -22,7 +22,13 @@ describe('Enums (e2e)', () => {
 
   // Every registered enum endpoint at once — catches a route pointing at an
   // unregistered key (404 from the lookup helper) the moment it's introduced.
-  it.each(['roles', 'app-platforms', 'device-types', 'device-oses'])(
+  it.each([
+    'role-scopes',
+    'permission-ownerships',
+    'app-platforms',
+    'device-types',
+    'device-oses',
+  ])(
     'GET /api/enums/%s is public, revalidatable, and returns sorted options',
     async (path) => {
       const res = await request(app.getHttpServer())
@@ -54,7 +60,13 @@ describe('Enums (e2e)', () => {
       .get('/api/enums')
       .expect(200);
     const body = res.body as Record<string, EnumOption[]>;
-    for (const key of ['role', 'appPlatform', 'deviceType', 'deviceOs']) {
+    for (const key of [
+      'roleScope',
+      'permissionOwnership',
+      'appPlatform',
+      'deviceType',
+      'deviceOs',
+    ]) {
       expect(Array.isArray(body[key])).toBe(true);
       expect(body[key].length).toBeGreaterThan(0);
     }
@@ -77,21 +89,21 @@ describe('Enums (e2e)', () => {
 
   it('emits an ETag and 304s on a matching If-None-Match (cheap revalidation)', async () => {
     const first = await request(app.getHttpServer())
-      .get('/api/enums/roles')
+      .get('/api/enums/role-scopes')
       .expect(200);
     const etag = first.headers['etag'] as string | undefined;
     expect(etag).toBeDefined();
 
     // A conditional re-fetch with the same ETag revalidates to a bodyless 304.
     const revalidated = await request(app.getHttpServer())
-      .get('/api/enums/roles')
+      .get('/api/enums/role-scopes')
       .set('If-None-Match', etag!)
       .expect(304);
     expect(revalidated.body).toEqual({});
 
     // A stale/mismatched ETag gets the full list back (200 with a body).
     const stale = await request(app.getHttpServer())
-      .get('/api/enums/roles')
+      .get('/api/enums/role-scopes')
       .set('If-None-Match', '"stale-etag"')
       .expect(200);
     expect(Array.isArray(stale.body)).toBe(true);

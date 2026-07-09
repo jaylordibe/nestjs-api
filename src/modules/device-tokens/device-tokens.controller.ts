@@ -10,7 +10,6 @@ import {
   Patch,
   Post,
   Query,
-  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -21,12 +20,11 @@ import {
 import { ApiPaginatedResponse } from '../../common/decorators/api-paginated-response.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
-import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentAbility } from '../../common/decorators/current-ability.decorator';
+import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { MetaQueryDto } from '../../common/dto/meta-query.dto';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
-import { Role } from '../../common/enums/role.enum';
-import { RolesGuard } from '../../common/guards/roles.guard';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import type { AppAbility } from '../../common/authorization/app-ability';
 import { CreateDeviceTokenDto } from './dto/create-device-token.dto';
 import { DeviceTokenResponseDto } from './dto/device-token-response.dto';
 import { UpdateDeviceTokenDto } from './dto/update-device-token.dto';
@@ -35,28 +33,32 @@ import { DeviceTokensService } from './device-tokens.service';
 @ApiTags('Device Tokens')
 @ApiBearerAuth()
 @Controller('device-tokens')
-@UseGuards(JwtAuthGuard, RolesGuard)
 export class DeviceTokensController {
   constructor(private readonly deviceTokensService: DeviceTokensService) {}
 
   @Post()
-  @Roles(Role.ADMIN)
+  @RequirePermission('create', 'DeviceToken')
   @ApiCreatedResponse({ type: DeviceTokenResponseDto })
   async create(
     @Body() dto: CreateDeviceTokenDto,
     @CurrentUser() current: AuthenticatedUser,
+    @CurrentAbility() ability: AppAbility,
   ): Promise<DeviceTokenResponseDto> {
-    const row = await this.deviceTokensService.create(dto, current.id);
+    const row = await this.deviceTokensService.create(dto, ability, current.id);
     return new DeviceTokenResponseDto(row);
   }
 
   @Get()
-  @Roles(Role.ADMIN)
+  @RequirePermission('read', 'DeviceToken')
   @ApiPaginatedResponse(DeviceTokenResponseDto)
   async findPaginated(
     @Query() query: MetaQueryDto,
+    @CurrentAbility() ability: AppAbility,
   ): Promise<PaginatedResponseDto<DeviceTokenResponseDto>> {
-    const { data, meta } = await this.deviceTokensService.findPaginated(query);
+    const { data, meta } = await this.deviceTokensService.findPaginated(
+      query,
+      ability,
+    );
     return {
       data: data.map((row) => new DeviceTokenResponseDto(row)),
       meta,
@@ -64,34 +66,42 @@ export class DeviceTokensController {
   }
 
   @Get(':id')
-  @Roles(Role.ADMIN)
+  @RequirePermission('read', 'DeviceToken')
   @ApiOkResponse({ type: DeviceTokenResponseDto })
   async findOne(
     @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentAbility() ability: AppAbility,
   ): Promise<DeviceTokenResponseDto> {
-    const row = await this.deviceTokensService.findById(id);
+    const row = await this.deviceTokensService.findById(id, ability);
     return new DeviceTokenResponseDto(row);
   }
 
   @Patch(':id')
-  @Roles(Role.ADMIN)
+  @RequirePermission('update', 'DeviceToken')
   @ApiOkResponse({ type: DeviceTokenResponseDto })
   async update(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateDeviceTokenDto,
     @CurrentUser() current: AuthenticatedUser,
+    @CurrentAbility() ability: AppAbility,
   ): Promise<DeviceTokenResponseDto> {
-    const row = await this.deviceTokensService.update(id, dto, current.id);
+    const row = await this.deviceTokensService.update(
+      id,
+      dto,
+      ability,
+      current.id,
+    );
     return new DeviceTokenResponseDto(row);
   }
 
   @Delete(':id')
-  @Roles(Role.ADMIN)
+  @RequirePermission('delete', 'DeviceToken')
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(
     @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() current: AuthenticatedUser,
+    @CurrentAbility() ability: AppAbility,
   ): Promise<void> {
-    await this.deviceTokensService.remove(id, current.id);
+    await this.deviceTokensService.remove(id, ability, current.id);
   }
 }

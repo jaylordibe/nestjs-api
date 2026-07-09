@@ -191,10 +191,16 @@ docker compose --profile migrate run --rm --build migrate
 docker compose up -d --build api web
 docker compose up -d caddy
 
-# Seed the database (first deploy only). Runs on the `migrate` service, NOT
-# `api`: the seeder is `ts-node prisma/seed.ts`, and the pruned api runtime
+# Seed the BOOTSTRAP USERS (first deploy only). Runs on the `migrate` service,
+# NOT `api`: the seeder is `ts-node prisma/seed.ts`, and the pruned api runtime
 # image has no ts-node / prisma CLI / source. The migrate service uses the
 # Dockerfile `build` target, which has them. Reads SEED_* from .env.
+#
+# NOTE: the authorization catalog (permissions + system roles) is NOT seeded
+# here. It is projected by `yarn rbac:sync`, which the `migrate` service already
+# runs on EVERY deploy — the api refuses to boot if the catalog and the database
+# disagree, so it cannot be a manual step. `prisma:seed` re-runs `rbac:sync`
+# internally, so running it here is harmless.
 docker compose --profile migrate run --rm migrate yarn prisma:seed
 
 # Smoke test:

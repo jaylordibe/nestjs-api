@@ -4,7 +4,6 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { AuthenticatedUser } from '../../../common/decorators/current-user.decorator';
 import { Errors } from '../../../common/errors/errors';
-import { Role } from '../../../common/enums/role.enum';
 import { RedisService } from '../../../common/redis/redis.service';
 import { UsersService } from '../../users/users.service';
 
@@ -95,10 +94,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       }
     }
 
+    // No roles or permissions here. `PermissionsGuard` derives the caller's
+    // ability from the database (cached in Redis, explicitly invalidated on
+    // every role change), so a revoked role takes effect on the next request
+    // rather than at token expiry — which, with a 30-day JWT, would be far too
+    // late.
     return {
       id: user.id,
       email: user.email,
-      role: user.role as Role,
       jti: payload.jti,
       exp: payload.exp,
     };

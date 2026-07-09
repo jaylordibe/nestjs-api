@@ -2,7 +2,6 @@ import { ApiHideProperty } from '@nestjs/swagger';
 import { Exclude } from 'class-transformer';
 import { User } from '@prisma/client';
 import { Gender } from '../../../common/enums/gender.enum';
-import { Role } from '../../../common/enums/role.enum';
 
 export class UserResponseDto {
   id!: string;
@@ -24,7 +23,6 @@ export class UserResponseDto {
   lastName!: string;
   username!: string | null;
   email!: string;
-  role!: Role;
   @ApiHideProperty() @Exclude() emailVerifiedAt!: Date | null;
   phoneNumber!: string | null;
   phoneNumberVerifiedAt!: Date | null;

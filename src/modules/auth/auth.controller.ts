@@ -8,7 +8,6 @@ import {
   Post,
   Query,
   Res,
-  UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -20,8 +19,10 @@ import {
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
+import { AuthenticatedOnly } from '../../common/decorators/authenticated-only.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import { Public } from '../../common/decorators/public.decorator';
 import { OperationAcknowledgementDto } from '../../common/dto/operation-acknowledgement.dto';
 import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
@@ -32,7 +33,6 @@ import { RegisterDto } from './dto/register.dto';
 import { RegisterResponseDto } from './dto/register-response.dto';
 import { ResendVerificationDto } from './dto/resend-verification.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
-import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -44,6 +44,7 @@ export class AuthController {
   ) {}
 
   @Post('register')
+  @Public()
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @ApiCreatedResponse({ type: RegisterResponseDto })
   register(@Body() dto: RegisterDto): Promise<RegisterResponseDto> {
@@ -51,6 +52,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @Public()
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOkResponse({ type: LoginResponseDto })
@@ -61,6 +63,7 @@ export class AuthController {
   // POST form — for frontends that extract the token from the email link
   // and submit it via JSON.
   @Post('verify-email')
+  @Public()
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOkResponse({ type: EmailVerificationResponseDto })
@@ -80,6 +83,7 @@ export class AuthController {
   // `passthrough: false` (the @Res default) — we own the response fully,
   // not letting Nest serialize anything.
   @Get('verify-email')
+  @Public()
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @ApiResponse({
     status: HttpStatus.FOUND,
@@ -112,6 +116,7 @@ export class AuthController {
   // Resend the verification link. Strictly throttled and silent about
   // whether the email exists or is already verified — always 200.
   @Post('resend-verification')
+  @Public()
   @Throttle({ default: { limit: 3, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOkResponse({ type: OperationAcknowledgementDto })
@@ -125,8 +130,8 @@ export class AuthController {
   // Revoke the exact token this request arrived on. Other sessions (other
   // devices) stay active. Client should also discard its local copy.
   @Post('logout')
+  @AuthenticatedOnly()
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.NO_CONTENT)
   async logout(@CurrentUser() current: AuthenticatedUser): Promise<void> {
     await this.authService.logout(current);
@@ -136,8 +141,8 @@ export class AuthController {
   // via the passwordChangedAt mechanism. Use when the user suspects their
   // account is compromised but isn't ready to change their password yet.
   @Post('logout-all')
+  @AuthenticatedOnly()
   @ApiBearerAuth()
-  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.NO_CONTENT)
   async logoutAll(@CurrentUser() current: AuthenticatedUser): Promise<void> {
     await this.authService.logoutAll(current.id);

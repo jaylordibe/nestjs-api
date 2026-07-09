@@ -141,7 +141,12 @@ services:
         GIT_SHA: ${GIT_SHA:-unknown}
     image: ${SERVICE_NAME}-migrate:latest
     profiles: ['migrate']
-    command: yarn prisma:deploy
+    # Schema, then authorization catalog. BOTH are required before the api
+    # container can boot: it refuses to start when the permission catalog in
+    # the code and the rows in the database disagree. `rbac:sync` is idempotent
+    # and needs only DATABASE_URL — unlike `prisma:seed`, which also creates the
+    # bootstrap users and therefore needs SEED_*.
+    command: sh -c "yarn prisma:deploy && yarn rbac:sync"
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}?schema=public

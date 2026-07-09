@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Prisma, User } from '@prisma/client';
+import { packRules } from '@casl/ability/extra';
+import type { AppAbility } from '../../common/authorization/app-ability';
 import * as bcrypt from 'bcrypt';
 import { buildOrderBy, MetaQueryDto } from '../../common/dto/meta-query.dto';
 import { PaginationMeta } from '../../common/dto/paginated-response.dto';
@@ -10,6 +12,7 @@ import { Errors } from '../../common/errors/errors';
 import { EmailService } from '../../common/email/email.service';
 import { SmsService } from '../../common/sms/sms.service';
 import { OtpPurpose } from '../../common/enums/otp-purpose.enum';
+import { SeededRoleName } from '../../common/enums/seeded-role-name.enum';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
@@ -17,6 +20,7 @@ import { UpdateAuthUserEmailDto } from './dto/update-auth-user-email.dto';
 import { UpdateAuthUserInfoDto } from './dto/update-auth-user-info.dto';
 import { UpdateAuthUserPasswordDto } from './dto/update-auth-user-password.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UserPermissionsResponseDto } from './dto/user-permissions-response.dto';
 import { VerifyAuthUserPhoneDto } from './dto/verify-auth-user-phone.dto';
 
 // OWASP 2024+ guidance. Bumping this is safe — existing hashes already
@@ -27,8 +31,8 @@ const OTP_EXPIRY_MS = 15 * 60 * 1000;
 function generateOtp(): string {
   // 6 digits, zero-padded. Brute-force risk is bounded by the 15-min expiry
   // window and the global throttle on verify/reset endpoints.
-  const n = Math.floor(Math.random() * 1_000_000);
-  return n.toString().padStart(6, '0');
+  const sixDigitValue = Math.floor(Math.random() * 1_000_000);
+  return sixDigitValue.toString().padStart(6, '0');
 }
 
 @Injectable()
@@ -88,10 +92,10 @@ export class UsersService {
         user.firstName,
         new Date(),
       );
-    } catch (err) {
+    } catch (error) {
       this.logger.warn(
         `Failed to send password-change notification to ${user.email}: ${
-          err instanceof Error ? err.message : String(err)
+          error instanceof Error ? error.message : String(error)
         }`,
       );
     }
@@ -135,35 +139,88 @@ export class UsersService {
 
   async create(dto: CreateUserDto, actorId: string | null): Promise<User> {
     const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
-    const user = await this.prisma.user.create({
-      data: {
-        email: dto.email.toLowerCase(),
-        username: dto.username?.toLowerCase(),
-        password: passwordHash,
-        passwordChangedAt: new Date(),
-        firstName: dto.firstName,
-        middleName: dto.middleName,
-        lastName: dto.lastName,
-        phoneNumber: dto.phoneNumber,
-        gender: dto.gender,
-        birthday: dto.birthday,
-        timezone: dto.timezone,
-        profileImageUrl: dto.profileImageUrl,
-        role: dto.role,
-        createdBy: actorId,
-        updatedBy: actorId,
-      },
+    // The user row and its PLATFORM_USER assignment are one atomic unit. A
+    // user without that role holds no permissions at all — they could not even
+    // read their own profile — so a partial write here would produce a broken
+    // account. Covers both self-signup and admin-initiated creates.
+    const user = await this.prisma.$transaction(async (transaction) => {
+      const created = await transaction.user.create({
+        data: {
+          email: dto.email.toLowerCase(),
+          username: dto.username?.toLowerCase(),
+          password: passwordHash,
+          passwordChangedAt: new Date(),
+          firstName: dto.firstName,
+          middleName: dto.middleName,
+          lastName: dto.lastName,
+          phoneNumber: dto.phoneNumber,
+          gender: dto.gender,
+          birthday: dto.birthday,
+          timezone: dto.timezone,
+          profileImageUrl: dto.profileImageUrl,
+          createdBy: actorId,
+          updatedBy: actorId,
+        },
+      });
+
+      const platformUserRole = await transaction.role.findUniqueOrThrow({
+        where: { name: SeededRoleName.PLATFORM_USER },
+        select: { id: true },
+      });
+      await transaction.userRole.create({
+        data: {
+          userId: created.id,
+          roleId: platformUserRole.id,
+          createdBy: actorId,
+        },
+      });
+
+      return created;
     });
+
     // Only audit admin-initiated creates; self-signup has no actor.
     if (actorId) {
       await this.auditService.record({
         action: 'user.created.by_admin',
         actorId,
         targetUserId: user.id,
-        metadata: { email: user.email, role: user.role },
+        metadata: { email: user.email },
       });
     }
     return user;
+  }
+
+  /**
+   * The caller's own authorization, as packed CASL rules plus the role names
+   * behind them. Consumed by `GET /users/me/permissions` so a client can
+   * evaluate `can(...)` locally and reach the same verdict the server will.
+   */
+  async getOwnPermissions(
+    userId: string,
+    ability: AppAbility,
+  ): Promise<UserPermissionsResponseDto> {
+    const user = await this.prisma.scoped.user.findUnique({
+      where: { id: userId },
+      select: {
+        userRoles: { select: { role: { select: { name: true } } } },
+        businessMembers: {
+          select: { businessId: true, role: { select: { name: true } } },
+        },
+      },
+    });
+
+    return new UserPermissionsResponseDto({
+      // `packRules` compresses each rule to a positional tuple. The client
+      // restores it with `unpackRules` — the shape is CASL's, not ours.
+      rules: packRules(ability.rules) as unknown[],
+      platformRoles: (user?.userRoles ?? []).map(
+        (userRole) => userRole.role.name,
+      ),
+      businessMemberships: (user?.businessMembers ?? []).map((membership) => ({
+        businessId: membership.businessId,
+        roleName: membership.role.name,
+      })),
+    });
   }
 
   async findPaginated(
@@ -226,8 +283,13 @@ export class UsersService {
     return this.prisma.scoped.user.findUnique({ where: { id } });
   }
 
+  // `findFirst`, not `findUnique`: `email` is unique only among live rows (a
+  // partial index), and Prisma cannot see a partial index — so `email` is not a
+  // unique selector and `findUnique` would not type-check. The scoped client
+  // filters `deletedAt: null`, which is exactly the set the partial index makes
+  // unique, so `findFirst` returns at most one row.
   findByEmail(email: string): Promise<User | null> {
-    return this.prisma.scoped.user.findUnique({
+    return this.prisma.scoped.user.findFirst({
       where: { email: email.toLowerCase() },
     });
   }
@@ -250,7 +312,7 @@ export class UsersService {
   ): Promise<User> {
     await this.findById(id);
 
-    const data: Prisma.UserUpdateInput = {
+    const updateData: Prisma.UserUpdateInput = {
       email: dto.email?.toLowerCase(),
       username: dto.username?.toLowerCase(),
       firstName: dto.firstName,
@@ -261,24 +323,27 @@ export class UsersService {
       birthday: dto.birthday,
       timezone: dto.timezone,
       profileImageUrl: dto.profileImageUrl,
-      role: dto.role,
       isActive: dto.isActive,
       updatedBy: actorId,
     };
 
     if (dto.password) {
-      data.password = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
-      data.passwordChangedAt = new Date();
+      updateData.password = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
+      updateData.passwordChangedAt = new Date();
     }
 
-    const updated = await this.prisma.user.update({ where: { id }, data });
+    const updated = await this.prisma.user.update({
+      where: { id },
+      data: updateData,
+    });
     if (actorId && actorId !== id) {
       await this.auditService.record({
         action: 'user.updated.by_admin',
         actorId,
         targetUserId: id,
         metadata: {
-          roleChanged: dto.role !== undefined,
+          // Role changes no longer travel through this endpoint — they have
+          // their own audited routes (`POST/DELETE /users/:userId/roles`).
           isActiveChanged: dto.isActive !== undefined,
           passwordChanged: Boolean(dto.password),
         },

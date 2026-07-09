@@ -80,6 +80,16 @@ export const Errors = {
       errorCode: ErrorCode.ADMIN_SELF_TARGET_FORBIDDEN,
       message,
     }),
+  // The CASL authorization refusal. The message is deliberately identical for
+  // every action/subject pair — `details` carries the specifics for debugging
+  // and for clients that want to explain the refusal, but the prose never
+  // reveals whether the *resource* exists.
+  permissionDenied: (action: string, subject?: string): ForbiddenException =>
+    new ForbiddenException({
+      errorCode: ErrorCode.PERMISSION_DENIED,
+      message: 'You do not have permission to perform this action',
+      details: subject ? { action, subject } : { action },
+    }),
 
   // ── 400 ────────────────────────────────────────────────────────────
   validationFailed: (
@@ -118,6 +128,14 @@ export const Errors = {
     new BadRequestException({
       errorCode: ErrorCode.VALIDATION_FAILED,
       message,
+    }),
+  // A business-scoped permission was checked, but the request never named a
+  // business. 400 rather than 403: the caller may well be authorized, they
+  // just didn't say where.
+  businessContextMissing: (): BadRequestException =>
+    new BadRequestException({
+      errorCode: ErrorCode.BUSINESS_CONTEXT_MISSING,
+      message: 'A business context is required for this action',
     }),
 
   // ── 404 / 409 ──────────────────────────────────────────────────────

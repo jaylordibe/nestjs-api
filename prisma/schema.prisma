@@ -7,51 +7,258 @@ datasource db {
 }
 
 model User {
-  id                String    @id @default(uuid()) @db.Uuid
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
-  createdBy         String?   @db.Uuid
-  updatedBy         String?   @db.Uuid
-  deletedAt         DateTime?
-  deletedBy         String?   @db.Uuid
-  isActive          Boolean   @default(true)
-  firstName         String
-  middleName        String?
-  lastName          String
-  username          String?   @unique
-  email             String    @unique
-  password          String
-  passwordChangedAt DateTime?
-  failedLoginCount  Int       @default(0)
-  lockedUntil       DateTime?
-  role              String    @default("user")
-  otpHash           String?
-  otpPurpose        String?
-  otpExpiresAt      DateTime?
-  emailVerifiedAt   DateTime?
+  id                    String    @id @default(uuid()) @db.Uuid
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+  createdBy             String?   @map("created_by") @db.Uuid
+  updatedBy             String?   @map("updated_by") @db.Uuid
+  deletedAt             DateTime? @map("deleted_at")
+  deletedBy             String?   @map("deleted_by") @db.Uuid
+  isActive              Boolean   @default(true) @map("is_active")
+  firstName             String    @map("first_name")
+  middleName            String?   @map("middle_name")
+  lastName              String    @map("last_name")
+  // Unique among LIVE rows only, via partial indexes declared in the init
+  // migration (`WHERE deleted_at IS NULL`). A plain @unique would let a
+  // soft-deleted account hold its email/username hostage forever. Prisma
+  // cannot express a partial unique index, so these must NOT carry @unique
+  // or migrate would manage a conflicting full index. Look them up with
+  // `findFirst`, never `findUnique`.
+  //
+  // Why not `@@unique([email, deletedAt])` to get `findUnique` back? Because in
+  // SQL `NULL != NULL`: Postgres treats every live row's (email, NULL) as
+  // distinct, so that constraint would accept TWO live users with the same
+  // email while still reporting `indisunique = true`. Silent, and worse than
+  // the type error it avoids. `UNIQUE ... NULLS NOT DISTINCT` (PG 15+) fixes it
+  // but Prisma never emits it, so migrate would fight you forever.
+  //
+  // And `findFirst` costs nothing: `WHERE email = $1 AND deleted_at IS NULL`
+  // is an index scan on the partial index (3 buffers over 20k rows). It is the
+  // same plan `findUnique` would produce. Dropping the `deletedAt` predicate —
+  // i.e. using the raw client — is what turns it into a seq scan.
+  username              String?
+  email                 String
+  password              String
+  passwordChangedAt     DateTime? @map("password_changed_at")
+  failedLoginCount      Int       @default(0) @map("failed_login_count")
+  lockedUntil           DateTime? @map("locked_until")
+  otpHash               String?   @map("otp_hash")
+  otpPurpose            String?   @map("otp_purpose")
+  otpExpiresAt          DateTime? @map("otp_expires_at")
+  emailVerifiedAt       DateTime? @map("email_verified_at")
   // `phoneNumber` may be set without verification (e.g. via admin
   // create or `PATCH /users/me/phone`); `phoneNumberVerifiedAt` is
   // stamped only when the OTP flow completes (POST
   // /users/me/request-phone-verification → PATCH /users/me/verify-phone).
   // Plain phone updates clear the verifiedAt — the new number hasn't
   // been proven owned, so any prior verified state is no longer valid.
-  phoneNumber       String?
-  phoneNumberVerifiedAt DateTime?
-  gender            String?
-  profileImageUrl   String?
-  birthday          DateTime? @db.Date
-  timezone          String?
+  phoneNumber           String?   @map("phone_number")
+  phoneNumberVerifiedAt DateTime? @map("phone_number_verified_at")
+  gender                String?
+  profileImageUrl       String?   @map("profile_image_url")
+  birthday              DateTime? @db.Date
+  timezone              String?
 
-  deviceTokens DeviceToken[]
+  deviceTokens      DeviceToken[]
+  // PLATFORM-scope role assignments. BUSINESS-scope roles live on
+  // `businessMembers` instead — a database constraint keeps the two from
+  // crossing over (see `user_roles.scope` / `business_members.scope`).
+  userRoles         UserRole[]
+  businessMembers   BusinessMember[]
+  // Customer relationships. NOT an authorization role — a customer of a
+  // business is a relationship, not authority over it. See
+  // src/common/authorization/README.md.
+  businessCustomers BusinessCustomer[]
 
   @@map("users")
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Authorization (RBAC + CASL)
+//
+// `roles` and `permissions` are a projection of
+// `src/common/authorization/permission-catalog.ts`. Never hand-edit seeded
+// rows: the app refuses to boot when the catalog and the database disagree.
+//
+// A permission row records WHAT (action + subject) and never a condition.
+// `AbilityFactory` derives the WHERE from `scope` + `ownership` + request
+// context. That is why there is no `condition` column here.
+// ─────────────────────────────────────────────────────────────────────────
+
+model Business {
+  id          String    @id @default(uuid()) @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  createdBy   String?   @map("created_by") @db.Uuid
+  updatedBy   String?   @map("updated_by") @db.Uuid
+  deletedAt   DateTime? @map("deleted_at")
+  deletedBy   String?   @map("deleted_by") @db.Uuid
+  name        String
+  // Unique among live rows only, via a partial index (`WHERE deleted_at IS
+  // NULL`) declared in the init migration — Prisma cannot express a partial
+  // unique index, so it must NOT carry `@unique` here or migrate would try to
+  // manage a conflicting full index. Look it up with `findFirst`, not
+  // `findUnique`.
+  slug        String
+  description String?
+  isActive    Boolean   @default(true) @map("is_active")
+
+  members   BusinessMember[]
+  customers BusinessCustomer[]
+
+  @@map("businesses")
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String?  @map("created_by") @db.Uuid
+  updatedBy   String?  @map("updated_by") @db.Uuid
+  name        String   @unique
+  scope       String
+  // Orders roles for the privilege-escalation guard ONLY: you may never
+  // assign a role whose rank is >= your own. It does NOT imply inherited
+  // permissions — each role's grants are explicit in the catalog.
+  rank        Int
+  description String?
+  // Seeded, catalog-owned roles. Immutable through the API; their permission
+  // sets are reconciled by `yarn prisma:seed`.
+  isSystem    Boolean  @default(false) @map("is_system")
+
+  permissions     RolePermission[]
+  userRoles       UserRole[]
+  businessMembers BusinessMember[]
+
+  // FK target for the scope-integrity constraint on the two assignment
+  // tables. Lets `user_roles` reference `(roleId, 'platform')` so a
+  // business role can never be assigned platform-wide, and vice versa.
+  @@unique([id, scope])
+  @@index([scope])
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  // Derived slug, e.g. `platform.user.update.own`. See `permissionName()`.
+  name        String   @unique
+  action      String
+  subject     String
+  scope       String
+  ownership   String
+  description String
+
+  roles RolePermission[]
+
+  @@unique([scope, action, subject, ownership])
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String   @id @default(uuid()) @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+  createdBy    String?  @map("created_by") @db.Uuid
+  roleId       String   @map("role_id") @db.Uuid
+  permissionId String   @map("permission_id") @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  id        String   @id @default(uuid()) @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+  createdBy String?  @map("created_by") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  roleId    String   @map("role_id") @db.Uuid
+  // Constant discriminator, not a free field. Together with the composite FK
+  // below and a CHECK constraint in the migration, it makes assigning a
+  // BUSINESS role platform-wide a database error rather than a code bug.
+  scope     String   @default("platform")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Restrict, not Cascade: deleting a role must never silently strip people's
+  // access. It fails loudly until every holder is reassigned.
+  role Role @relation(fields: [roleId, scope], references: [id, scope], onDelete: Restrict)
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@map("user_roles")
+}
+
+model BusinessMember {
+  id         String   @id @default(uuid()) @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  createdBy  String?  @map("created_by") @db.Uuid
+  updatedBy  String?  @map("updated_by") @db.Uuid
+  businessId String   @map("business_id") @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  roleId     String   @map("role_id") @db.Uuid
+  scope      String   @default("business")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role     Role     @relation(fields: [roleId, scope], references: [id, scope], onDelete: Restrict)
+
+  // One role per user per business. A user needing two sets of powers gets a
+  // custom role, not a second membership row.
+  @@unique([businessId, userId])
+  @@index([userId])
+  @@index([businessId])
+  @@map("business_members")
+}
+
+// A person who buys from a business.
+//
+// Deliberately NOT a `business_members` row and NOT a role. A customer holds no
+// authority over the business; everything they do acts on their OWN records.
+// Modelling them as members would collide with `business_members`'
+// one-role-per-user constraint (a stylist could never book at their own salon),
+// and would mix a ten-row staff roster with a hundred-thousand-row customer
+// list.
+//
+// This is the first subject that is BOTH ownable (by the customer, via
+// `userId`) and tenant-scoped (by the business, via `businessId`). See
+// SUBJECT_OWNER_KEY / SUBJECT_TENANT_KEY.
+//
+// A customer is an ordinary `User` with PLATFORM_USER, so they log in through
+// the same `/auth/login` as everyone else. One account, many businesses.
+model BusinessCustomer {
+  id         String   @id @default(uuid()) @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  createdBy  String?  @map("created_by") @db.Uuid
+  updatedBy  String?  @map("updated_by") @db.Uuid
+  businessId String   @map("business_id") @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  // Staff-visible annotation on the relationship (preferences, allergies…).
+  // Never written by the customer themselves.
+  notes      String?
+  isActive   Boolean  @default(true) @map("is_active")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // One customer record per person per business. Unlike `business_members`,
+  // this does not restrict the same person from being staff here too.
+  @@unique([businessId, userId])
+  @@index([userId])
+  @@index([businessId])
+  @@map("business_customers")
+}
+
 model AuditLog {
   id           String   @id @default(uuid()) @db.Uuid
-  createdAt    DateTime @default(now())
-  actorId      String?  @db.Uuid
-  targetUserId String?  @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+  actorId      String?  @map("actor_id") @db.Uuid
+  targetUserId String?  @map("target_user_id") @db.Uuid
   action       String
   metadata     Json?
 
@@ -69,16 +276,16 @@ model AuditLog {
 
 model AppVersion {
   id          String   @id @default(uuid()) @db.Uuid
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  createdBy   String?  @db.Uuid
-  updatedBy   String?  @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String?  @map("created_by") @db.Uuid
+  updatedBy   String?  @map("updated_by") @db.Uuid
   version     String
   description String?
   platform    String
-  releaseDate DateTime
-  downloadUrl String?
-  forceUpdate Boolean  @default(false)
+  releaseDate DateTime @map("release_date")
+  downloadUrl String?  @map("download_url")
+  forceUpdate Boolean  @default(false) @map("force_update")
 
   @@unique([platform, version])
   @@index([platform, releaseDate])
@@ -87,16 +294,16 @@ model AppVersion {
 
 model DeviceToken {
   id              String   @id @default(uuid()) @db.Uuid
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  createdBy       String?  @db.Uuid
-  updatedBy       String?  @db.Uuid
-  userId          String   @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  createdBy       String?  @map("created_by") @db.Uuid
+  updatedBy       String?  @map("updated_by") @db.Uuid
+  userId          String   @map("user_id") @db.Uuid
   token           String   @unique
-  appPlatform     String
-  deviceType      String
-  deviceOs        String
-  deviceOsVersion String
+  appPlatform     String   @map("app_platform")
+  deviceType      String   @map("device_type")
+  deviceOs        String   @map("device_os")
+  deviceOsVersion String   @map("device_os_version")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

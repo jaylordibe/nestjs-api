@@ -10,7 +10,6 @@ import {
   Patch,
   Post,
   Query,
-  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -20,16 +19,15 @@ import {
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { ApiPaginatedResponse } from '../../common/decorators/api-paginated-response.decorator';
+import { AuthenticatedOnly } from '../../common/decorators/authenticated-only.decorator';
+import { CurrentAbility } from '../../common/decorators/current-ability.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { MetaQueryDto } from '../../common/dto/meta-query.dto';
 import { OperationAcknowledgementDto } from '../../common/dto/operation-acknowledgement.dto';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { Public } from '../../common/decorators/public.decorator';
-import { Role } from '../../common/enums/role.enum';
-import { Roles } from '../../common/decorators/roles.decorator';
-import { RolesGuard } from '../../common/guards/roles.guard';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
 import { GdprEraseDto } from './dto/gdpr-erase.dto';
 import { RequestPasswordResetDto } from './dto/request-password-reset.dto';
@@ -43,6 +41,8 @@ import { UpdateAuthUserProfileImageDto } from './dto/update-auth-user-profile-im
 import { UpdateAuthUsernameDto } from './dto/update-auth-username.dto';
 import { UpdatePasswordDto } from './dto/update-password.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import type { AppAbility } from '../../common/authorization/app-ability';
+import { UserPermissionsResponseDto } from './dto/user-permissions-response.dto';
 import { UserResponseDto } from './dto/user-response.dto';
 import { VerifyAuthUserPhoneDto } from './dto/verify-auth-user-phone.dto';
 import { UsersService } from './users.service';
@@ -50,7 +50,6 @@ import { UsersService } from './users.service';
 @ApiTags('Users')
 @ApiBearerAuth()
 @Controller('users')
-@UseGuards(JwtAuthGuard, RolesGuard)
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
@@ -83,7 +82,21 @@ export class UsersController {
   // and /users/me/request-email-verification endpoints were removed
   // when the OTP flow was replaced with a JWT link.
 
+  // `@AuthenticatedOnly()`: the caller is asking what THEY may do. There is no
+  // subject to check a permission against — gating this behind a permission
+  // would mean inventing one that every role must hold, which gates nothing.
+  @Get('me/permissions')
+  @AuthenticatedOnly()
+  @ApiOkResponse({ type: UserPermissionsResponseDto })
+  async getAuthUserPermissions(
+    @CurrentUser() currentUser: AuthenticatedUser,
+    @CurrentAbility() ability: AppAbility,
+  ): Promise<UserPermissionsResponseDto> {
+    return this.usersService.getOwnPermissions(currentUser.id, ability);
+  }
+
   @Get('me')
+  @RequirePermission('read', 'User')
   @ApiOkResponse({ type: UserResponseDto })
   async getAuthUser(
     @CurrentUser() current: AuthenticatedUser,
@@ -93,6 +106,7 @@ export class UsersController {
   }
 
   @Patch('me')
+  @RequirePermission('update', 'User')
   @ApiOkResponse({ type: UserResponseDto })
   async updateAuthUserInfo(
     @Body() dto: UpdateAuthUserInfoDto,
@@ -107,6 +121,7 @@ export class UsersController {
   }
 
   @Delete('me')
+  @RequirePermission('delete', 'User')
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteAuthUser(
     @CurrentUser() current: AuthenticatedUser,
@@ -119,6 +134,7 @@ export class UsersController {
   // can stay for FK integrity without carrying identifying data. Requires
   // re-auth via currentPassword to prevent stolen-token erasure.
   @Post('me/gdpr-erase')
+  @RequirePermission('delete', 'User')
   @HttpCode(HttpStatus.NO_CONTENT)
   async gdprErase(
     @Body() dto: GdprEraseDto,
@@ -131,6 +147,7 @@ export class UsersController {
   // Extend this as new tables are added (bookings, messages, etc.) so the
   // dump stays complete.
   @Get('me/export')
+  @RequirePermission('read', 'User')
   @ApiOkResponse({ type: UserResponseDto })
   async exportAuthUser(
     @CurrentUser() current: AuthenticatedUser,
@@ -140,6 +157,7 @@ export class UsersController {
   }
 
   @Patch('me/username')
+  @RequirePermission('update', 'User')
   @ApiOkResponse({ type: UserResponseDto })
   async updateAuthUsername(
     @Body() dto: UpdateAuthUsernameDto,
@@ -154,6 +172,7 @@ export class UsersController {
   }
 
   @Patch('me/email')
+  @RequirePermission('update', 'User')
   @ApiOkResponse({ type: UserResponseDto })
   async updateAuthUserEmail(
     @Body() dto: UpdateAuthUserEmailDto,
@@ -168,6 +187,7 @@ export class UsersController {
   }
 
   @Patch('me/password')
+  @RequirePermission('update', 'User')
   @ApiOkResponse({ type: UserResponseDto })
   async updateAuthUserPassword(
     @Body() dto: UpdateAuthUserPasswordDto,
@@ -182,6 +202,7 @@ export class UsersController {
   }
 
   @Patch('me/profile-image')
+  @RequirePermission('update', 'User')
   @ApiOkResponse({ type: UserResponseDto })
   async updateAuthUserProfileImage(
     @Body() dto: UpdateAuthUserProfileImageDto,
@@ -200,6 +221,7 @@ export class UsersController {
   // (matches the password-reset request) to limit abuse of the SMS
   // provider's send budget.
   @Post('me/request-phone-verification')
+  @RequirePermission('update', 'User')
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @ApiOkResponse({ type: OperationAcknowledgementDto })
@@ -220,6 +242,7 @@ export class UsersController {
   // 5/60s/IP — a 6-digit OTP with a 15-min expiry needs the rate limit to
   // bound brute-force on the verify endpoint.
   @Patch('me/verify-phone')
+  @RequirePermission('update', 'User')
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @ApiOkResponse({ type: UserResponseDto })
   async verifyAuthUserPhone(
@@ -238,6 +261,7 @@ export class UsersController {
   // clears `phoneNumberVerifiedAt` so the row no longer claims a verified
   // phone. Use the OTP flow above when you need verification.
   @Patch('me/phone')
+  @RequirePermission('update', 'User')
   @ApiOkResponse({ type: UserResponseDto })
   async updateAuthUserPhone(
     @Body() dto: UpdateAuthUserPhoneDto,
@@ -252,7 +276,7 @@ export class UsersController {
   }
 
   @Post()
-  @Roles(Role.ADMIN)
+  @RequirePermission('create', 'User', { administrative: true })
   @ApiCreatedResponse({ type: UserResponseDto })
   async create(
     @Body() dto: CreateUserDto,
@@ -263,7 +287,7 @@ export class UsersController {
   }
 
   @Get()
-  @Roles(Role.ADMIN)
+  @RequirePermission('read', 'User', { administrative: true })
   @ApiPaginatedResponse(UserResponseDto)
   async findPaginated(
     @Query() query: MetaQueryDto,
@@ -276,7 +300,7 @@ export class UsersController {
   }
 
   @Get(':id')
-  @Roles(Role.ADMIN)
+  @RequirePermission('read', 'User', { administrative: true })
   @ApiOkResponse({ type: UserResponseDto })
   async findOne(
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -286,7 +310,7 @@ export class UsersController {
   }
 
   @Patch(':id')
-  @Roles(Role.ADMIN)
+  @RequirePermission('update', 'User', { administrative: true })
   @ApiOkResponse({ type: UserResponseDto })
   async update(
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -298,7 +322,7 @@ export class UsersController {
   }
 
   @Patch(':id/password')
-  @Roles(Role.ADMIN)
+  @RequirePermission('resetPassword', 'User', { administrative: true })
   @ApiOkResponse({ type: UserResponseDto })
   async updatePassword(
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -314,7 +338,7 @@ export class UsersController {
   }
 
   @Delete(':id')
-  @Roles(Role.ADMIN)
+  @RequirePermission('delete', 'User', { administrative: true })
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(
     @Param('id', new ParseUUIDPipe()) id: string,

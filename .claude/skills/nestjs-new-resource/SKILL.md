@@ -5,6 +5,26 @@ description: Use when adding or scaffolding a new CRUD resource/module (controll
 
 # New resource (canonical pattern)
 
+## Authorization is not optional
+
+Every handler must declare exactly one of `@Public()`, `@AuthenticatedOnly()`,
+or `@RequirePermission(action, subject)` — the app **refuses to boot** otherwise
+(`RouteAuthorizationAuditService`). `JwtAuthGuard` / `PermissionsGuard` are
+global; never put them on a controller.
+
+A new subject means: add it to `AUTHORIZATION_SUBJECTS`, define its permissions
+in `PERMISSION_CATALOG`, grant them in `ROLE_DEFINITION_CATALOG`, run
+`yarn rbac:sync`. If it is business-scoped, also register its tenant key in
+`SUBJECT_TENANT_KEY` and its `WhereInput` in `AbilityScopedQueryService`, and
+scope every read through that service.
+
+Scope lists and record lookups by the caller's ability, never by inspecting a
+role. Unreachable record → **404**; reachable but forbidden action → **403**.
+
+Load the `nestjs-authorization` skill before writing any of it. Contract:
+`src/common/authorization/README.md`.
+
+
 Every new resource follows the **users** pattern exactly. Copy-paste code skeletons live in `docs/resource-pattern.md` — this skill holds the rules and rationale; refer to that file for the literal code.
 
 ## Required schema columns (physical order)

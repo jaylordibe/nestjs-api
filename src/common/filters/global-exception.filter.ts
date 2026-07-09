@@ -62,7 +62,7 @@ const HTTP_REASON: Record<number, string> = {
   [HttpStatus.SERVICE_UNAVAILABLE]: 'Service Unavailable',
 };
 
-// Untagged HttpExceptions (e.g. Nest's RolesGuard ForbiddenException, the
+// Untagged HttpExceptions (e.g. a bare framework ForbiddenException, the
 // throttler, or the default ValidationPipe BadRequestException) fall back
 // to a sensible code based on HTTP status, so clients still get a
 // programmable contract for every error the framework itself raises.

@@ -27,11 +27,17 @@ import { FileStorageModule } from './common/storage/file-storage.module';
 import configuration from './config/configuration';
 import { envValidationSchema } from './config/env.validation';
 import { PrismaModule } from './prisma/prisma.module';
+import { PermissionsGuard } from './modules/authorization/guards/permissions.guard';
 import { AppVersionsModule } from './modules/app-versions/app-versions.module';
+import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
+import { AuthorizationModule } from './modules/authorization/authorization.module';
+import { BusinessesModule } from './modules/businesses/businesses.module';
 import { DeviceTokensModule } from './modules/device-tokens/device-tokens.module';
 import { EnumsModule } from './modules/enums/enums.module';
 import { HealthModule } from './modules/health/health.module';
+import { RolesModule } from './modules/roles/roles.module';
 import { PublicModule } from './modules/public/public.module';
 import { UsersModule } from './modules/users/users.module';
 
@@ -224,8 +230,12 @@ import { UsersModule } from './modules/users/users.module';
     AuditModule,
     FileStorageModule,
     ScheduledJobsModule,
+    AuthorizationModule,
     AuthModule,
     UsersModule,
+    RolesModule,
+    BusinessesModule,
+    AuditLogsModule,
     AppVersionsModule,
     DeviceTokensModule,
     EnumsModule,
@@ -233,7 +243,19 @@ import { UsersModule } from './modules/users/users.module';
     PublicModule,
   ],
   providers: [
+    // Guard order is the execution order. Throttle before authenticating (an
+    // unauthenticated flood must not reach the database), authenticate before
+    // authorizing (PermissionsGuard needs `request.user`).
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Authentication is now GLOBAL. Every handler requires a valid JWT unless
+    // it carries `@Public()`. Controllers no longer apply JwtAuthGuard
+    // themselves.
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
+    // Authorization is global and fails closed: a handler with no @Public() /
+    // @AuthenticatedOnly() / @RequirePermission() is denied. The boot-time
+    // RouteAuthorizationAuditService stops the app from starting at all in
+    // that case, so this is defence in depth.
+    { provide: APP_GUARD, useClass: PermissionsGuard },
     {
       provide: APP_PIPE,
       useValue: new ValidationPipe({

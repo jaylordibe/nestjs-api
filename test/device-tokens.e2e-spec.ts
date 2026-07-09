@@ -1,54 +1,14 @@
 import { INestApplication } from '@nestjs/common';
-import * as bcrypt from 'bcrypt';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { createTestApp } from './setup/test-app';
 import { truncateAll } from './setup/db';
-
-const PASSWORD = 'correct-horse-battery-1';
-
-async function seedAdmin(
-  app: INestApplication<App>,
-): Promise<{ id: string; token: string }> {
-  const prisma = app.get(PrismaService);
-  const admin = await prisma.user.create({
-    data: {
-      email: 'admin@example.com',
-      password: await bcrypt.hash(PASSWORD, 10),
-      firstName: 'Admin',
-      lastName: 'User',
-      role: 'admin',
-      emailVerifiedAt: new Date(),
-    },
-  });
-  const res = await request(app.getHttpServer())
-    .post('/api/auth/login')
-    .send({ identifier: 'admin@example.com', password: PASSWORD });
-  return { id: admin.id, token: res.body.accessToken as string };
-}
-
-async function registerUser(
-  app: INestApplication<App>,
-  email: string,
-): Promise<{ id: string; token: string }> {
-  await request(app.getHttpServer()).post('/api/auth/register').send({
-    email,
-    password: PASSWORD,
-    firstName: 'Regular',
-    lastName: 'User',
-  });
-  const prisma = app.get(PrismaService);
-  const row = await prisma.user.findUniqueOrThrow({ where: { email } });
-  await prisma.user.update({
-    where: { id: row.id },
-    data: { emailVerifiedAt: new Date() },
-  });
-  const login = await request(app.getHttpServer())
-    .post('/api/auth/login')
-    .send({ identifier: email, password: PASSWORD });
-  return { id: row.id, token: login.body.accessToken as string };
-}
+import {
+  createPlatformAdmin,
+  createRegularUser,
+  seedRbacCatalog,
+} from './setup/rbac';
 
 describe('DeviceTokens (e2e)', () => {
   let app: INestApplication<App>;
@@ -59,14 +19,18 @@ describe('DeviceTokens (e2e)', () => {
 
   beforeEach(async () => {
     await truncateAll(app);
+    // truncateAll wipes roles/permissions; nothing authorizes without them.
+    await seedRbacCatalog(app);
   });
 
   afterAll(async () => {
     await app.close();
   });
 
-  it('POST /api/device-tokens rejects non-admin with 403', async () => {
-    const user = await registerUser(app, 'user@example.com');
+  // A registered user holds `manage DeviceToken (own)` via PLATFORM_USER, so
+  // they may register their own push token — but only their own.
+  it('POST /api/device-tokens lets a user register their OWN token', async () => {
+    const user = await createRegularUser(app, 'user@example.com');
     await request(app.getHttpServer())
       .post('/api/device-tokens')
       .set('Authorization', `Bearer ${user.token}`)
@@ -78,12 +42,31 @@ describe('DeviceTokens (e2e)', () => {
         deviceOs: 'ios',
         deviceOsVersion: '17.1',
       })
+      .expect(201);
+  });
+
+  it('POST /api/device-tokens forbids registering a token for ANOTHER user', async () => {
+    const user = await createRegularUser(app, 'user@example.com');
+    const victim = await createRegularUser(app, 'victim@example.com');
+    const res = await request(app.getHttpServer())
+      .post('/api/device-tokens')
+      .set('Authorization', `Bearer ${user.token}`)
+      .send({
+        userId: victim.id,
+        token: 'fcm-token-attack',
+        appPlatform: 'mobile',
+        deviceType: 'smartphone',
+        deviceOs: 'ios',
+        deviceOsVersion: '17.1',
+      })
       .expect(403);
+    const body = res.body as { errorCode: string };
+    expect(body.errorCode).toBe('PERMISSION_DENIED');
   });
 
   it('POST /api/device-tokens creates a device token (admin)', async () => {
-    const admin = await seedAdmin(app);
-    const user = await registerUser(app, 'owner@example.com');
+    const admin = await createPlatformAdmin(app);
+    const user = await createRegularUser(app, 'owner@example.com');
     const res = await request(app.getHttpServer())
       .post('/api/device-tokens')
       .set('Authorization', `Bearer ${admin.token}`)
@@ -107,8 +90,8 @@ describe('DeviceTokens (e2e)', () => {
   });
 
   it('POST /api/device-tokens rejects invalid enum values with 400', async () => {
-    const admin = await seedAdmin(app);
-    const user = await registerUser(app, 'invalid@example.com');
+    const admin = await createPlatformAdmin(app);
+    const user = await createRegularUser(app, 'invalid@example.com');
     await request(app.getHttpServer())
       .post('/api/device-tokens')
       .set('Authorization', `Bearer ${admin.token}`)
@@ -124,8 +107,8 @@ describe('DeviceTokens (e2e)', () => {
   });
 
   it('POST /api/device-tokens rejects duplicate token with 409', async () => {
-    const admin = await seedAdmin(app);
-    const user = await registerUser(app, 'dup@example.com');
+    const admin = await createPlatformAdmin(app);
+    const user = await createRegularUser(app, 'dup@example.com');
     const payload = {
       userId: user.id,
       token: 'duplicate-token',
@@ -147,7 +130,7 @@ describe('DeviceTokens (e2e)', () => {
   });
 
   it('POST /api/device-tokens rejects dangling userId with 400 (FK)', async () => {
-    const admin = await seedAdmin(app);
+    const admin = await createPlatformAdmin(app);
     await request(app.getHttpServer())
       .post('/api/device-tokens')
       .set('Authorization', `Bearer ${admin.token}`)
@@ -163,8 +146,8 @@ describe('DeviceTokens (e2e)', () => {
   });
 
   it('GET /api/device-tokens is paginated (admin)', async () => {
-    const admin = await seedAdmin(app);
-    const user = await registerUser(app, 'list@example.com');
+    const admin = await createPlatformAdmin(app);
+    const user = await createRegularUser(app, 'list@example.com');
     for (let i = 0; i < 3; i++) {
       await request(app.getHttpServer())
         .post('/api/device-tokens')
@@ -193,8 +176,8 @@ describe('DeviceTokens (e2e)', () => {
   });
 
   it('PATCH /api/device-tokens/:id updates fields (admin)', async () => {
-    const admin = await seedAdmin(app);
-    const user = await registerUser(app, 'patch@example.com');
+    const admin = await createPlatformAdmin(app);
+    const user = await createRegularUser(app, 'patch@example.com');
     const created = await request(app.getHttpServer())
       .post('/api/device-tokens')
       .set('Authorization', `Bearer ${admin.token}`)
@@ -216,8 +199,8 @@ describe('DeviceTokens (e2e)', () => {
   });
 
   it('DELETE /api/device-tokens/:id removes the row (admin)', async () => {
-    const admin = await seedAdmin(app);
-    const user = await registerUser(app, 'delete@example.com');
+    const admin = await createPlatformAdmin(app);
+    const user = await createRegularUser(app, 'delete@example.com');
     const created = await request(app.getHttpServer())
       .post('/api/device-tokens')
       .set('Authorization', `Bearer ${admin.token}`)
@@ -246,8 +229,8 @@ describe('DeviceTokens (e2e)', () => {
     // fire through the API. This test verifies the cascade is still wired
     // correctly at the DB level — it'll matter for any retention job that
     // eventually hard-deletes long-soft-deleted users.
-    const admin = await seedAdmin(app);
-    const user = await registerUser(app, 'cascade@example.com');
+    const admin = await createPlatformAdmin(app);
+    const user = await createRegularUser(app, 'cascade@example.com');
     const prisma = app.get(PrismaService);
     await request(app.getHttpServer())
       .post('/api/device-tokens')

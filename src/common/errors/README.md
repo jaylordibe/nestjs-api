@@ -75,7 +75,7 @@ The `TOKEN_*` / `SESSION_INVALIDATED` / `USER_INACTIVE` cluster is the only set 
 
 | Code | Trigger |
 |---|---|
-| `INSUFFICIENT_ROLE` | `RolesGuard` rejected (user authenticated but lacks required role). |
+| `INSUFFICIENT_ROLE` | Generic 403 fallback for a bare framework `ForbiddenException`. Application code should emit `PERMISSION_DENIED` instead — it names the refused action and subject. |
 | `ADMIN_SELF_TARGET_FORBIDDEN` | Admin trying an operation that's refused against themselves (e.g. `PATCH /users/:id/password` when `:id === self.id`). |
 
 ### Validation / bad input (HTTP 400)
@@ -114,5 +114,25 @@ The `TOKEN_*` / `SESSION_INVALIDATED` / `USER_INACTIVE` cluster is the only set 
 ## Internal — for contributors
 
 - **Never construct `BadRequestException` / `NotFoundException` / `ConflictException` / `UnauthorizedException` / `ForbiddenException` / `ServiceUnavailableException` directly** outside `src/common/errors/`. ESLint enforces this (`no-restricted-syntax`). Use `Errors.*` so every throw flows through the standard envelope with a meaningful code.
-- The default status→code fallback in `GlobalExceptionFilter` keeps framework throws safe (Nest's RolesGuard 403, the throttler 429, the default ValidationPipe 400 all still get a programmable `errorCode`), but application code should always go through the factory.
+- The default status→code fallback in `GlobalExceptionFilter` keeps framework throws safe (a bare 403, the throttler 429, the default ValidationPipe 400 all still get a programmable `errorCode`), but application code should always go through the factory.
 - Tests should assert `body.errorCode`, not `body.message`. Messages are free to rotate; codes are the contract.
+
+
+## Authorization codes (added with the RBAC + CASL layer)
+
+| code | status | `details` | meaning |
+|---|---|---|---|
+| `PERMISSION_DENIED` | 403 | `{ action, subject? }` | Authenticated, but no CASL rule grants this action on this subject. Emitted by `PermissionsGuard` and by service-layer `assertCan`. |
+| `BUSINESS_CONTEXT_MISSING` | 400 | — | A business-scoped permission was checked but the request never named a business (no `:businessId` route param, no `businessId` in the body). |
+| `INSUFFICIENT_ROLE` | 403 | — | Legacy generic 403; still emitted when a bare `ForbiddenException` reaches the global filter. Prefer `PERMISSION_DENIED`, which names what was refused. |
+
+**Neither new code triggers client auto-logout.** The token is perfectly valid;
+the caller simply lacks authority. Only the `TOKEN_*` / `SESSION_INVALIDATED` /
+`USER_INACTIVE` cluster clears credentials.
+
+### Why a cross-tenant read is 404, not 403
+
+Tenant isolation happens in the query (`accessibleBy`), so another business's
+record is never loaded and surfaces as `RESOURCE_NOT_FOUND`. A 403 there would
+confirm the record exists. A 403 is reserved for "you can see it, but you may
+not do this to it". See `src/common/authorization/README.md`.

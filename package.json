@@ -1,7 +1,7 @@
 {
   "name": "nestjs-api",
   "version": "1.0.0",
-  "description": "Production-grade NestJS 11 + Prisma 7 + PostgreSQL + Redis API template. Auth with email verification, RBAC, soft-delete, audit log, GDPR erase, Swagger docs, and 81 e2e tests out of the box.",
+  "description": "Production-grade NestJS 11 + Prisma 7 + PostgreSQL + Redis API template. Auth with email verification, DB-backed RBAC + CASL over platform and business scopes, multi-tenant isolation, soft-delete, audit log, GDPR erase, Swagger docs, and 163 e2e tests out of the box.",
   "author": "Jay Ibe",
   "license": "MIT",
   "repository": {
@@ -43,10 +43,14 @@
     "prisma:reset": "prisma migrate reset --force",
     "prisma:deploy": "prisma migrate deploy",
     "prisma:seed": "prisma db seed",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "rbac:sync": "ts-node --transpile-only prisma/scripts/sync-permission-catalog.ts",
+    "rbac:check": "ts-node --transpile-only prisma/scripts/check-permission-catalog.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.726.0",
+    "@casl/ability": "^7.0.1",
+    "@casl/prisma": "^2.0.2",
     "@nest-lab/throttler-storage-redis": "^1.2.0",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.4",

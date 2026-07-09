@@ -1,5 +1,4 @@
 import { Gender } from '../../../common/enums/gender.enum';
-import { Role } from '../../../common/enums/role.enum';
 import { Type } from 'class-transformer';
 import {
   IsDate,
@@ -89,8 +88,4 @@ export class CreateUserDto {
   @IsUrl({ require_protocol: true })
   @MaxLength(2048)
   profileImageUrl?: string;
-
-  @IsOptional()
-  @IsEnum(Role)
-  role?: Role;
 }

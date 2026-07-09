@@ -17,6 +17,7 @@ import { PrismaHealthIndicator } from './indicators/prisma.health';
 // matches your deploy time confirms the container actually restarted.
 const PROCESS_BOOT_TIME = new Date().toISOString();
 
+import { Public } from '../../common/decorators/public.decorator';
 @ApiTags('Health')
 @Controller('health')
 @SkipThrottle()
@@ -29,6 +30,7 @@ export class HealthController {
   ) {}
 
   @Get('liveness')
+  @Public()
   @HealthCheck()
   liveness(): Promise<HealthCheckResult> {
     const indicators: HealthIndicatorFunction[] = [];
@@ -48,6 +50,7 @@ export class HealthController {
   }
 
   @Get('readiness')
+  @Public()
   @HealthCheck()
   readiness(): Promise<HealthCheckResult> {
     return this.health.check([() => this.prismaHealth.pingCheck('database')]);
@@ -62,6 +65,7 @@ export class HealthController {
   // container — usually because `docker compose up -d` ran without
   // `--build`, or layer caching reused a stale `dist/`.
   @Get('version')
+  @Public()
   @ApiOkResponse({ type: HealthVersionResponseDto })
   version(): HealthVersionResponseDto {
     return {

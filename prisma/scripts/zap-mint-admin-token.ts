@@ -26,6 +26,7 @@ import { expand } from 'dotenv-expand';
 import * as dotenv from 'dotenv';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
+import { SeededRoleName } from '../../src/common/enums/seeded-role-name.enum';
 import * as jwt from 'jsonwebtoken';
 
 // Load .env (with ${VAR} expansion) before touching process.env, matching
@@ -45,7 +46,7 @@ async function main(): Promise<void> {
   const prisma = new PrismaClient({ adapter });
   try {
     const email = 'zap-scanner@scan.invalid';
-    // email has no unique constraint on the soft-delete model, so find-or-create
+    // `email` is unique only among live rows (partial index), so find-or-create
     // rather than upsert. Idempotent across re-runs against the same DB.
     const existing = await prisma.user.findFirst({ where: { email } });
     const admin =
@@ -58,18 +59,33 @@ async function main(): Promise<void> {
           // Auth is via the minted token, not login — password is never used,
           // but the column is NOT NULL. Placeholder, not a valid credential.
           password: 'zap-scan-no-login',
-          role: 'admin',
           isActive: true,
           // Verified so email-gated endpoints are in scope for the scan.
           emailVerifiedAt: new Date(),
         },
       }));
 
-    const token = jwt.sign(
-      { sub: admin.id, email: admin.email, role: admin.role },
-      secret,
-      { issuer: serviceName, audience: serviceName, expiresIn: '6h' },
-    );
+    // Authorization comes from `user_roles`, not from a token claim, so the
+    // scanner's account must actually hold PLATFORM_ADMIN for admin routes to
+    // be in scope. Idempotent.
+    const platformAdminRole = await prisma.role.findUniqueOrThrow({
+      where: { name: SeededRoleName.PLATFORM_ADMIN },
+      select: { id: true },
+    });
+    await prisma.userRole.upsert({
+      where: { userId_roleId: { userId: admin.id, roleId: platformAdminRole.id } },
+      create: { userId: admin.id, roleId: platformAdminRole.id },
+      update: {},
+    });
+
+    // The JWT carries identity only. `JwtStrategy` re-reads the user and
+    // `PermissionsGuard` re-derives permissions from the database on every
+    // request, so a `role` claim here would be decorative — and misleading.
+    const token = jwt.sign({ sub: admin.id, email: admin.email }, secret, {
+      issuer: serviceName,
+      audience: serviceName,
+      expiresIn: '6h',
+    });
 
     process.stderr.write(`[zap] minted admin token for ${admin.id}\n`);
     process.stdout.write(token);

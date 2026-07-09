@@ -5,78 +5,24 @@ import { App } from 'supertest/types';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { createTestApp } from './setup/test-app';
 import { truncateAll } from './setup/db';
+import {
+  createPlatformAdmin,
+  registerAndLogin,
+  seedRbacCatalog,
+} from './setup/rbac';
 
 const PASSWORD = 'correct-horse-battery-1';
-
-async function loginAs(
-  app: INestApplication<App>,
-  email: string,
-  password: string,
-): Promise<string> {
-  const res = await request(app.getHttpServer())
-    .post('/api/auth/login')
-    .send({ identifier: email, password });
-  return res.body.accessToken as string;
-}
-
-async function seedAdmin(
-  app: INestApplication<App>,
-  email = 'admin@example.com',
-): Promise<{ id: string; token: string }> {
-  const prisma = app.get(PrismaService);
-  const admin = await prisma.user.create({
-    data: {
-      email,
-      password: await bcrypt.hash(PASSWORD, 10),
-      firstName: 'Admin',
-      lastName: 'User',
-      role: 'admin',
-      // Admin rows are seeded straight into the DB (bypassing the
-      // register flow), so set emailVerifiedAt here — otherwise login
-      // would be blocked by the new verification gate.
-      emailVerifiedAt: new Date(),
-    },
-  });
-  const token = await loginAs(app, email, PASSWORD);
-  return { id: admin.id, token };
-}
 
 // Register, mark the row emailVerifiedAt=now directly (test shortcut —
 // production flow would click the email link), then log in. Returns the
 // resulting access token and the user id. Every test that needs a
 // logged-in session routes through this helper so the production
 // verification gate is exercised identically across the suite.
-async function registerAndToken(
-  app: INestApplication<App>,
-  email = 'user@example.com',
-): Promise<{ id: string; token: string }> {
-  // Register returns only { message } now — look the user up by email
-  // to grab the id, then verify + login. The lookup is intentionally
-  // done via prisma (not via any API) because there's no authenticated
-  // path to the user's own id until after login.
-  await request(app.getHttpServer()).post('/api/auth/register').send({
-    email,
-    password: PASSWORD,
-    firstName: 'Regular',
-    lastName: 'User',
-  });
-  const prisma = app.get(PrismaService);
-  const row = await prisma.user.findUniqueOrThrow({ where: { email } });
-  await prisma.user.update({
-    where: { id: row.id },
-    data: { emailVerifiedAt: new Date() },
-  });
-  const login = await request(app.getHttpServer())
-    .post('/api/auth/login')
-    .send({ identifier: email, password: PASSWORD });
-  return { id: row.id, token: login.body.accessToken as string };
-}
-
 async function registerUser(
   app: INestApplication<App>,
   email = 'user@example.com',
 ): Promise<string> {
-  const { token } = await registerAndToken(app, email);
+  const { token } = await registerAndLogin(app, email);
   return token;
 }
 
@@ -89,6 +35,7 @@ describe('Users (e2e)', () => {
 
   beforeEach(async () => {
     await truncateAll(app);
+    await seedRbacCatalog(app);
   });
 
   afterAll(async () => {
@@ -111,7 +58,7 @@ describe('Users (e2e)', () => {
 
   describe('self-service', () => {
     it('GET /api/users/me returns the authenticated user', async () => {
-      const { token } = await registerAndToken(app, 'me@example.com');
+      const { token } = await registerAndLogin(app, 'me@example.com');
       const res = await request(app.getHttpServer())
         .get('/api/users/me')
         .set('Authorization', `Bearer ${token}`)
@@ -125,7 +72,7 @@ describe('Users (e2e)', () => {
     });
 
     it('PATCH /api/users/me updates allowed profile fields only', async () => {
-      const { token } = await registerAndToken(app);
+      const { token } = await registerAndLogin(app);
       const res = await request(app.getHttpServer())
         .patch('/api/users/me')
         .set('Authorization', `Bearer ${token}`)
@@ -143,7 +90,7 @@ describe('Users (e2e)', () => {
     });
 
     it('DELETE /api/users/me soft-deletes (deletedAt + deletedBy set, isActive untouched) and blocks login', async () => {
-      const { id, token } = await registerAndToken(app, 'self-del@example.com');
+      const { id, token } = await registerAndLogin(app, 'self-del@example.com');
       await request(app.getHttpServer())
         .delete('/api/users/me')
         .set('Authorization', `Bearer ${token}`)
@@ -171,7 +118,7 @@ describe('Users (e2e)', () => {
     });
 
     it('POST /api/users/me/gdpr-erase anonymizes PII and blocks login', async () => {
-      const { id, token } = await registerAndToken(app, 'erase@example.com');
+      const { id, token } = await registerAndLogin(app, 'erase@example.com');
 
       await request(app.getHttpServer())
         .post('/api/users/me/gdpr-erase')
@@ -195,7 +142,7 @@ describe('Users (e2e)', () => {
     });
 
     it('POST /api/users/me/gdpr-erase rejects wrong password with 401', async () => {
-      const { token } = await registerAndToken(app, 'wrong-erase@example.com');
+      const { token } = await registerAndLogin(app, 'wrong-erase@example.com');
       await request(app.getHttpServer())
         .post('/api/users/me/gdpr-erase')
         .set('Authorization', `Bearer ${token}`)
@@ -204,7 +151,7 @@ describe('Users (e2e)', () => {
     });
 
     it('PATCH /api/users/me/username changes username', async () => {
-      const { token } = await registerAndToken(app);
+      const { token } = await registerAndLogin(app);
       const res = await request(app.getHttpServer())
         .patch('/api/users/me/username')
         .set('Authorization', `Bearer ${token}`)
@@ -214,14 +161,14 @@ describe('Users (e2e)', () => {
     });
 
     it('PATCH /api/users/me/username returns 409 on duplicate', async () => {
-      const a = await registerAndToken(app, 'a@example.com');
+      const a = await registerAndLogin(app, 'a@example.com');
       await request(app.getHttpServer())
         .patch('/api/users/me/username')
         .set('Authorization', `Bearer ${a.token}`)
         .send({ username: 'taken' })
         .expect(200);
 
-      const b = await registerAndToken(app, 'b@example.com');
+      const b = await registerAndLogin(app, 'b@example.com');
       await request(app.getHttpServer())
         .patch('/api/users/me/username')
         .set('Authorization', `Bearer ${b.token}`)
@@ -230,7 +177,7 @@ describe('Users (e2e)', () => {
     });
 
     it('PATCH /api/users/me/email updates email and resets emailVerifiedAt', async () => {
-      const { id, token } = await registerAndToken(app, 'old@example.com');
+      const { id, token } = await registerAndLogin(app, 'old@example.com');
       // Pre-set emailVerifiedAt so we can assert it's cleared.
       const prisma = app.get(PrismaService);
       await prisma.user.update({
@@ -251,7 +198,7 @@ describe('Users (e2e)', () => {
     });
 
     it('PATCH /api/users/me/email rejects wrong current password with 401', async () => {
-      const { token } = await registerAndToken(app);
+      const { token } = await registerAndLogin(app);
       await request(app.getHttpServer())
         .patch('/api/users/me/email')
         .set('Authorization', `Bearer ${token}`)
@@ -263,7 +210,7 @@ describe('Users (e2e)', () => {
     });
 
     it('PATCH /api/users/me/password requires current password', async () => {
-      const { token } = await registerAndToken(app, 'pw@example.com');
+      const { token } = await registerAndLogin(app, 'pw@example.com');
       await request(app.getHttpServer())
         .patch('/api/users/me/password')
         .set('Authorization', `Bearer ${token}`)
@@ -286,7 +233,7 @@ describe('Users (e2e)', () => {
     });
 
     it('PATCH /api/users/me/profile-image updates the URL', async () => {
-      const { token } = await registerAndToken(app);
+      const { token } = await registerAndLogin(app);
       const res = await request(app.getHttpServer())
         .patch('/api/users/me/profile-image')
         .set('Authorization', `Bearer ${token}`)
@@ -299,7 +246,7 @@ describe('Users (e2e)', () => {
       // Re-auth gate (Phase C): a stolen JWT alone must not be able to
       // redirect the user's phone number — the kickoff requires the
       // current password, mirroring the email-change request endpoint.
-      const { id, token } = await registerAndToken(
+      const { id, token } = await registerAndLogin(
         app,
         'phone-bad@example.com',
       );
@@ -315,7 +262,7 @@ describe('Users (e2e)', () => {
     });
 
     it('phone-verification flow stamps phoneNumberVerifiedAt on a valid OTP', async () => {
-      const { id, token } = await registerAndToken(app, 'phone-ok@example.com');
+      const { id, token } = await registerAndLogin(app, 'phone-ok@example.com');
       const prisma = app.get(PrismaService);
       const phoneNumber = '+14155550111';
 
@@ -355,7 +302,7 @@ describe('Users (e2e)', () => {
     });
 
     it('PATCH /api/users/me/verify-phone rejects a wrong OTP with 400 (opaque)', async () => {
-      const { id, token } = await registerAndToken(
+      const { id, token } = await registerAndLogin(
         app,
         'phone-otp@example.com',
       );
@@ -378,7 +325,7 @@ describe('Users (e2e)', () => {
     });
 
     it('POST /api/users/request-password-reset always returns 200 (no enumeration)', async () => {
-      await registerAndToken(app, 'reset@example.com');
+      await registerAndLogin(app, 'reset@example.com');
       await request(app.getHttpServer())
         .post('/api/users/request-password-reset')
         .send({ email: 'reset@example.com' })
@@ -390,7 +337,7 @@ describe('Users (e2e)', () => {
     });
 
     it('POST /api/users/reset-password completes the flow with a valid OTP', async () => {
-      const { id } = await registerAndToken(app, 'flow@example.com');
+      const { id } = await registerAndLogin(app, 'flow@example.com');
       const prisma = app.get(PrismaService);
       const otp = '654321';
       await prisma.user.update({
@@ -421,7 +368,7 @@ describe('Users (e2e)', () => {
     });
 
     it('POST /api/users/reset-password rejects wrong OTP with 400', async () => {
-      const { id } = await registerAndToken(app, 'wrong-otp@example.com');
+      const { id } = await registerAndLogin(app, 'wrong-otp@example.com');
       const prisma = app.get(PrismaService);
       await prisma.user.update({
         where: { id },
@@ -442,7 +389,7 @@ describe('Users (e2e)', () => {
     });
 
     it('GET /api/users/me/export returns the user JSON', async () => {
-      const { token } = await registerAndToken(app, 'export@example.com');
+      const { token } = await registerAndLogin(app, 'export@example.com');
       const res = await request(app.getHttpServer())
         .get('/api/users/me/export')
         .set('Authorization', `Bearer ${token}`)
@@ -457,7 +404,7 @@ describe('Users (e2e)', () => {
     let adminId: string;
 
     beforeEach(async () => {
-      ({ id: adminId, token: adminToken } = await seedAdmin(app));
+      ({ id: adminId, token: adminToken } = await createPlatformAdmin(app));
     });
 
     it('GET /api/users returns a paginated list', async () => {
@@ -471,8 +418,10 @@ describe('Users (e2e)', () => {
       expect(res.body.data).toHaveLength(1);
       expect(res.body.data[0]).toMatchObject({
         email: 'admin@example.com',
-        role: 'admin',
       });
+      // `role` is gone from the user representation entirely — authorization
+      // lives in `user_roles` / `business_members`, never on the user row.
+      expect(res.body.data[0]).not.toHaveProperty('role');
       expect(res.body.data[0]).not.toHaveProperty('password');
     });
 
@@ -527,12 +476,10 @@ describe('Users (e2e)', () => {
           password: PASSWORD,
           firstName: 'New',
           lastName: 'Person',
-          role: 'user',
         })
         .expect(201);
       expect(res.body).toMatchObject({
         email: 'new@example.com',
-        role: 'user',
         isActive: true,
       });
       expect(res.body).not.toHaveProperty('password');
@@ -577,7 +524,7 @@ describe('Users (e2e)', () => {
         where: { id: created.body.id },
       });
 
-      const other = await seedAdmin(app, 'other-admin@example.com');
+      const other = await createPlatformAdmin(app, 'other-admin@example.com');
       await request(app.getHttpServer())
         .patch(`/api/users/${created.body.id}`)
         .set('Authorization', `Bearer ${other.token}`)
@@ -662,7 +609,7 @@ describe('Users (e2e)', () => {
     });
 
     it('old token is rejected after password change (H2)', async () => {
-      const { token } = await registerAndToken(app, 'rotate@example.com');
+      const { token } = await registerAndLogin(app, 'rotate@example.com');
       // Wait past a full second boundary so passwordChangedAt lands in a
       // strictly later second than the token's iat.
       await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -678,7 +625,7 @@ describe('Users (e2e)', () => {
     });
 
     it('PATCH /api/users/:id/password lets admin reset without current password', async () => {
-      const target = await registerAndToken(app, 'target@example.com');
+      const target = await registerAndLogin(app, 'target@example.com');
       await request(app.getHttpServer())
         .patch(`/api/users/${target.id}/password`)
         .set('Authorization', `Bearer ${adminToken}`)

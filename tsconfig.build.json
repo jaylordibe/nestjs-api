@@ -6,6 +6,12 @@
     "dist",
     "**/*spec.ts",
     "prisma.config.ts",
-    "prisma/seed.ts"
+    // The whole `prisma/` tree is ts-node territory: the seeder, the RBAC
+    // catalog projector, and the one-off admin scripts. Excluding only
+    // `seed.ts` used to be enough, but `rbac-seeder.ts` imports from `src/`,
+    // which drags `prisma/` into the program and widens TypeScript's inferred
+    // rootDir to the repo root — emitting `dist/src/main.js` and breaking
+    // `start:prod` (`node dist/main`).
+    "prisma"
   ]
 }

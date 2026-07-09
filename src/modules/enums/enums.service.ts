@@ -3,7 +3,8 @@ import { AppPlatform } from '../../common/enums/app-platform.enum';
 import { DeviceOs } from '../../common/enums/device-os.enum';
 import { DeviceType } from '../../common/enums/device-type.enum';
 import { EnumOptionMeta } from '../../common/enums/enum-option-meta';
-import { Role } from '../../common/enums/role.enum';
+import { PermissionOwnership } from '../../common/enums/permission-ownership.enum';
+import { RoleScope } from '../../common/enums/role-scope.enum';
 import { EnumOptionDto } from './dto/enum-option.dto';
 
 // Per-value metadata override (keyed by enum value). Optional 3rd registry tuple
@@ -22,7 +23,10 @@ const DEVICE_OS_META: EnumMeta = {
 // appending a row and a matching one-line `@Get` in the controller. Excludes
 // server-internal enums (e.g. OtpPurpose) that no client renders.
 const ENUM_REGISTRY: ReadonlyArray<readonly [string, object, EnumMeta?]> = [
-  ['role', Role],
+  // Roles are database rows now, not a TS enum — list them via `GET /roles`.
+  // What clients still need statically is the vocabulary around them.
+  ['roleScope', RoleScope],
+  ['permissionOwnership', PermissionOwnership],
   ['appPlatform', AppPlatform],
   ['deviceType', DeviceType],
   ['deviceOs', DeviceOs, DEVICE_OS_META],

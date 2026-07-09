@@ -5,6 +5,7 @@ import { App } from 'supertest/types';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { createTestApp } from './setup/test-app';
 import { truncateAll } from './setup/db';
+import { seedRbacCatalog } from './setup/rbac';
 
 const VALID_PASSWORD = 'correct-horse-battery-1';
 
@@ -17,8 +18,13 @@ async function markVerified(
   email: string,
 ): Promise<void> {
   const prisma = app.get(PrismaService);
-  await prisma.user.update({
+  // `email` is unique only among live rows (partial index), so it is not a
+  // Prisma unique selector — look the row up first, then update by id.
+  const user = await prisma.user.findFirstOrThrow({
     where: { email: email.toLowerCase() },
+  });
+  await prisma.user.update({
+    where: { id: user.id },
     data: { emailVerifiedAt: new Date() },
   });
 }
@@ -31,7 +37,7 @@ async function getUserIdByEmail(
   email: string,
 ): Promise<string> {
   const prisma = app.get(PrismaService);
-  const row = await prisma.user.findUniqueOrThrow({
+  const row = await prisma.user.findFirstOrThrow({
     where: { email: email.toLowerCase() },
   });
   return row.id;
@@ -46,6 +52,8 @@ describe('Auth (e2e)', () => {
 
   beforeEach(async () => {
     await truncateAll(app);
+    // Registration assigns PLATFORM_USER, so the catalog must exist first.
+    await seedRbacCatalog(app);
   });
 
   afterAll(async () => {
@@ -70,10 +78,9 @@ describe('Auth (e2e)', () => {
 
       // Row exists, unverified, with createdBy/updatedBy null.
       const prisma = app.get(PrismaService);
-      const row = await prisma.user.findUniqueOrThrow({
+      const row = await prisma.user.findFirstOrThrow({
         where: { email: 'alice@example.com' },
       });
-      expect(row.role).toBe('user');
       expect(row.isActive).toBe(true);
       expect(row.emailVerifiedAt).toBeNull();
       expect(row.createdBy).toBeNull();
@@ -91,7 +98,7 @@ describe('Auth (e2e)', () => {
         })
         .expect(201);
       const prisma = app.get(PrismaService);
-      const row = await prisma.user.findUniqueOrThrow({
+      const row = await prisma.user.findFirstOrThrow({
         where: { email: 'mixed@example.com' },
       });
       expect(row.email).toBe('mixed@example.com');
@@ -206,8 +213,11 @@ describe('Auth (e2e)', () => {
       // Register doesn't set a username; assign one directly so we can prove
       // the email-OR-username lookup resolves the username branch too.
       const prisma = app.get(PrismaService);
-      await prisma.user.update({
+      const bob = await prisma.user.findFirstOrThrow({
         where: { email: 'bob@example.com' },
+      });
+      await prisma.user.update({
+        where: { id: bob.id },
         data: { username: 'bobby' },
       });
       await request(app.getHttpServer())
@@ -596,7 +606,6 @@ describe('Auth (e2e)', () => {
       expect(res.body).toMatchObject({
         email: 'carol@example.com',
         firstName: 'Carol',
-        role: 'user',
         isActive: true,
       });
       expect(res.body).not.toHaveProperty('password');

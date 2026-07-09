@@ -8,6 +8,7 @@ import {
 import { CacheRevalidate } from '../../common/decorators/cache-revalidate.decorator';
 import { Errors } from '../../common/errors/errors';
 import { EnumOptionDto } from './dto/enum-option.dto';
+import { Public } from '../../common/decorators/public.decorator';
 import { EnumsService } from './enums.service';
 
 // Serves the canonical option lists for client-facing enums so the frontend
@@ -30,6 +31,7 @@ export class EnumsController {
 
   // All enums in one call — convenient for the SPA to fetch once at startup.
   @Get()
+  @Public()
   @CacheRevalidate()
   @ApiExtraModels(EnumOptionDto)
   @ApiOkResponse({
@@ -47,14 +49,24 @@ export class EnumsController {
     return this.enumsService.getAll();
   }
 
-  @Get('roles')
+  @Get('role-scopes')
+  @Public()
   @CacheRevalidate()
   @ApiOkResponse({ type: EnumOptionDto, isArray: true })
-  getRoles(): EnumOptionDto[] {
-    return this.lookup('role');
+  getRoleScopes(): EnumOptionDto[] {
+    return this.lookup('roleScope');
+  }
+
+  @Get('permission-ownerships')
+  @Public()
+  @CacheRevalidate()
+  @ApiOkResponse({ type: EnumOptionDto, isArray: true })
+  getPermissionOwnerships(): EnumOptionDto[] {
+    return this.lookup('permissionOwnership');
   }
 
   @Get('app-platforms')
+  @Public()
   @CacheRevalidate()
   @ApiOkResponse({ type: EnumOptionDto, isArray: true })
   getAppPlatforms(): EnumOptionDto[] {
@@ -62,6 +74,7 @@ export class EnumsController {
   }
 
   @Get('device-types')
+  @Public()
   @CacheRevalidate()
   @ApiOkResponse({ type: EnumOptionDto, isArray: true })
   getDeviceTypes(): EnumOptionDto[] {
@@ -69,6 +82,7 @@ export class EnumsController {
   }
 
   @Get('device-oses')
+  @Public()
   @CacheRevalidate()
   @ApiOkResponse({ type: EnumOptionDto, isArray: true })
   getDeviceOses(): EnumOptionDto[] {

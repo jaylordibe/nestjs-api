@@ -27,6 +27,13 @@ export interface AppConfig {
     secret: string;
     expiresIn: string;
   };
+  authorization: {
+    // How long a user's compiled permission grants stay cached in Redis.
+    // This is a BACKSTOP, not the correctness mechanism: every role or
+    // membership change explicitly invalidates the affected key(s), so the
+    // TTL only bounds the damage from a missed invalidation.
+    grantsCacheTtlSeconds: number;
+  };
   email: {
     provider: 'stub' | 'resend';
     from: string | undefined;
@@ -99,6 +106,12 @@ export default (): AppConfig => ({
   jwt: {
     secret: process.env.JWT_SECRET!,
     expiresIn: process.env.JWT_EXPIRES_IN ?? '30d',
+  },
+  authorization: {
+    grantsCacheTtlSeconds: parseInt(
+      process.env.AUTHORIZATION_GRANTS_CACHE_TTL_SECONDS ?? '300',
+      10,
+    ),
   },
   email: {
     provider: (process.env.EMAIL_PROVIDER as 'stub' | 'resend') ?? 'stub',

@@ -22,6 +22,7 @@ import { PingResponseDto } from './dto/ping-response.dto';
 // public-data endpoints (places autocomplete, weather, public listings,
 // contact form, etc.). Anything that mutates user data or reads
 // user-specific data should stay behind JwtAuthGuard.
+import { Public } from '../../common/decorators/public.decorator';
 @ApiTags('Public')
 @Controller('public')
 @Throttle({ default: { limit: 10, ttl: 60_000 } })
@@ -31,6 +32,7 @@ export class PublicController {
   // a plain JSON shape. Tag in Swagger groups it under "Public" so the
   // docs page makes the boundary obvious to consumers.
   @Get('ping')
+  @Public()
   @ApiOkResponse({ type: PingResponseDto })
   ping(): PingResponseDto {
     return { ok: true, timestamp: new Date().toISOString() };

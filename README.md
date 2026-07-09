@@ -133,7 +133,7 @@ All routes under `/api`. See Swagger at `/api/docs` for full specs.
 - `POST /auth/resend-verification` — resends the link (always 200, no enumeration).
 - `POST /users/request-password-reset` — emails OTP.
 - `POST /users/reset-password` — consumes OTP, sets new password.
-- `GET|GET /app-versions`, `GET /app-versions/all`, `GET /app-versions/:id`, `GET /app-versions/latest?platform=mobile` — for mobile-app update-check flows.
+- `GET /app-versions` (paginated), `GET /app-versions/:id`, `GET /app-versions/latest?platform=mobile` — for mobile-app update-check flows.
 
 ### Authenticated (JWT)
 - `GET /auth/me` — current user.
@@ -142,10 +142,20 @@ All routes under `/api`. See Swagger at `/api/docs` for full specs.
 - `POST /users/me/gdpr-erase` — PII anonymization + deletion (requires `currentPassword`).
 - `PATCH /users/me/{username,email,password,profile-image}` — self-service profile updates.
 
-### Admin-only (`@Roles(Role.ADMIN)`)
+- `GET /users/me/permissions` — the caller's packed CASL rules, for client-side ability sync.
+- `POST|GET|PATCH|DELETE /device-tokens` — your own push tokens (a platform admin manages anyone's).
+
+### Multi-tenant (business scope)
+- `POST|GET|PATCH|DELETE /businesses` — any user may create one; the creator becomes its `BUSINESS_OWNER`.
+- `.../businesses/:businessId/members` — the staff roster. Rank-guarded: you may never grant a role above your own.
+- `.../businesses/:businessId/customers` — the customer list. A customer is a `User`, not a role; a staff member may also be a customer of their own business.
+
+### Administrative (platform scope)
 - `POST|GET|PATCH|DELETE /users` + `/users/:id` + `/users/:id/password` — full user management.
-- `POST|PATCH|DELETE /app-versions` + `/app-versions/:id` — release signal management.
-- `POST|GET|PATCH|DELETE /device-tokens` + `/device-tokens/:id` — push token management.
+- `POST|DELETE /users/:userId/roles` — grant/revoke a platform role.
+- `POST|GET|PATCH|DELETE /roles`, `GET /permissions` — custom roles; permissions are code-owned.
+- `GET /audit-logs` — the platform audit trail.
+- `POST|PATCH|DELETE /app-versions` — release signal management.
 
 ## Project layout
 
@@ -156,24 +166,29 @@ src/
   config/                    # configuration.ts (typed factory), env.validation.ts (Joi)
   prisma/                    # @Global PrismaService + soft-delete extension
   common/
-    decorators/              # Roles, CurrentUser, Public
-    dto/                     # PaginationQueryDto, PaginatedResponseDto<T>
-    enums/                   # Role, Gender, AppPlatform, DeviceType, DeviceOs, OtpPurpose
-    guards/                  # RolesGuard (reads Roles metadata)
-    filters/                 # AllExceptionsFilter + PrismaExceptionFilter
+    authorization/           # permission catalog (single source of truth), subject keys, AppAbility
+    decorators/              # RequirePermission, AuthenticatedOnly, Public, CurrentUser, CurrentAbility
+    dto/                     # MetaQueryDto, PaginatedResponseDto<T>
+    enums/                   # RoleScope, PermissionOwnership, SeededRoleName, Gender, AppPlatform, …
+    filters/                 # GlobalExceptionFilter (single unified filter)
     email/                   # EmailService, adapters (stub/resend), templates, template engine
     audit/                   # AuditService (@Global)
     redis/                   # RedisService (@Global, shared ioredis client)
   modules/
     auth/                    # AuthService, AuthController, JwtStrategy, JwtAuthGuard
+    authorization/           # @Global: AbilityFactory, grants cache, PermissionsGuard, boot-time gates
     users/                   # canonical resource — full CRUD + self-service + GDPR erase
+    roles/                   # roles (data) + permissions (code, read-only) + platform-role assignment
+    businesses/              # tenant resource + members (staff) + customers
+    audit-logs/              # read-only audit trail
     app-versions/            # mobile app version signal
     device-tokens/           # push notification tokens (FK to User, hard delete)
     health/                  # liveness + readiness
 prisma/
   schema.prisma              # models
-  migrations/                # DB migration history
-  seed.ts                    # env-driven admin + user seeder
+  migrations/                # a single `init` migration (a starter is a fork in time)
+  rbac-seeder.ts             # projects the permission catalog onto the DB (used by rbac:sync)
+  seed.ts                    # rbac-seeder + env-driven admin/demo users
 test/                        # e2e tests (real Postgres + Redis, no mocks)
 ```
 
@@ -188,7 +203,7 @@ See [`CLAUDE.md`](./CLAUDE.md) → **"Generating a new resource"** for the full 
 1. Add the model to `prisma/schema.prisma` with the standard columns (`id`, `createdAt`, `updatedAt`, `createdBy`, `updatedBy`, optionally `deletedAt`/`deletedBy` for soft delete, optionally `isActive` only when suspension is a distinct concept).
 2. Run `yarn prisma:migrate dev --name add_<resource>`.
 3. Scaffold `src/modules/<resource>/` with: `dto/` (Create + Update via `PartialType` from `@nestjs/swagger` + Response), `<resource>.module.ts`, `<resource>.service.ts`, `<resource>.controller.ts`.
-4. Implement the six standard endpoints in order: `POST /`, `GET /` (paginated), `GET /all`, `GET /:id`, `PATCH /:id`, `DELETE /:id`. **`/all` must be declared before `/:id`** — NestJS matches routes by declaration order.
+4. Implement the five standard endpoints in order: `POST /`, `GET /` (paginated), `GET /:id`, `PATCH /:id`, `DELETE /:id`. There is **no unpaginated `GET /all`** — a full-table read OOMs the process once the table grows. Any literal path segment (e.g. `GET /latest`) must be declared **before** `GET /:id`, since NestJS matches routes by declaration order.
 5. Register the module in `app.module.ts`.
 6. Add e2e tests in `test/<resource>.e2e-spec.ts` (see the three example resources for the pattern).
 
@@ -225,3 +240,32 @@ Before the first real deploy, confirm:
 ## License
 
 MIT — see [`LICENSE`](./LICENSE).
+
+## Authorization
+
+This template ships DB-backed RBAC with CASL over two scopes: **PLATFORM**
+(staff) and **BUSINESS** (tenant-local).
+
+```bash
+yarn rbac:sync     # projects the permission catalog + 8 system roles into the DB
+yarn rbac:check    # asserts the DB matches the catalog (CI-friendly, exits 1 on drift)
+yarn prisma:seed   # rbac:sync + the bootstrap admin/demo users (needs SEED_*)
+```
+
+`rbac:sync` runs on **every deploy**, straight after `prisma migrate deploy` —
+the api refuses to boot when the catalog and the database disagree, so it can
+never be a manual step. It needs only `DATABASE_URL`.
+
+The seeded admin (`SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`) gets
+`PLATFORM_ADMIN`; every registered user gets `PLATFORM_USER`, which carries the
+self-service grants for `/users/me/*` and their own device tokens.
+
+The app **refuses to boot** if (a) the permission catalog and the database
+disagree, or (b) any route handler declares no authorization decision. Both are
+deliberate: an authorization hole should be a failed deploy, not a 403 nobody
+notices.
+
+Clients fetch `GET /users/me/permissions` and rebuild the same CASL ability the
+server uses, so UI checks never drift from the backend.
+
+Full contract: [`src/common/authorization/README.md`](src/common/authorization/README.md).

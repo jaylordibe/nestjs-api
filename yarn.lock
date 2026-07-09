@@ -861,6 +861,21 @@
   resolved "https://registry.yarnpkg.com/@borewit/text-codec/-/text-codec-0.2.2.tgz#75025f735c0983b3a871668804a57387e3649375"
   integrity sha512-DDaRehssg1aNrH4+2hnj1B7vnUGEjU6OIlyRdkMd0aUdIUvKXrJfXsy8LVtXAy7DRvYVluWbMspsRhz2lcW0mQ==
 
+"@casl/ability@^7.0.1":
+  version "7.0.1"
+  resolved "https://registry.yarnpkg.com/@casl/ability/-/ability-7.0.1.tgz#3c81a804a453738fc217cc2aa9987f8bcda3fe9b"
+  integrity sha512-krOW1zQGEie5lH6fpryrcsPvc5r2pe5Vn5xbthuzc5X9gwzHIyZgGGgw9dMoSLHXdjB4BIVxGG/HBkG+1NuyZQ==
+  dependencies:
+    "@ucast/mongo2js" "^2.0.0"
+
+"@casl/prisma@^2.0.2":
+  version "2.0.2"
+  resolved "https://registry.yarnpkg.com/@casl/prisma/-/prisma-2.0.2.tgz#7af729532e06477a288b5435f69d7391ff311309"
+  integrity sha512-IYp9rABl8s9fF+4NubSahYMXqwLbmVCz8Hd9Xa4MbS6xMkSRTTa+tq9oKQFd/SJ6VoLe2oY+7Wg0eF9CjOCnYA==
+  dependencies:
+    "@ucast/core" "^2.0.0"
+    "@ucast/js" "^4.0.1"
+
 "@colors/colors@1.5.0":
   version "1.5.0"
   resolved "https://registry.yarnpkg.com/@colors/colors/-/colors-1.5.0.tgz#bb504579c1cae923e6576a4f5da43d25f97bdbd9"
@@ -2832,6 +2847,34 @@
   dependencies:
     "@typescript-eslint/types" "8.58.2"
     eslint-visitor-keys "^5.0.0"
+
+"@ucast/core@2.0.0", "@ucast/core@^2.0.0":
+  version "2.0.0"
+  resolved "https://registry.yarnpkg.com/@ucast/core/-/core-2.0.0.tgz#fafbd125571e987940d8392015710cfe1fd0b035"
+  integrity sha512-4XVx6LzPXZGvnZO5jp39cm/G4UvuwvEdtmg+9+4+zl6uFkCcB7UJacvtMYeBE56GJVT99Zqy6Pii7dGJq3Kz9Q==
+
+"@ucast/js@4.0.1", "@ucast/js@^4.0.1":
+  version "4.0.1"
+  resolved "https://registry.yarnpkg.com/@ucast/js/-/js-4.0.1.tgz#c3d2843a6178f3a6b61945db966357780078e377"
+  integrity sha512-9O5xPBvwEWQk2WvO69Eh2WJB8QljVZ2vRVdFvfnKjlZwWXcYxp1lqLBhwXBU1AtuSgCvKhJPkXdjKJggUmAmQQ==
+  dependencies:
+    "@ucast/core" "2.0.0"
+
+"@ucast/mongo2js@^2.0.0":
+  version "2.0.0"
+  resolved "https://registry.yarnpkg.com/@ucast/mongo2js/-/mongo2js-2.0.0.tgz#7a7f7b401e4345da0b517debe39b591bc8cdd6e6"
+  integrity sha512-vNBZzRnsfLr/TSxEoxz6W6hHQ5tmWsfEeC0nCq5z8RezC1AqIRy3cfHm8AGvlGtcn+cTSFQcZremfqnz6wm+nQ==
+  dependencies:
+    "@ucast/core" "2.0.0"
+    "@ucast/js" "4.0.1"
+    "@ucast/mongo" "3.0.0"
+
+"@ucast/mongo@3.0.0":
+  version "3.0.0"
+  resolved "https://registry.yarnpkg.com/@ucast/mongo/-/mongo-3.0.0.tgz#46b7d2b21731272c8c40f5db4afb346cefaf2202"
+  integrity sha512-kwuSH+kdB4GCR0LGhy/PEDm4PCflur89AlK82kNiYD0FvsA8A/p+0sx7m+/R8mMFAlmlkAd3VXp7sM/cLLYWYg==
+  dependencies:
+    "@ucast/core" "2.0.0"
 
 "@ungap/structured-clone@^1.3.0":
   version "1.3.0"

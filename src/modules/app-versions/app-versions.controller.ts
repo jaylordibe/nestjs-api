@@ -10,7 +10,6 @@ import {
   Patch,
   Post,
   Query,
-  UseGuards,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -22,12 +21,9 @@ import { ApiPaginatedResponse } from '../../common/decorators/api-paginated-resp
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
-import { Roles } from '../../common/decorators/roles.decorator';
+import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { MetaQueryDto } from '../../common/dto/meta-query.dto';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
-import { Role } from '../../common/enums/role.enum';
-import { RolesGuard } from '../../common/guards/roles.guard';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AppVersionResponseDto } from './dto/app-version-response.dto';
 import { CreateAppVersionDto } from './dto/create-app-version.dto';
 import { LatestAppVersionQueryDto } from './dto/latest-app-version-query.dto';
@@ -39,12 +35,11 @@ import { AppVersionsService } from './app-versions.service';
 @ApiTags('App Versions')
 @ApiBearerAuth()
 @Controller('app-versions')
-@UseGuards(JwtAuthGuard, RolesGuard)
 export class AppVersionsController {
   constructor(private readonly appVersionsService: AppVersionsService) {}
 
   @Post()
-  @Roles(Role.ADMIN)
+  @RequirePermission('create', 'AppVersion', { administrative: true })
   @ApiCreatedResponse({ type: AppVersionResponseDto })
   async create(
     @Body() dto: CreateAppVersionDto,
@@ -93,7 +88,7 @@ export class AppVersionsController {
   }
 
   @Patch(':id')
-  @Roles(Role.ADMIN)
+  @RequirePermission('update', 'AppVersion', { administrative: true })
   @ApiOkResponse({ type: AppVersionResponseDto })
   async update(
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -105,7 +100,7 @@ export class AppVersionsController {
   }
 
   @Delete(':id')
-  @Roles(Role.ADMIN)
+  @RequirePermission('delete', 'AppVersion', { administrative: true })
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(
     @Param('id', new ParseUUIDPipe()) id: string,

@@ -36,11 +36,23 @@ export enum ErrorCode {
   CURRENT_PASSWORD_INCORRECT = 'CURRENT_PASSWORD_INCORRECT',
 
   // ── Authorization (403) ──────────────────────────────────────────────
-  /** RolesGuard rejected — user authenticated but lacks the required role. */
+  /** Generic 403 fallback. Emitted when a bare `ForbiddenException` reaches
+   *  the global filter. Predates the CASL layer; prefer PERMISSION_DENIED,
+   *  which carries the action/subject that was refused. Retained because
+   *  error codes are a public, additive-only contract. */
   INSUFFICIENT_ROLE = 'INSUFFICIENT_ROLE',
   /** Admin attempting an operation against their own user row that the
    *  policy refuses (e.g. PATCH /users/:id/password where :id === self). */
   ADMIN_SELF_TARGET_FORBIDDEN = 'ADMIN_SELF_TARGET_FORBIDDEN',
+  /** PermissionsGuard or a service-layer `assertCan` refused: the caller is
+   *  authenticated but no CASL rule grants this action on this subject.
+   *  `details` is `{ action: string; subject?: string }`.
+   *
+   *  NOTE: a *cross-tenant* read never reaches this code. Tenant isolation
+   *  happens in the query (`accessibleBy`), so another business's record is
+   *  simply not found → 404 RESOURCE_NOT_FOUND. A 403 here would confirm the
+   *  record exists. */
+  PERMISSION_DENIED = 'PERMISSION_DENIED',
 
   // ── Validation / bad input (400) ─────────────────────────────────────
   /** class-validator failure on a DTO. `details` is
@@ -57,6 +69,11 @@ export enum ErrorCode {
   /** Prisma P2003 — foreign-key references a record that doesn't exist.
    *  `details` is `{ field: string }`. */
   FK_REFERENCE_INVALID = 'FK_REFERENCE_INVALID',
+  /** A business-scoped permission was checked but no business could be
+   *  resolved from the request (no `:businessId` route param, no
+   *  `businessId` in the body). Indicates a client calling a tenant-scoped
+   *  route without naming the tenant. */
+  BUSINESS_CONTEXT_MISSING = 'BUSINESS_CONTEXT_MISSING',
 
   // ── Resource state (404, 409) ────────────────────────────────────────
   /** Generic 404. `details` is `{ resource: string }`. */
