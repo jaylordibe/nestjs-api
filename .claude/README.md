@@ -6,7 +6,7 @@ This is developer *tooling*, not part of the API. The API builds, runs, and test
 
 ## The ticket-to-diff pipeline
 
-`/ticket <TICKET-KEY | pasted ticket text>` drives a ticket through six stages and **stops at two human gates** — it never implements without an approved plan and never commits or pushes.
+`/ticket <TICKET-KEY | pasted ticket text>` drives a ticket through seven stages and **stops at two human gates** — it never implements without an approved plan and never commits or pushes.
 
 | Stage | What runs | Gate |
 | --- | --- | --- |
@@ -15,9 +15,12 @@ This is developer *tooling*, not part of the API. The API builds, runs, and test
 | 3. Implement | Builds exactly the approved plan to the `CLAUDE.md` engineering bar | |
 | 4. Review | `/code-review` + `/security-review` + `/simplify`, findings folded back in | |
 | 5. Verify | `yarn build` + `yarn lint` + the affected `yarn test:e2e` spec(s) + `/verify` | |
-| 6. Present | Diff summary + review/verify results + downstream-consumer handoff | 🛑 **GATE 2** — you commit; the pipeline stops here |
+| 6. Present | Diff summary + review/verify results + downstream-consumer handoff | 🛑 **GATE 2** — you commit; no git write ever runs |
+| 7. Report | Posts one plain-English wrap-up comment on the issue | Status untouched — **you** move the board column after you push |
 
-The conductor keeps a durable six-stage todo checklist so the pipeline survives a long plan discussion (or a context summarization) and resumes at the right stage on approval, rather than treating "looks good" as a fresh request.
+The conductor keeps a durable seven-stage todo checklist so the pipeline survives a long plan discussion (or a context summarization) and resumes at the right stage on approval, rather than treating "looks good" as a fresh request.
+
+**Stage 7 writes a comment, never a status.** The comment is for the reporter, QA, and standup — plain English, no file paths or function names — and answers three questions: what behaviour changed, what changed *beyond* what the ticket asked, and what is still blocking. The PR carries the reasoning and the diff; the ticket comment does not duplicate it. Moving the ticket across the board stays a human act, because at comment time the work exists only in your working tree.
 
 ### Components
 
@@ -33,6 +36,7 @@ Buy the engines, build only the specialists and the conductor. Review (`/code-re
 Enforced by the harness, not by an agent remembering:
 
 - **git write block** — a `PreToolUse` hook denies any `git commit` / `git push`. All git writes are the human's.
+- **issue transition block** — a `PreToolUse` hook denies `transitionJiraIssue` / `editJiraIssue` on any MCP server. Stage 7 may comment; it may never move a ticket or change its fields.
 - **migration-edit guard** — a `PreToolUse` hook asks before editing anything under `prisma/migrations/` (never edit an applied migration; add a new one).
 
 ## One-time setup: connect your issue tracker (MCP)
