@@ -27,9 +27,13 @@ If `$ARGUMENTS` is an issue key and an issue-tracker MCP (e.g. Atlassian/Jira) i
 
 Launch the `context-mapper` agent on the ticket to produce the impact map (touched files, contract surface, security surface, downstream consumers, tests implied). For a large or cross-cutting ticket, launch several `context-mapper` agents scoped to different subsystems in parallel. Read the map fully before designing anything.
 
+Treat the ticket as a **claim, not a spec**. The map must include a **ticket-vs-reality reconciliation**: which of the ticket's factual assertions the source confirms, which are stale or incorrect (cite `path:line`), and whether the approach the ticket prescribes is sound, suboptimal, inapplicable, or bad practice given the code. Separate the outcome the ticket wants (the WHAT) from the method it happens to name (the HOW) — the method is one candidate, not a mandate. If the reconciliation contradicts the ticket, that feeds the plan; do not implement a prescription the code has outgrown.
+
 ## Stage 2 — Plan  [GATE 1]
 
 Enter **Plan mode**. Produce an ADR per CLAUDE.md: Context → Approach (rationale + rejected alternatives) → file-by-file changes → tests → verification → what this deliberately does NOT do. Then **stop and present it via ExitPlanMode**. Do not edit any file until the user approves. A plan is not a green light.
+
+The ADR **recommends, it does not transcribe**. Propose the approach *you* judge best on the evidence from Stage 1 — not merely the one the ticket named. When your approach departs from a method the ticket prescribed, lead with your recommendation and its rationale, and put the prescribed approach under rejected alternatives with the trade-off that ruled it out. If the Stage 1 reconciliation found the ticket resting on a stale or incorrect premise, surface that in Context so the human can weigh it. Where the divergence is genuinely a product decision rather than a technical one, call it out and let the human decide rather than quietly choosing.
 
 ## Stage 3 — Implement
 

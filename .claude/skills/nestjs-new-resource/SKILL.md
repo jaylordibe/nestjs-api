@@ -5,6 +5,10 @@ description: Use when adding or scaffolding a new CRUD resource/module (controll
 
 # New resource (canonical pattern)
 
+## Validate the ask before you scaffold
+
+Before generating a module, confirm the resource doesn't already exist (grep the schema and `src/modules/*` — an extra column or a new endpoint on an existing resource beats a parallel one), and confirm the requested model actually fits the outcome. Separate the outcome wanted from the shape someone named for it; if the named shape mismatches the data (wrong ownership, wrong cardinality, a status that belongs on an existing table), recommend the better model *with the trade-off* before scaffolding. A cleanly scaffolded resource that models the wrong thing is still wrong.
+
 ## Authorization is not optional
 
 Every handler must declare exactly one of `@Public()`, `@AuthenticatedOnly()`,
