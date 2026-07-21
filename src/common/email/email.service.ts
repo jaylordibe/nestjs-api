@@ -58,6 +58,24 @@ export class EmailService {
     });
   }
 
+  // Sent to the owner of an EXISTING account when someone tries to sign up
+  // with their email. `/auth/register` now answers a collision with the same
+  // 201 as a real signup, so this email is the only thing that tells a real
+  // person "you already have an account" — without it the uniform response
+  // would silently strand them.
+  sendDuplicateSignupAttemptNotification(
+    email: string,
+    firstName: string,
+    signInUrl: string,
+    occurredAt: Date,
+  ): Promise<void> {
+    return this.sendTemplate('duplicate-signup-attempt', email, {
+      firstName,
+      signInUrl,
+      occurredAt: occurredAt.toISOString(),
+    });
+  }
+
   sendPasswordResetOtp(email: string, otp: string): Promise<void> {
     return this.sendTemplate('password-reset-otp', email, {
       otp,

@@ -2,6 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import request from 'supertest';
 import { App } from 'supertest/types';
+import { EmailService } from '../src/common/email/email.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { createTestApp } from './setup/test-app';
 import { truncateAll } from './setup/db';
@@ -104,32 +105,152 @@ describe('Auth (e2e)', () => {
       expect(row.email).toBe('mixed@example.com');
     });
 
-    it('rejects duplicate email with 409 and field-aware message', async () => {
+    // An already-registered email used to surface the global Prisma filter's
+    // 409 UNIQUE_CONSTRAINT_VIOLATION — a free account-existence oracle on an
+    // unauthenticated endpoint. It now returns the same 201 as a real signup
+    // (OWASP WSTG-IDNT-04) and tells the actual owner by email instead. The
+    // P2002 envelope contract still has coverage, via the admin create-user
+    // path in users.e2e-spec.ts, where a conflict SHOULD be reported.
+    it('answers an already-registered email with the same 201 as a fresh signup', async () => {
       const payload = {
         email: 'dup@example.com',
         password: VALID_PASSWORD,
         firstName: 'Dup',
         lastName: 'User',
       };
-      await request(app.getHttpServer())
+      const first = await request(app.getHttpServer())
         .post('/api/auth/register')
         .send(payload)
         .expect(201);
-      const res = await request(app.getHttpServer())
+      const duplicate = await request(app.getHttpServer())
         .post('/api/auth/register')
-        .send(payload)
-        .expect(409);
-      expect(res.body.message).toMatch(/email already in use/i);
-      // Error envelope contract (Phase B): every error carries a stable
-      // machine-readable errorCode plus the standard envelope fields.
-      expect(res.body.errorCode).toBe('UNIQUE_CONSTRAINT_VIOLATION');
-      expect(res.body).toMatchObject({
-        statusCode: 409,
-        error: 'Conflict',
-        details: { field: 'email' },
-        path: '/api/auth/register',
+        .send({ ...payload, firstName: 'Imposter' })
+        .expect(201);
+
+      // Wire-shape parity — the caller learns nothing.
+      expect(duplicate.body).toEqual(first.body);
+      expect(duplicate.body.errorCode).toBeUndefined();
+
+      // Nothing was created or overwritten by the second attempt.
+      const prisma = app.get(PrismaService);
+      const rows = await prisma.user.findMany({
+        where: { email: 'dup@example.com' },
       });
-      expect(typeof res.body.timestamp).toBe('string');
+      expect(rows).toHaveLength(1);
+      expect(rows[0].firstName).toBe('Dup');
+    });
+
+    it('notifies the existing owner and audits the blocked attempt', async () => {
+      const duplicateNoticeSpy = jest
+        .spyOn(app.get(EmailService), 'sendDuplicateSignupAttemptNotification')
+        .mockResolvedValue(undefined);
+      try {
+        const payload = {
+          email: 'owner@example.com',
+          password: VALID_PASSWORD,
+          firstName: 'Owner',
+          lastName: 'User',
+        };
+        await request(app.getHttpServer())
+          .post('/api/auth/register')
+          .send(payload)
+          .expect(201);
+        const prisma = app.get(PrismaService);
+        const owner = await prisma.user.findFirstOrThrow({
+          where: { email: 'owner@example.com' },
+        });
+
+        await request(app.getHttpServer())
+          .post('/api/auth/register')
+          .send(payload)
+          .expect(201);
+
+        expect(duplicateNoticeSpy).toHaveBeenCalledTimes(1);
+        const [recipient, firstName] = duplicateNoticeSpy.mock.calls[0];
+        expect(recipient).toBe('owner@example.com');
+        expect(firstName).toBe('Owner');
+
+        const audit = await prisma.auditLog.findFirstOrThrow({
+          where: { action: 'user.register_blocked_existing_account' },
+        });
+        expect(audit.targetUserId).toBe(owner.id);
+        expect(audit.actorId).toBeNull();
+        expect(audit.metadata).toMatchObject({ isOwnerNotified: true });
+      } finally {
+        duplicateNoticeSpy.mockRestore();
+      }
+    });
+
+    // The notice email is the one thing a stranger can make us send to an
+    // arbitrary address, so it is capped per RECIPIENT (not just per IP,
+    // which an attacker rotates). The attempt is still audited every time,
+    // with `isOwnerNotified: false` recording the suppression.
+    it('sends at most one duplicate-signup notice per email address', async () => {
+      const duplicateNoticeSpy = jest
+        .spyOn(app.get(EmailService), 'sendDuplicateSignupAttemptNotification')
+        .mockResolvedValue(undefined);
+      try {
+        const payload = {
+          email: 'repeat@example.com',
+          password: VALID_PASSWORD,
+          firstName: 'Repeat',
+          lastName: 'User',
+        };
+        await request(app.getHttpServer())
+          .post('/api/auth/register')
+          .send(payload)
+          .expect(201);
+
+        for (let attempt = 0; attempt < 3; attempt++) {
+          await request(app.getHttpServer())
+            .post('/api/auth/register')
+            .send(payload)
+            .expect(201);
+        }
+
+        expect(duplicateNoticeSpy).toHaveBeenCalledTimes(1);
+        const prisma = app.get(PrismaService);
+        const audits = await prisma.auditLog.findMany({
+          where: { action: 'user.register_blocked_existing_account' },
+          orderBy: { createdAt: 'asc' },
+        });
+        expect(audits).toHaveLength(3);
+        expect(audits[0].metadata).toMatchObject({ isOwnerNotified: true });
+        expect(audits[1].metadata).toMatchObject({ isOwnerNotified: false });
+        expect(audits[2].metadata).toMatchObject({ isOwnerNotified: false });
+      } finally {
+        duplicateNoticeSpy.mockRestore();
+      }
+    });
+
+    it('audits a successful self-signup with the request envelope', async () => {
+      await request(app.getHttpServer())
+        .post('/api/auth/register')
+        .send({
+          email: 'audited@example.com',
+          password: VALID_PASSWORD,
+          firstName: 'Aud',
+          lastName: 'Ited',
+        })
+        .expect(201);
+
+      // `createdBy` is null on a self-signup and the users table stores no
+      // request context, so this entry is the only persisted record of WHERE
+      // the signup came from. Identity rides on `targetUserId`, not a copied
+      // email, so a later GDPR erasure isn't defeated by it.
+      const prisma = app.get(PrismaService);
+      const user = await prisma.user.findFirstOrThrow({
+        where: { email: 'audited@example.com' },
+      });
+      const audit = await prisma.auditLog.findFirstOrThrow({
+        where: { action: 'user.registered' },
+      });
+      expect(audit.targetUserId).toBe(user.id);
+      expect(audit.actorId).toBeNull();
+      expect(audit.metadata).toMatchObject({
+        request: { method: 'POST', path: '/api/auth/register' },
+      });
+      expect(audit.metadata).not.toHaveProperty('email');
     });
 
     it('rejects invalid email with 400', async () => {

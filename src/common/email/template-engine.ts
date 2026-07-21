@@ -10,6 +10,19 @@ export interface EmailTemplates {
   'email-verification-link': { verifyUrl: string; firstName: string };
   'password-reset-otp': { otp: string; expiresInMinutes: number };
   'password-changed-notification': { firstName: string; occurredAt: string };
+  // Sent to the OWNER of an existing account when someone attempts to sign up
+  // with their email. `POST /auth/register` answers a collision with the same
+  // 201 as a real signup so it no longer confirms which addresses are
+  // registered (OWASP WSTG-IDNT-04); this email is what keeps that silence
+  // from stranding a real person who forgot they already have an account.
+  // Carries no token — minting a password-reset credential from an
+  // unauthenticated stranger's request would be a gift; the owner proceeds
+  // through the normal forgot-password flow.
+  'duplicate-signup-attempt': {
+    firstName: string;
+    signInUrl: string;
+    occurredAt: string;
+  };
 }
 
 export type EmailTemplateKey = keyof EmailTemplates;
@@ -30,6 +43,9 @@ const TEMPLATE_SUBJECTS: {
   'email-verification-link': 'Verify your email',
   'password-reset-otp': 'Reset your password',
   'password-changed-notification': 'Your password was changed',
+  // Deliberately reassuring rather than alarming: the overwhelmingly common
+  // trigger is the owner themselves forgetting they already registered.
+  'duplicate-signup-attempt': 'You already have an account',
 };
 
 // Templates live in `./templates/<name>.html.hbs` with an optional
