@@ -10,6 +10,10 @@ import {
   isDisposableEmail,
 } from '../../common/util/disposable-email.util';
 import { RedisService } from '../../common/redis/redis.service';
+import {
+  burnPasswordHashingTime,
+  hashPassword,
+} from '../../common/util/password-hashing.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UserResponseDto } from '../users/dto/user-response.dto';
 import { UsersService } from '../users/users.service';
@@ -50,6 +54,11 @@ export class AuthService {
     // blocked" see uniform success and can't enumerate. An internal
     // `audit_logs` entry captures the attempt so ops can track patterns.
     if (isDisposableEmail(dto.email)) {
+      // Every silent branch pays the same ~250ms bcrypt cost a real
+      // registration pays. Returning early WITHOUT hashing would answer
+      // measurably faster and leak by the clock exactly what the identical
+      // response body withholds.
+      await burnPasswordHashingTime(dto.password);
       await this.auditService.record({
         action: 'user.register_blocked_disposable_email',
         actorId: null,
@@ -60,7 +69,52 @@ export class AuthService {
       });
       return { message: AuthService.REGISTER_OK_MESSAGE };
     }
+    // An already-registered email gets the SAME 201 + message as a fresh
+    // signup, so the endpoint no longer confirms which addresses have
+    // accounts (OWASP WSTG-IDNT-04). Previously the create below hit the
+    // unique index and the Prisma filter turned P2002 into a 409 — a free
+    // account-existence oracle on an unauthenticated endpoint.
+    //
+    // `prisma.scoped` (active rows only) mirrors the DB's uniqueness rule:
+    // the unique index on email is PARTIAL (`WHERE deleted_at IS NULL`) so a
+    // closed account deliberately doesn't reserve its address forever — a
+    // soft-deleted holder must fall through to a normal create.
+    //
+    // The owner is told out-of-band that someone tried; that email is what
+    // keeps the silence from stranding a real person who forgot they
+    // registered. See `UsersService.sendDuplicateSignupNotice` for the
+    // per-recipient cooldown that stops this from becoming a mail bomb.
+    const email = dto.email.toLowerCase();
+    const existingUser = await this.prisma.scoped.user.findFirst({
+      where: { email },
+    });
+    if (existingUser) {
+      await burnPasswordHashingTime(dto.password);
+      const isOwnerNotified =
+        await this.usersService.sendDuplicateSignupNotice(existingUser);
+      await this.auditService.record({
+        action: 'user.register_blocked_existing_account',
+        actorId: null,
+        targetUserId: existingUser.id,
+        metadata: { isOwnerNotified },
+      });
+      return { message: AuthService.REGISTER_OK_MESSAGE };
+    }
     const user = await this.usersService.create(dto, null);
+    // Successful signups are audited too, not just blocked ones. This entry
+    // is the ONLY place a signup's request envelope (ip / country / UA /
+    // requestId, auto-attached by AuditService) is persisted: `createdBy` is
+    // null on a self-signup and the users table stores no request context, so
+    // without it "which IP opened these 40 accounts" is unanswerable.
+    // Identity rides on `targetUserId` rather than a copied email so a later
+    // GDPR erasure isn't defeated by this row. Best-effort by construction:
+    // AuditService swallows its own write failures, so registration can never
+    // fail on an audit write.
+    await this.auditService.record({
+      action: 'user.registered',
+      actorId: null,
+      targetUserId: user.id,
+    });
     // Fire the verification email immediately. The call is awaited so a
     // provider outage surfaces as a 5xx at registration time instead of
     // a silent "email never arrives" issue users only notice later.
@@ -156,7 +210,7 @@ export class AuthService {
     if (!this.dummyHash) {
       // 12 rounds matches UsersService.BCRYPT_ROUNDS. Duplicated as a const
       // here to avoid coupling this module to the users module's internals.
-      this.dummyHash = await bcrypt.hash('dummy-password-for-timing', 12);
+      this.dummyHash = await hashPassword('dummy-password-for-timing');
     }
     return this.dummyHash;
   }

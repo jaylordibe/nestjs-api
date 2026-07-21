@@ -126,7 +126,7 @@ export class AbilityScopedQueryService {
   ): WhereInputBySubject[TSubject] {
     return this.buildWhereOrEmpty(ability, action, subject, {
       id: recordId,
-    } as WhereInputBySubject[TSubject]);
+    });
   }
 
   /**
@@ -142,6 +142,6 @@ export class AbilityScopedQueryService {
   ): WhereInputBySubject[TSubject] {
     return this.buildWhere(ability, action, subject, {
       id: recordId,
-    } as WhereInputBySubject[TSubject]);
+    });
   }
 }

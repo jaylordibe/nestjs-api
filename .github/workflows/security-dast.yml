@@ -29,61 +29,43 @@ jobs:
     # generous headroom over the normal run and bounds a hung scan.
     timeout-minutes: 30
 
-    services:
-      postgres:
-        image: postgres:18.3
-        env:
-          POSTGRES_USER: nestjs
-          POSTGRES_PASSWORD: ci-postgres-password
-          POSTGRES_DB: nestjs_local
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U nestjs"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-      redis:
-        image: redis:8.6.2
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-    # Mirrors test.yml's CI-only constants so the app boots identically, with
-    # two deliberate deltas for the scan:
-    #  - GIT_SHA is stamped so the Swagger doc version reflects the build.
-    #  - THROTTLE_LIMIT is raised to effectively unlimited. The global
-    #    ThrottlerGuard (100/60s/IP) would otherwise answer most of ZAP's
-    #    rapid-fire requests with 429 and gut scan coverage.
-    env:
-      NODE_ENV: test
-      PORT: 3001
-      SERVICE_NAME: nestjs
-      DB_USER: nestjs
-      DB_PASSWORD: ci-postgres-password
-      DB_HOST: localhost
-      DB_PORT: 5432
-      DB_NAME: nestjs_test
-      DATABASE_URL: postgresql://nestjs:ci-postgres-password@localhost:5432/nestjs_test?schema=public
-      REDIS_HOST: localhost
-      REDIS_PORT: 6379
-      REDIS_PASSWORD: ci-redis-password-not-actually-used
-      REDIS_URL: redis://localhost:6379
-      JWT_SECRET: ci-jwt-secret-not-for-production-use-only-for-testing
-      JWT_EXPIRES_IN: 1h
-      EMAIL_PROVIDER: stub
-      CORS_ORIGIN: '*'
-      THROTTLE_TTL_MS: 60000
-      THROTTLE_LIMIT: 1000000
-      GIT_SHA: ${{ github.sha }}
+    # No `services:` / `env:` blocks — `.env.test` is the single source of
+    # truth for throwaway-environment config, and the backing services come
+    # from the same docker-compose.yml developers run. See test.yml for the
+    # full rationale; duplicating the values here would recreate exactly the
+    # drift that pattern exists to prevent.
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Same loader as test.yml. This job boots the COMPILED app
+      # (`node dist/main`), which reads process.env only — it never loads
+      # `.env.test` the way the jest harness does — so the file has to reach
+      # the environment here rather than being read by the app.
+      #
+      # Two deliberate deltas are appended AFTER the file's values (last write
+      # to $GITHUB_ENV wins, so precedence is explicit rather than relying on
+      # job-vs-step env ordering):
+      #  - THROTTLE_LIMIT raised to effectively unlimited. The global
+      #    ThrottlerGuard would otherwise answer most of ZAP's rapid-fire
+      #    requests with 429 and gut scan coverage.
+      #  - GIT_SHA stamped so the Swagger doc version reflects the build.
+      - name: Load .env.test into the job environment
+        run: |
+          set -a
+          . ./.env.test
+          set +a
+          sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' .env.test |
+            sort -u |
+            while read -r key; do
+              printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+            done
+          echo "THROTTLE_LIMIT=1000000" >> "$GITHUB_ENV"
+          echo "GIT_SHA=${{ github.sha }}" >> "$GITHUB_ENV"
+
+      - name: Start Postgres + Redis from docker-compose.yml
+        run: docker compose --env-file .env.test up -d --wait
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -99,7 +81,7 @@ jobs:
       - name: Generate Prisma client
         run: yarn prisma:generate
 
-      # Creates the nestjs_test database (Prisma creates the target DB if
+      # Creates the ${DB_NAME} database (Prisma creates the target DB if
       # absent) and applies all migrations — the schema ZAP will exercise.
       - name: Apply migrations
         run: yarn prisma:deploy

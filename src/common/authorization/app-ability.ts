@@ -80,8 +80,5 @@ export function taggedSubject(
   subjectType: AuthorizationSubject,
   record: Record<string, unknown>,
 ): AppAbilitySubject {
-  return tagSubject(
-    subjectType as never,
-    record as never,
-  ) as unknown as AppAbilitySubject;
+  return tagSubject(subjectType as never, record as never);
 }

@@ -11,8 +11,9 @@ on:
   # Makes this workflow callable from other workflows as
   # `jobs.<name>.uses: ./.github/workflows/test.yml`. Needed by the
   # deploy-production / deploy-staging workflows that gate their deploys
-  # on a passing test run. No `inputs` or `secrets` are declared — the
-  # env vars below are CI-only constants, not repo secrets.
+  # on a passing test run. No `inputs` or `secrets` are declared, and no
+  # `env:` either — all configuration comes from the committed `.env.test`
+  # (see the note on the `ci` job).
   workflow_call:
 
 # Cancel in-flight runs of this workflow for the same ref. Avoids two
@@ -27,63 +28,41 @@ permissions:
   contents: read
 
 jobs:
-  ci:
-    name: Lint, build, test
+  # Four independent jobs, no `needs:` between them — the deploy gate is
+  # bounded by the SLOWEST job, not by their sum.
+  #
+  # This structure is deliberately sized for where a project GOES, not for
+  # the handful of specs a fresh clone ships with. Retrofitting sharding into
+  # a grown codebase means restructuring CI, re-measuring shard balance and
+  # re-testing the harness under time pressure — once per project. Doing it
+  # here means every project born from this template inherits a pipeline that
+  # already scales, and the only knob anyone has to touch is the shard count.
+
+  # Everything that needs no database.
+  quality:
+    name: Lint, build, unit tests
     runs-on: ubuntu-latest
-    # Bounded so a hung job can't burn billable minutes. 15 min is ~3x
-    # the normal green run, plenty of headroom for flaky DB starts.
-    timeout-minutes: 15
+    # ~2.5x a green run. A timeout is a runaway-job guard, NOT a capacity
+    # knob: if it trips, something got stuck — find out what rather than
+    # raising the number.
+    timeout-minutes: 12
 
-    services:
-      postgres:
-        image: postgres:18.3
-        env:
-          POSTGRES_USER: nestjs
-          POSTGRES_PASSWORD: ci-postgres-password
-          POSTGRES_DB: nestjs_local
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U nestjs"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-      # Required for the JWT logout blocklist (src/common/redis). Without
-      # it, /auth/logout tests can't write to Redis. Image is pinned to
-      # match the docker-compose dev version; no auth (ci-only).
-      redis:
-        image: redis:8.6.2
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-    env:
-      NODE_ENV: test
-      PORT: 3001
-      SERVICE_NAME: nestjs
-      DB_USER: nestjs
-      DB_PASSWORD: ci-postgres-password
-      DB_HOST: localhost
-      DB_PORT: 5432
-      DB_NAME: nestjs_test
-      DATABASE_URL: postgresql://nestjs:ci-postgres-password@localhost:5432/nestjs_test?schema=public
-      REDIS_HOST: localhost
-      REDIS_PORT: 6379
-      # The CI Redis service has no auth (no --requirepass), so this
-      # password is just a placeholder to satisfy the Joi .min(16) validation.
-      # The connection URL below intentionally omits any auth segment.
-      REDIS_PASSWORD: ci-redis-password-not-actually-used
-      REDIS_URL: redis://localhost:6379
-      JWT_SECRET: ci-jwt-secret-not-for-production-use-only-for-testing
-      JWT_EXPIRES_IN: 1h
-      EMAIL_PROVIDER: stub
-      CORS_ORIGIN: '*'
-      THROTTLE_TTL_MS: 60000
-      THROTTLE_LIMIT: 100
+    # NO `services:` block and NO inline `env:` block anywhere in this file —
+    # both are deliberate.
+    #
+    # `.env.test` is the SINGLE SOURCE OF TRUTH for test configuration, and
+    # the e2e harness loads it directly (test/setup/load-env.ts +
+    # global-setup.ts), in CI as much as locally. A job-level `env:` block
+    # would silently SHADOW the file — `dotenv.config()` never overrides an
+    # existing process.env value — so any key listed here becomes a second,
+    # invisible source that drifts out of step with what developers run.
+    #
+    # Service containers can't fix that either: they start BEFORE checkout,
+    # so their credentials can never be read from a repo file — they'd have
+    # to be retyped, which is the same duplication one layer down. Instead
+    # the backing services come from the very same docker-compose.yml
+    # developers run, fed the very same .env.test, so ports, credentials,
+    # images and healthchecks all have exactly one definition.
 
     steps:
       - name: Checkout
@@ -114,27 +93,6 @@ jobs:
       - name: Unit tests
         run: yarn test --passWithNoTests
 
-      - name: E2E tests
-        run: yarn test:e2e
-
-      # The application refuses to boot when the permission catalog in the code
-      # and the rows in the database disagree. Catch that here, on a throwaway
-      # database, rather than at deploy time when the healthcheck would fail and
-      # the old container is already stopped.
-      #
-      # `rbac:sync` projects the catalog; `rbac:check` then asserts the two match
-      # in BOTH directions (nothing missing, no orphans). Exits non-zero on drift.
-      - name: Authorization catalog is in sync
-        env:
-          DATABASE_URL: postgresql://nestjs:ci-postgres-password@localhost:5432/nestjs_rbac_ci?schema=public
-          DB_NAME: nestjs_rbac_ci
-        run: |
-          PGPASSWORD=ci-postgres-password psql -h localhost -U nestjs -d postgres \
-            -c "DROP DATABASE IF EXISTS nestjs_rbac_ci;" -c "CREATE DATABASE nestjs_rbac_ci;"
-          yarn prisma:deploy
-          yarn rbac:sync
-          yarn rbac:check
-
       # Informational: lists everything moderate and above. Never fails.
       # Known moderate: `uuid` via `resend > svix > uuid` (CVE fixed in
       # uuid >= 14.0.0, but uuid 11+ is ESM-only and breaks the CJS
@@ -148,13 +106,196 @@ jobs:
       # finding → exit 4 even with `--level high`. Guard with a shell
       # check that only fails on exit codes with the high (8) or
       # critical (16) bit set, i.e. exit code >= 8.
+      #
+      # When this trips, reach for an upgrade BEFORE a `resolutions` override.
+      # Advisories are often satisfied by a version the parent's declared
+      # range ALREADY permits — i.e. the lockfile is stale, not the upstream
+      # constraint — in which case `yarn upgrade <parent>` fixes it and leaves
+      # package.json untouched. Diagnose with:
+      #
+      #   yarn audit --level high --json       → module, vulnerable_versions, path
+      #   npm view <parent> dependencies.<pkg> → does its range allow the fix?
+      #
+      # Only when a parent genuinely pins a vulnerable range does an override
+      # belong in `resolutions` — and then note there when it can be removed.
       - name: Dependency audit (blocks on high+)
         run: yarn audit --level high || test $? -lt 8
+
+
+  # The e2e suite, split across independent runners.
+  #
+  # Two levels of parallelism compose. WITHIN a runner, jest runs
+  # `maxWorkers: 50%` processes, each against its own cloned database and its
+  # own Redis logical database (see test/setup/worker-isolation.ts). ACROSS
+  # runners, this matrix splits the spec files. A GitHub runner has 2 cores,
+  # so 50% is 1 worker there and sharding does the real work in CI — the
+  # in-runner parallelism is what keeps a developer's local full run fast.
+  #
+  # SHARD COUNT is the knob. `--shard` splits by FILE, not by duration, so
+  # splits are lumpy and more shards is not monotonically better — a reshuffle
+  # can regroup the slow specs and make things worse. Re-measure instead of
+  # guessing when the suite grows:
+  #
+  #   for s in 1 2 3 4; do yarn test:e2e --shard=$s/4 --listTests; done
+  #
+  # then weigh the slowest shard against ~2 min of per-shard install + build
+  # overhead. Four is a sane default here; a large suite may want more.
+  e2e:
+    name: E2E (shard ${{ matrix.shard }}/${{ strategy.job-total }})
+    runs-on: ubuntu-latest
+    # If a shard ever trips this, add a shard — don't raise the ceiling.
+    timeout-minutes: 15
+
+    strategy:
+      # One shard failing must not cancel the others: a partial result turns
+      # "which tests are broken?" into a second CI round-trip.
+      fail-fast: false
+      # The divisor below is `strategy.job-total`, so changing this list is
+      # the ONLY edit needed to re-shard — the two can never disagree.
+      matrix:
+        shard: [1, 2, 3, 4]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The same compose file developers use, pointed at .env.test instead of
+      # .env — so CI gets Postgres on DB_PORT and Redis on REDIS_PORT WITH the
+      # same `--requirepass` auth, matching the URLs the tests will actually
+      # dial. (A GitHub `services:` container cannot express `redis-server
+      # --requirepass` at all — it accepts only docker-create options — which
+      # is a second reason to use compose.) `--wait` blocks on the healthchecks
+      # the compose file already defines.
+      #
+      # `yarn test:e2e` would start this itself via the `pretest:e2e` hook
+      # (idempotent, so this is not a double-start); it stays an explicit step
+      # so a failure to bring up the stack reads as a stack failure in the
+      # logs rather than as a mysterious test failure.
+      - name: Start Postgres + Redis from docker-compose.yml
+        run: docker compose --env-file .env.test up -d --wait
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile --silent
+        env:
+          # Suppress Node's "DEP0169 url.parse" warning emitted by
+          # yarn 1.x itself — yarn-internal, no upstream fix available.
+          NODE_OPTIONS: --no-deprecation
+
+      # Needed for the generated client the specs import. Deliberately no
+      # `yarn build`/`lint` here — ts-jest compiles the sources directly, and
+      # `quality` already covers those in parallel.
+      - name: Generate Prisma client
+        run: yarn prisma:generate
+
+      - name: E2E tests
+        run: yarn test:e2e --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+
+      # Container logs are the first thing you want when the failure is
+      # "Postgres never came up" rather than "an assertion failed", and they
+      # are gone the moment the runner is torn down.
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker compose --env-file .env.test logs --no-color --tail=200
+
+  # The application refuses to boot when the permission catalog in the code
+  # and the rows in the database disagree, so this runs on a throwaway
+  # database rather than surfacing at deploy time when the healthcheck fails
+  # and the old container is already stopped. Its own job because it needs a
+  # database (so it can't live in `quality`) but has nothing to do with the
+  # e2e specs (so it shouldn't ride on an arbitrary shard).
+  authorization:
+    name: Authorization catalog in sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Makes .env.test visible to every LATER step, not just the jest
+      # processes that load it themselves — the authorization-catalog step
+      # below is a plain shell step and needs the same credentials. `set -a`
+      # exports each assignment; sourcing with bash also resolves the
+      # `${SERVICE_NAME}`-style references the file uses (the same expansion
+      # dotenv-expand does at runtime), so derived values land correctly.
+      #
+      # Nothing sensitive crosses a boundary here: every value in .env.test is
+      # a committed test-only constant (throwaway container credentials, a
+      # test JWT secret, blank third-party keys), which is precisely why the
+      # file can be the shared source for laptops and CI alike. Real secrets
+      # live in GitHub environments and are used by the deploy workflows.
+      - name: Load .env.test into the job environment
+        run: |
+          set -a
+          . ./.env.test
+          set +a
+          sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' .env.test |
+            sort -u |
+            while read -r key; do
+              printf '%s=%s\n' "$key" "${!key}" >> "$GITHUB_ENV"
+            done
+
+      # The same compose file developers use, pointed at .env.test instead of
+      # .env — so CI gets Postgres on DB_PORT and Redis on REDIS_PORT WITH the
+      # same `--requirepass` auth, matching the URLs the tests will actually
+      # dial. (A GitHub `services:` container cannot express `redis-server
+      # --requirepass` at all — it accepts only docker-create options — which
+      # is a second reason to use compose.) `--wait` blocks on the healthchecks
+      # the compose file already defines.
+      #
+      # `yarn test:e2e` would start this itself via the `pretest:e2e` hook
+      # (idempotent, so this is not a double-start); it stays an explicit step
+      # so a failure to bring up the stack reads as a stack failure in the
+      # logs rather than as a mysterious test failure.
+      - name: Start Postgres + Redis from docker-compose.yml
+        run: docker compose --env-file .env.test up -d --wait
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile --silent
+        env:
+          # Suppress Node's "DEP0169 url.parse" warning emitted by
+          # yarn 1.x itself — yarn-internal, no upstream fix available.
+          NODE_OPTIONS: --no-deprecation
+
+      - name: Generate Prisma client
+        run: yarn prisma:generate
+
+      # Credentials/host/port come from .env.test (loaded above) — never
+      # retyped here, or this step would drift from the stack it connects to.
+      # Only the throwaway database NAME is local to this step, so the check
+      # can't disturb the e2e databases on the same server.
+      - name: Authorization catalog is in sync
+        run: |
+          RBAC_DB_NAME="${DB_NAME}_rbac_check"
+          export DB_NAME="$RBAC_DB_NAME"
+          export DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${RBAC_DB_NAME}?schema=public"
+          PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d postgres \
+            -c "DROP DATABASE IF EXISTS \"$RBAC_DB_NAME\";" \
+            -c "CREATE DATABASE \"$RBAC_DB_NAME\";"
+          yarn prisma:deploy
+          yarn rbac:sync
+          yarn rbac:check
+
 
   docker:
     name: Build & scan container image
     runs-on: ubuntu-latest
-    needs: ci
+    # Deliberately NOT gated on `ci`. Gating appended its whole runtime to
+    # every deploy; running it in parallel takes that off the critical path.
+    # The cost is a wasted image build on runs where tests fail — a few cached
+    # minutes, against minutes saved on every green deploy.
     timeout-minutes: 15
 
     steps:

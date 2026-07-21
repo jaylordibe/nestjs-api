@@ -1,7 +1,7 @@
 services:
   postgres:
     image: postgres:18.3
-    container_name: ${SERVICE_NAME}-postgres
+    container_name: ${SERVICE_NAME}${COMPOSE_STACK_SUFFIX:-}-postgres
     restart: unless-stopped
     shm_size: 256mb
     environment:
@@ -21,7 +21,7 @@ services:
 
   redis:
     image: redis:8.6.2
-    container_name: ${SERVICE_NAME}-redis
+    container_name: ${SERVICE_NAME}${COMPOSE_STACK_SUFFIX:-}-redis
     restart: unless-stopped
     command: ['redis-server', '--requirepass', '${REDIS_PASSWORD}', '--appendonly', 'yes']
     environment:

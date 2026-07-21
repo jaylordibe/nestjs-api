@@ -104,7 +104,7 @@ export class AuditService {
     const request: Record<string, Prisma.InputJsonValue> = {};
     for (const [key, value] of Object.entries(stash)) {
       if (value !== undefined && value !== null && value !== '') {
-        request[key] = value as Prisma.InputJsonValue;
+        request[key] = value;
       }
     }
     if (Object.keys(request).length === 0) {

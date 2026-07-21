@@ -19,7 +19,7 @@ You are **always** writing as a **senior software architect / senior software en
 - **Plans are ADRs — and they recommend, they don't transcribe.** Plan-mode output should read like an Architectural Decision Record: Context → Approach (with rationale + rejected alternatives) → File-by-file changes → Tests → Verification → What this deliberately does NOT do. Not a checklist. The plan proposes the approach *you* judge best; when it departs from a method the instruction prescribed (a ticket's approach, a "do it like X" aside), lead with the recommendation and put the prescribed approach under rejected alternatives with the trade-off.
 - **"What do you think / what do you recommend" means PLAN, not execute.** When the user asks for your thoughts, opinion, or a recommendation, respond with senior-level planning — the analysis, the options with trade-offs, and your recommended approach — then **stop and wait**. Do NOT start editing files, writing migrations, or otherwise implementing. Implementation begins only when the user explicitly says to go ahead (e.g. "implement it", "do it", "go"). A plan or recommendation is never itself a green light.
 - **Tests are part of the change.** A feature without e2e coverage on the contract isn't done. Update the existing assertions when the contract changes — don't add a duplicate test alongside the stale one.
-- **Verify before declaring done.** `yarn build` + `yarn lint` + the **affected** e2e spec(s) must pass on every change; run the **full** `yarn test:e2e` only when a module is complete or the user asks. Type-check and a passing suite verify correctness, but don't claim a UI/feature works without actually exercising it.
+- **Verify before declaring done.** `yarn build` + `yarn lint` + the **affected** e2e spec(s) must pass on every change; run the **full** `yarn test:e2e` only when a module is complete or the user asks. The e2e suite runs **in parallel** (`maxWorkers: 50%`): `globalSetup` migrates one template database and clones it per worker, and each worker gets its own Redis logical database (`test/setup/worker-isolation.ts`) — so specs must never assume exclusive access to anything outside their own database. Type-check and a passing suite verify correctness, but don't claim a UI/feature works without actually exercising it.
 
 When a small ask conflicts with this bar (e.g. "just fix this one site"), surface the conflict and propose the proper-scope plan first — don't silently scope down.
 
@@ -27,7 +27,18 @@ When a small ask conflicts with this bar (e.g. "just fix this one site"), surfac
 
 NestJS 11 (TypeScript, Express) + Prisma 7 + PostgreSQL + Redis. JWT auth with DB-backed RBAC + CASL over two scopes (PLATFORM / BUSINESS). GitHub template: set `SERVICE_NAME` in `.env`, add feature modules. URLs unversioned (`/api/...`). Swagger at `/api/docs`.
 
-Package manager: **yarn** (yarn.lock committed). Scripts: `start:dev`, `start:prod`, `build`, `lint`, `format`, `test`, `test:e2e`, `prisma:generate`, `prisma:migrate`, `prisma:deploy`, `prisma:seed`, `prisma:studio`. `docker compose up -d` brings up pinned Postgres 18.3 + Redis 8.6.2 (host ports **5433** / **6378**).
+Package manager: **yarn** (yarn.lock committed). Scripts: `start:dev`, `start:prod`, `build`, `lint`, `format`, `test`, `test:e2e`, `stack:up`, `stack:down`, `prisma:generate`, `prisma:migrate`, `prisma:deploy`, `prisma:seed`, `prisma:studio`.
+
+**Two container stacks, one `docker-compose.yml`, one definition each for Postgres 18.3 + Redis 8.6.2** — which one you get is decided by the env file:
+
+| Stack | Command | Containers | Ports |
+|---|---|---|---|
+| dev | `docker compose up -d` (reads `.env`) | `${SERVICE_NAME}-postgres` / `-redis` | **5433** / **6378** |
+| test | `docker compose --env-file .env.test up -d` | `${SERVICE_NAME}-test-postgres` / `-redis` | **5434** / **6380** |
+
+`yarn stack:up` starts both; `yarn test:e2e` starts the test stack itself via the `pretest:e2e` hook, so it needs no setup. They run side by side with separate volumes and networks — deliberate, because `globalSetup` issues a real `DROP DATABASE` on every e2e run and must not be able to reach dev data.
+
+**`.env.test` is the single source of truth for test config** — CI defines no env vars and no service containers of its own; `.github/workflows/test.yml` loads this same file and starts these same compose services, so what passes locally is what runs in CI. Never add a value to a workflow that `.env.test` already declares: a workflow `env:` block silently shadows the file (`dotenv` never overrides an existing `process.env`), which is how CI ends up testing a different configuration than every developer.
 
 `SERVICE_NAME` is the single source of truth — drives `DB_NAME` default (`${SERVICE_NAME}_local`), container name, and JWT `iss`/`aud`.
 

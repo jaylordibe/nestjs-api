@@ -425,6 +425,39 @@ describe('Users (e2e)', () => {
       expect(res.body.data[0]).not.toHaveProperty('password');
     });
 
+    // P2002 → 409 envelope contract. Exercised here rather than through
+    // /auth/register, which deliberately no longer surfaces a conflict (it
+    // would let an anonymous caller enumerate registered addresses). An
+    // authenticated admin, by contrast, should get the real error.
+    it('POST /api/users emits the UNIQUE_CONSTRAINT_VIOLATION envelope on a duplicate email', async () => {
+      const newUser = {
+        email: 'dup-admin@example.com',
+        password: PASSWORD,
+        firstName: 'Dup',
+        lastName: 'User',
+      };
+      await request(app.getHttpServer())
+        .post('/api/users')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send(newUser)
+        .expect(201);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/users')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ ...newUser, firstName: 'Second' })
+        .expect(409);
+
+      expect(res.body.errorCode).toBe('UNIQUE_CONSTRAINT_VIOLATION');
+      expect(res.body).toMatchObject({
+        statusCode: 409,
+        error: 'Conflict',
+        details: { field: 'email' },
+        path: '/api/users',
+      });
+      expect(typeof res.body.timestamp).toBe('string');
+    });
+
     it('GET /api/users honors page and perPage query params', async () => {
       await request(app.getHttpServer())
         .post('/api/users')

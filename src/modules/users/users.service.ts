@@ -13,6 +13,11 @@ import { EmailService } from '../../common/email/email.service';
 import { SmsService } from '../../common/sms/sms.service';
 import { OtpPurpose } from '../../common/enums/otp-purpose.enum';
 import { SeededRoleName } from '../../common/enums/seeded-role-name.enum';
+import {
+  BCRYPT_ROUNDS,
+  hashPassword,
+} from '../../common/util/password-hashing.util';
+import { RedisService } from '../../common/redis/redis.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
@@ -25,7 +30,18 @@ import { VerifyAuthUserPhoneDto } from './dto/verify-auth-user-phone.dto';
 
 // OWASP 2024+ guidance. Bumping this is safe — existing hashes already
 // encode their own cost factor and continue to verify correctly.
-const BCRYPT_ROUNDS = 12;
+// One duplicate-signup notice per email address per 24h.
+//
+// Answering a signup collision with a uniform 201 closes the enumeration
+// leak, but the notice email it depends on would otherwise turn the endpoint
+// into an email-bombing amplifier: resubmit a victim's address in a loop and
+// we deliver the mail. The global throttle bounds requests per IP; this
+// bounds mail per RECIPIENT, which is the thing being abused, and survives an
+// attacker rotating IPs. A genuine "I forgot I had an account" user needs
+// exactly one of these per attempt anyway.
+const DUPLICATE_SIGNUP_NOTICE_COOLDOWN_SECONDS = 24 * 60 * 60;
+const DUPLICATE_SIGNUP_NOTICE_KEY_PREFIX = 'duplicate-signup-notice:';
+
 const OTP_EXPIRY_MS = 15 * 60 * 1000;
 
 function generateOtp(): string {
@@ -46,7 +62,52 @@ export class UsersService {
     private readonly auditService: AuditService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly redis: RedisService,
   ) {}
+
+  // Tells the owner of an existing account that someone tried to sign up with
+  // their email, and reports whether the mail actually went out.
+  //
+  // Returns false (without sending) when:
+  //   • the account is soft-deleted — there is no live account to sign in to;
+  //   • the 24h per-recipient cooldown is already claimed;
+  //   • the provider fails — the caller's response must not change shape
+  //     because our mail provider is down.
+  // The caller audits the returned flag, so a suppressed send is visible in
+  // `audit_logs` rather than silently absent.
+  async sendDuplicateSignupNotice(existingUser: User): Promise<boolean> {
+    if (existingUser.deletedAt) {
+      return false;
+    }
+    // SET NX EX — atomic claim-the-window. Two concurrent attempts on the
+    // same address can't both pass, which a GET-then-SET would allow.
+    const claimedCooldown = await this.redis.client.set(
+      `${DUPLICATE_SIGNUP_NOTICE_KEY_PREFIX}${existingUser.email}`,
+      '1',
+      'EX',
+      DUPLICATE_SIGNUP_NOTICE_COOLDOWN_SECONDS,
+      'NX',
+    );
+    if (claimedCooldown !== 'OK') {
+      return false;
+    }
+    try {
+      await this.emailService.sendDuplicateSignupAttemptNotification(
+        existingUser.email,
+        existingUser.firstName,
+        this.configService.getOrThrow<string>('webBaseUrl'),
+        new Date(),
+      );
+      return true;
+    } catch (error: unknown) {
+      this.logger.warn(
+        `Duplicate-signup notice failed for user ${existingUser.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return false;
+    }
+  }
 
   // JWT-based email verification link. Payload carries the user id and a
   // `purpose` claim that prevents the token being used as an access token
@@ -138,7 +199,7 @@ export class UsersService {
   }
 
   async create(dto: CreateUserDto, actorId: string | null): Promise<User> {
-    const passwordHash = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
+    const passwordHash = await hashPassword(dto.password);
     // The user row and its PLATFORM_USER assignment are one atomic unit. A
     // user without that role holds no permissions at all — they could not even
     // read their own profile — so a partial write here would produce a broken
@@ -212,7 +273,7 @@ export class UsersService {
     return new UserPermissionsResponseDto({
       // `packRules` compresses each rule to a positional tuple. The client
       // restores it with `unpackRules` — the shape is CASL's, not ours.
-      rules: packRules(ability.rules) as unknown[],
+      rules: packRules(ability.rules),
       platformRoles: (user?.userRoles ?? []).map(
         (userRole) => userRole.role.name,
       ),
@@ -328,7 +389,7 @@ export class UsersService {
     };
 
     if (dto.password) {
-      updateData.password = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
+      updateData.password = await hashPassword(dto.password);
       updateData.passwordChangedAt = new Date();
     }
 
@@ -397,10 +458,7 @@ export class UsersService {
       data: {
         email: `deleted-${userId}@deleted.invalid`,
         username: null,
-        password: await bcrypt.hash(
-          `erased-${userId}-${now.getTime()}`,
-          BCRYPT_ROUNDS,
-        ),
+        password: await hashPassword(`erased-${userId}-${now.getTime()}`),
         passwordChangedAt: now,
         firstName: 'Deleted',
         middleName: null,
@@ -518,7 +576,7 @@ export class UsersService {
     if (!passwordMatches) {
       throw Errors.currentPasswordIncorrect();
     }
-    const passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
+    const passwordHash = await hashPassword(dto.newPassword);
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: {
@@ -542,7 +600,7 @@ export class UsersService {
       );
     }
     await this.findById(userId);
-    const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+    const passwordHash = await hashPassword(newPassword);
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: {
@@ -722,7 +780,7 @@ export class UsersService {
     if (!otpMatches) {
       throw Errors.invalidOtp();
     }
-    const passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
+    const passwordHash = await hashPassword(dto.newPassword);
     const updated = await this.prisma.user.update({
       where: { id: user.id },
       data: {
