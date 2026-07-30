@@ -11,6 +11,7 @@ import { ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import { HealthVersionResponseDto } from './dto/health-version-response.dto';
 import { PrismaHealthIndicator } from './indicators/prisma.health';
+import { QueueHealthIndicator } from './indicators/queue.health';
 
 // Captured at module load — i.e. when the container's Node process
 // starts. Curl /api/health/version after a deploy: a startedAt that
@@ -25,6 +26,7 @@ export class HealthController {
   constructor(
     private readonly health: HealthCheckService,
     private readonly prismaHealth: PrismaHealthIndicator,
+    private readonly queueHealth: QueueHealthIndicator,
     private readonly memory: MemoryHealthIndicator,
     private readonly configService: ConfigService,
   ) {}
@@ -53,7 +55,29 @@ export class HealthController {
   @Public()
   @HealthCheck()
   readiness(): Promise<HealthCheckResult> {
-    return this.health.check([() => this.prismaHealth.pingCheck('database')]);
+    return this.health.check([
+      () => this.prismaHealth.pingCheck('database'),
+      // Queue CONNECTIVITY, not worker liveness. An API that accepts a request
+      // it cannot enqueue follow-up work for is genuinely not ready; an API
+      // whose worker is restarting is fine and stays in the load balancer.
+      () => this.queueHealth.connectivityCheck('queue'),
+    ]);
+  }
+
+  // Worker liveness, on its own endpoint precisely so it can fail without
+  // pulling the HTTP API out of rotation. Answers "is anything consuming the
+  // queues?" by checking how recently a worker last beat.
+  //
+  // Also the probe a dedicated worker container will use when the worker is
+  // split into its own process — it has no HTTP server of its own, so a
+  // heartbeat key in Redis is the only liveness signal available to it.
+  @Get('workers')
+  @Public()
+  @HealthCheck()
+  workers(): Promise<HealthCheckResult> {
+    return this.health.check([
+      () => this.queueHealth.workerHeartbeatCheck('queue_worker'),
+    ]);
   }
 
   // Returns the commit hash baked into this image at build time (via the

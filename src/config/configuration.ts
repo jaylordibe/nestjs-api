@@ -23,6 +23,19 @@ export interface AppConfig {
     password: string;
     url: string;
   };
+  queue: {
+    // Whether THIS process consumes queued jobs. False makes it a pure
+    // producer — it still enqueues everything, the jobs just wait in Redis for
+    // a process that does consume. That is what lets one image run as an
+    // API-only instance, a worker-only instance, or both at once locally.
+    // Producing is never gated; only consuming.
+    workerEnabled: boolean;
+    // Jobs a worker runs at once, per queue. The ops lever for queue backlog —
+    // raise it when jobs pile up, lower it when they crowd out HTTP traffic in
+    // a combined API+worker process. A queue may pin its own value in
+    // QUEUE_REGISTRATIONS when its jobs are heavy enough to warrant it.
+    workerConcurrency: number;
+  };
   jwt: {
     secret: string;
     expiresIn: string;
@@ -102,6 +115,24 @@ export default (): AppConfig => ({
     port: parseInt(process.env.REDIS_PORT!, 10),
     password: process.env.REDIS_PASSWORD!,
     url: process.env.REDIS_URL!,
+  },
+  queue: {
+    // Trimmed and lowercased before comparing, NOT compared to a bare
+    // 'false'. Joi validates this var but its coerced boolean does not
+    // necessarily reach `process.env`: @nestjs/config only writes validated
+    // values back for keys that were not already present, and every deployed
+    // container supplies it through `env_file`, so the RAW string is what
+    // arrives here. Joi's boolean is case-insensitive and trims, so it
+    // happily accepts `False` / ` false ` — which an exact `!== 'false'`
+    // would read as TRUE, silently starting a worker on an instance meant to
+    // be a pure producer.
+    workerEnabled:
+      (process.env.QUEUE_WORKER_ENABLED ?? 'true').trim().toLowerCase() !==
+      'false',
+    workerConcurrency: parseInt(
+      process.env.QUEUE_WORKER_CONCURRENCY ?? '10',
+      10,
+    ),
   },
   jwt: {
     secret: process.env.JWT_SECRET!,

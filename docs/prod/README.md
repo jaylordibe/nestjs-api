@@ -296,6 +296,48 @@ gunzip -c backups/2026-04-27.sql.gz \
 docker compose up -d --build --force-recreate api
 ```
 
+## Queue worker
+
+The `api` container runs the BullMQ worker in-process
+(`QUEUE_WORKER_ENABLED=true`, the default). Nothing extra to deploy.
+
+**Monitor `GET /api/health/workers`.** It is deliberately *off* readiness — a
+restarting worker must not pull the API out of rotation — which also means
+nothing else will tell you the worker has stopped consuming. It returns 503
+when no heartbeat has landed within ~15 minutes.
+
+```bash
+# Is anything consuming the queues?
+docker compose exec api node -e "fetch('http://localhost:3000/api/health/workers').then(r=>r.text()).then(console.log)"
+
+# Lifecycle log lines are logfmt and greppable by event
+docker compose logs api | grep 'event=failed'
+docker compose logs api | grep 'event=retried'
+```
+
+**Queued jobs are exactly as durable as Redis.** The `redis` service runs
+`--appendonly yes` against a named volume, so waiting, delayed and retryable
+jobs survive a restart of the api, the worker and Redis itself. There is no
+in-memory fallback by design — one would mean jobs silently vanishing.
+
+### Splitting the worker into its own container
+
+Not needed at low volume. When job throughput justifies it this is a deployment
+change only, no code change — `src/worker.ts` already bootstraps the same
+`AppModule` without an HTTP server:
+
+1. Add a `worker` service to `docker-compose.yml`: same `build.context` and
+   `image` as `api`, plus `command: ["node", "dist/worker.js"]`.
+2. Healthcheck it against the queue heartbeat key rather than an HTTP endpoint
+   — a process with no HTTP server has no other way to answer one.
+3. Set `QUEUE_WORKER_ENABLED=false` on the `api` service. It keeps enqueuing
+   everything; the jobs just wait for the worker.
+4. Mirror the api service's build / stop / recreate steps in
+   `.github/workflows/deploy-production.yml`.
+5. Give it a `stop_grace_period` above the worker's 25s drain budget
+   (`WORKER_SHUTDOWN_TIMEOUT_MILLISECONDS` in `src/worker.ts`), so a shutdown
+   reports what it abandoned instead of being SIGKILLed mid-job.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Check |
@@ -308,6 +350,10 @@ docker compose up -d --build --force-recreate api
 | `web` service fails to build on first deploy | Sibling SPA repo not cloned yet (step 2) | Clone the repo into `/srv/<service>/<service>-<name>` and re-run `docker compose up -d --build <name>` |
 | Migrations exit non-zero | Schema drift / missing migration on disk | `docker compose --profile migrate run --rm migrate` (re-run, read output) |
 | API logs `ECONNREFUSED postgres:5432` | Postgres not up yet (race) or container restart loop | `docker compose ps postgres`, `docker compose logs postgres` |
+| `/api/health/readiness` 503 with `queue: down` | API cannot reach Redis to enqueue work | `docker compose ps redis`, `docker compose logs redis`, then `docker compose logs api \| grep 'Queue health check failed'` for the real cause (it is logged, never returned) |
+| `/api/health/workers` 503, readiness green | Nothing is consuming the queues — worker crashed, or `QUEUE_WORKER_ENABLED` is false with no worker container running | `docker compose logs api \| grep QueueProcessor`, check `QUEUE_WORKER_ENABLED` in `.env` |
+| Jobs fail immediately without retrying | Permanent failure by design — unknown job name, or a payload version this release doesn't accept (usually a half-finished rolling deploy) | `docker compose logs api \| grep 'event=failed'` — the `reason=` field names it |
+| A recurring job fires that no code declares | Orphaned BullMQ scheduler left in Redis | Boot reconciliation removes it; look for `Removing orphaned recurring schedule` in the api logs |
 | Per-IP rate limiting acts globally / all clients same IP | `TRUST_PROXY` wrong | Should be `2` (Cloudflare + Caddy) |
 | S3 uploads fail with 403 | Identity missing bucket write perms, or wrong static keys | Verify the IAM role / `AWS_*` keys and bucket policy |
 | Disk filling up | Docker logs / dangling images | `docker image prune -f`, `docker system df` |

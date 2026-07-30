@@ -30,7 +30,9 @@ A production-grade scaffold for building JSON APIs with **NestJS 11 + Prisma 7 +
 - **Swagger docs** at `/api/docs`, auto-generated from DTOs (no `@ApiProperty` boilerplate needed — the compiler plugin introspects class-validator).
 - **Global exception filters** — Prisma-aware (P2002 → 409, P2003 → 400, P2025 → 404) with a catch-all fallback that never leaks internal error messages in 5xx responses.
 - **Config validated at boot** via Joi. Production enforces non-wildcard `CORS_ORIGIN`, explicit `TRUST_PROXY`, and rejects the default `JWT_SECRET`.
-- **Health checks** — `/api/health/liveness` (k8s liveness, no DB) + `/api/health/readiness` (k8s readiness, DB ping).
+- **Background jobs** via BullMQ — immediate, delayed and recurring, with retries + backoff, cancellation, rescheduling, bounded retention, and one logfmt line per lifecycle transition. Three registries (queue / job / recurring schedule) are the single source of truth, and the boot fails on a job with no handler, a queue with no processor, or a recurring schedule Redis still holds that the code no longer declares. Runs in-process by default; `QUEUE_WORKER_ENABLED=false` + `yarn start:worker` splits API and worker with no code change. See [`src/common/queue/README.md`](src/common/queue/README.md).
+- **Scheduled jobs** via `@nestjs/schedule` for fixed-cadence sweeps. The decision table at the top of the queue README says which of the two mechanisms a given job belongs on.
+- **Health checks** — `/api/health/liveness` (k8s liveness, no DB) + `/api/health/readiness` (DB ping + queue connectivity) + `/api/health/workers` (queue-worker heartbeat, deliberately *off* readiness so a restarting worker can't pull the API out of rotation). All three are unauthenticated, so a failing check logs the real cause and returns a fixed string — Prisma's `P1001`/`P1000` quote your internal host and database user, and an ioredis failure quotes host and port (CWE-209). Enforced by co-located specs on both indicators.
 - **Docker** — pinned Postgres 18 + Redis 8 for dev; 3-stage production Dockerfile (non-root, tini, npm stripped).
 - **CI** — lint + build + unit + e2e + yarn audit + Trivy image scan on every PR (Postgres + Redis service containers).
 - **DB seeder** — `yarn prisma:seed` creates admin + user accounts from env-configured credentials (idempotent, password-complexity-enforced).
@@ -110,6 +112,8 @@ yarn prisma:migrate dev               # apply any new migrations
 | --- | --- |
 | `yarn start:dev` | Watch-mode dev server with hot reload |
 | `yarn start:prod` | Run the compiled build from `dist/` |
+| `yarn start:worker` | Run the queue worker alone, no HTTP server (needs `QUEUE_WORKER_ENABLED=true`) |
+| `yarn start:worker:dev` | Same, in watch mode |
 | `yarn build` | Compile TypeScript to `dist/` |
 | `yarn lint` | ESLint `--fix` over `src` and `test` |
 | `yarn format` | Prettier write |
@@ -162,6 +166,7 @@ All routes under `/api`. See Swagger at `/api/docs` for full specs.
 ```
 src/
   main.ts                    # bootstrap: helmet, /api prefix, CORS, trust proxy, Swagger
+  worker.ts                  # second entrypoint: same AppModule, no HTTP server, consumes queues
   app.module.ts              # global modules + APP_PIPE/INTERCEPTOR/FILTER/GUARD registration
   config/                    # configuration.ts (typed factory), env.validation.ts (Joi)
   prisma/                    # @Global PrismaService + soft-delete extension
@@ -174,6 +179,9 @@ src/
     email/                   # EmailService, adapters (stub/resend), templates, template engine
     audit/                   # AuditService (@Global)
     redis/                   # RedisService (@Global, shared ioredis client)
+    queue/                   # @Global BullMQ layer: registries, producer, processor base, handlers
+    scheduled-jobs/          # @Cron host for fixed-cadence sweeps
+    util/                    # pure helpers (+ co-located *.util.spec.ts)
   modules/
     auth/                    # AuthService, AuthController, JwtStrategy, JwtAuthGuard
     authorization/           # @Global: AbilityFactory, grants cache, PermissionsGuard, boot-time gates
@@ -183,7 +191,7 @@ src/
     audit-logs/              # read-only audit trail
     app-versions/            # mobile app version signal
     device-tokens/           # push notification tokens (FK to User, hard delete)
-    health/                  # liveness + readiness
+    health/                  # liveness + readiness + worker heartbeat
 prisma/
   schema.prisma              # models
   migrations/                # a single `init` migration (a starter is a fork in time)
@@ -221,6 +229,8 @@ Before the first real deploy, confirm:
 - [ ] Managed Postgres PITR enabled.
 - [ ] Secrets served from a secret manager (AWS Secrets Manager / Vault / k8s secrets) rather than plaintext env.
 - [ ] Retention cron scheduled for hard-deleting soft-deleted users after N days (cascades to `device_tokens` via FK).
+- [ ] Redis runs with AOF persistence, a durable volume and backups — **queued jobs are exactly as durable as the Redis they live in**, and there is no in-memory fallback by design.
+- [ ] `GET /api/health/workers` monitored (it is off readiness on purpose, so nothing else will tell you the worker died).
 
 ## Tech stack
 
@@ -229,6 +239,8 @@ Before the first real deploy, confirm:
 - **Language** — TypeScript (strict, `isolatedModules`, `emitDecoratorMetadata`)
 - **DB** — PostgreSQL 18 + Prisma 7 via `@prisma/adapter-pg`
 - **Cache / sessions** — Redis 8 (ioredis)
+- **Background jobs** — BullMQ via `@nestjs/bullmq` (same Redis, AOF-persisted)
+- **Cron** — `@nestjs/schedule`
 - **Auth** — `@nestjs/jwt` + `passport-jwt`, bcrypt (cost 12)
 - **Validation** — class-validator + class-transformer
 - **Logging** — pino via `nestjs-pino`

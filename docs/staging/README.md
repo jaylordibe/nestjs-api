@@ -285,11 +285,28 @@ docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile
 docker compose up -d --build --force-recreate api
 ```
 
+## Queue worker
+
+The `api` container runs the BullMQ worker in-process
+(`QUEUE_WORKER_ENABLED=true`, the default), same as production.
+
+`GET /api/health/workers` answers "is anything consuming the queues?" and is
+deliberately *off* readiness, so nothing else will tell you the worker stopped.
+Staging is the right place to exercise a worker split before doing it in prod —
+the runbook is in [`../prod/README.md`](../prod/README.md#splitting-the-worker-into-its-own-container).
+
+```bash
+# Lifecycle log lines are logfmt and greppable by event
+docker compose logs api | grep 'event=failed'
+```
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Check |
 |---|---|---|
 | `502 Bad Gateway` from Caddy | Upstream container down / unhealthy | `docker compose ps`, `docker compose logs api` |
+| `/api/health/readiness` 503 with `queue: down` | API cannot reach Redis to enqueue work | `docker compose ps redis`, then `docker compose logs api \| grep 'Queue health check failed'` for the real cause (it is logged, never returned) |
+| `/api/health/workers` 503, readiness green | Nothing is consuming the queues | `docker compose logs api \| grep QueueProcessor`, check `QUEUE_WORKER_ENABLED` in `.env` |
 | `525 SSL handshake failed` from Cloudflare | Origin cert missing or wrong | `ls -la /srv/<service>/certs/`, `docker compose logs caddy` |
 | `526 Invalid SSL certificate` after enabling AOP | `cf-origin-pull-ca.pem` missing, wrong path, or AOP not toggled ON | Re-curl the CA cert, check the dashboard toggle, `docker compose logs caddy` |
 | Caddy logs `client didn't provide a certificate` | AOP enabled in Caddy but OFF in CF dashboard | Toggle ON in CF, or temporarily set `client_auth mode request` while diagnosing |

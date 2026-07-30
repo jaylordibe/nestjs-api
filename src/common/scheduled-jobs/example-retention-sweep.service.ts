@@ -13,6 +13,8 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 //
 //   2. **Skip in test.** The scheduler runs in test by default; gate the
 //      body on `nodeEnv !== 'test'` so e2e suites don't get noisy.
+//      (`createTestApp` also unregisters every task, so this is the second
+//      of two guards — a job driven directly by a unit test still needs it.)
 //
 //   3. **Per-row try/catch + dedupe column** when iterating. For batch
 //      jobs (e.g. "send reminder emails for all bookings due in 24h"),
@@ -25,13 +27,21 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 //      (clock skew across pods, scheduler restart, manual `runOnce()`
 //      call from a runbook). The job must be safe to repeat.
 //
+// **Is @Cron even the right mechanism?** This is a SWEEP — one query over
+// every row matching a condition, on a fixed cadence, safe to miss and safe
+// to repeat. That is exactly what @Cron is for. Work that targets ONE entity
+// at a computed future instant, or needs retries with backoff, or must be
+// cancellable when the entity changes, belongs on the BullMQ queue instead.
+// The decision table at the top of src/common/queue/README.md is the whole
+// rule; don't pick by habit.
+//
 // `CronExpression` provides named constants for common schedules:
 //   EVERY_MINUTE, EVERY_5_MINUTES, EVERY_30_MINUTES, EVERY_HOUR,
 //   EVERY_DAY_AT_MIDNIGHT, EVERY_DAY_AT_NOON, etc. Pass a raw string
 //   (`'*/5 * * * *'`) for anything bespoke.
 @Injectable()
-export class ExampleHeartbeatService {
-  private readonly logger = new Logger(ExampleHeartbeatService.name);
+export class ExampleRetentionSweepService {
+  private readonly logger = new Logger(ExampleRetentionSweepService.name);
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -46,6 +56,6 @@ export class ExampleHeartbeatService {
   // Public for testability — call it directly from a unit test or a
   // one-off ts-node script to reproduce the cron's effects.
   runOnce(): void {
-    this.logger.log('[heartbeat] tick');
+    this.logger.log('[retention-sweep] tick');
   }
 }

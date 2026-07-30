@@ -27,7 +27,7 @@ When a small ask conflicts with this bar (e.g. "just fix this one site"), surfac
 
 NestJS 11 (TypeScript, Express) + Prisma 7 + PostgreSQL + Redis. JWT auth with DB-backed RBAC + CASL over two scopes (PLATFORM / BUSINESS). GitHub template: set `SERVICE_NAME` in `.env`, add feature modules. URLs unversioned (`/api/...`). Swagger at `/api/docs`.
 
-Package manager: **yarn** (yarn.lock committed). Scripts: `start:dev`, `start:prod`, `build`, `lint`, `format`, `test`, `test:e2e`, `stack:up`, `stack:down`, `prisma:generate`, `prisma:migrate`, `prisma:deploy`, `prisma:seed`, `prisma:studio`.
+Package manager: **yarn** (yarn.lock committed). Scripts: `start:dev`, `start:prod`, `start:worker`, `build`, `lint`, `format`, `test`, `test:e2e`, `stack:up`, `stack:down`, `prisma:generate`, `prisma:migrate`, `prisma:deploy`, `prisma:seed`, `prisma:studio`.
 
 **Two container stacks, one `docker-compose.yml`, one definition each for Postgres 18.3 + Redis 8.6.2** — which one you get is decided by the env file:
 
@@ -47,7 +47,8 @@ Package manager: **yarn** (yarn.lock committed). Scripts: `start:dev`, `start:pr
 ```
 src/
   main.ts              # bootstrap: helmet, prefix /api, trust proxy, CORS, Swagger (gated), shutdown hooks
-  app.module.ts        # ConfigModule + ThrottlerModule + ScheduleModule + PrismaModule + features;
+  worker.ts            # 2nd entrypoint into the SAME AppModule, no HTTP server — pure queue consumer
+  app.module.ts        # ConfigModule + ThrottlerModule + ScheduleModule + PrismaModule + QueueModule + features;
                        # APP_PIPE (ValidationPipe), APP_INTERCEPTOR (ClassSerializerInterceptor),
                        # APP_FILTER (GlobalExceptionFilter), APP_GUARD (ThrottlerGuard)
   config/              # configuration.ts (typed factory), env.validation.ts (Joi)
@@ -62,6 +63,9 @@ src/
     enums/             # RoleScope, PermissionOwnership, SeededRoleName, Gender, OtpPurpose, AppPlatform, DeviceType, DeviceOs
     email/  sms/  storage/   # @Global() provider abstractions (stub + real adapters)
     audit/  redis/  scheduled-jobs/
+    queue/             # @Global() BullMQ layer — queue/job/recurring-schedule registries,
+                       # QueueProducerService, QueueProcessor base, handler registry, README.md
+    util/              # pure helpers + co-located *.util.spec.ts
   modules/
     authorization/     # @Global: AbilityFactory, PermissionLoaderService (grants cache),
                        # AbilityScopedQueryService (the ONLY caller of accessibleBy),
@@ -95,7 +99,8 @@ prisma/seeds/          # static seed data JSON consumed by prisma/seed.ts
 - **Config access**: `configService.getOrThrow<T>('dot.path')` into `configuration.ts`. Never read `process.env` outside that file. `API_BASE_URL` = the API host (backend-handler links like verify-email); `WEB_BASE_URL` = the customer frontend (page links).
 - **Swagger**: the compiler plugin infers DTOs (no manual `@ApiProperty` needed). `@ApiTags` + `@ApiBearerAuth()` on JWT routes. Paginated handlers MUST be decorated `@ApiPaginatedResponse(T)` (`common/decorators/`) — the plugin can't infer `T` through `PaginatedResponseDto<T>`'s generic. **Non-paginated handlers need an explicit `@ApiOkResponse`/`@ApiCreatedResponse({ type })`** — the plugin does NOT attach a response schema from the return type alone, so the body renders untyped in `/api/docs` without it. Side-effect / acknowledgement endpoints (password reset, resend, etc.) return a **shared typed DTO** (`OperationAcknowledgementDto { ok: boolean }`), never an inline object literal or inline `schema:`; a redirect handler is documented with `@ApiResponse({ status: 302 })`, not a fake 200. Extended mapped types (`PartialType`/`PickType`/`OmitType`/`IntersectionType`) import from `@nestjs/swagger`, not `@nestjs/mapped-types`, or inherited DTOs render empty. Sidebar is sorted A→Z (`tagsSorter`/`operationsSorter: 'alpha'` in `main.ts`). Swagger is gated off in production (`main.ts`).
 - **Rate limiting**: global `ThrottlerGuard`, 100/60s/IP (Redis storage in dev/staging/prod, in-memory in test). Per-route `@Throttle({ default: { limit, ttl } })`; `@SkipThrottle()` for `/health/*`. Any `@Public()` or OTP/SMS/email-dispatching endpoint needs its own `@Throttle`.
-- **Logging**: pino (`nestjs-pino`), JSON in prod/staging, pretty in dev. `X-Request-Id` per request (reused or fresh UUID). Redacts `authorization`, `cookie`, password/OTP body fields — extend `redact.paths` in `app.module.ts` for new sensitive bodies.
+- **Logging**: pino (`nestjs-pino`), JSON in prod/staging, pretty in dev. `X-Request-Id` per request (reused or fresh UUID). Redacts `authorization`, `cookie`, password/OTP body fields — extend `redact.paths` in `app.module.ts` for new sensitive bodies. A **queue worker** has no HTTP request, so `QueueProcessor` opens the CLS scope itself and seeds the request ID from the job payload's `correlationId` — a job's log lines carry the ID of the request that enqueued it.
+- **Health indicators**: `/api/health/*` is `@Public()`, so a failing check **logs the real error and returns a fixed string** — never the driver's message (Prisma `P1001`/`P1000` quote the internal host and DB user; ioredis quotes host and port). CWE-209. Every indicator follows this and carries a co-located spec asserting the public payload leaks nothing; copy `prisma.health.ts` / `queue.health.ts` when adding one. Terminus reports a failure by serializing only what the indicator returns, so the explicit `logger.error` is what keeps an outage diagnosable — it is load-bearing, not decoration.
 - **Provider abstractions** (`EmailService`, `SmsService`, `FileStorageService`, all `@Global()`): each has a `stub` default + a real adapter, selected by env (`EMAIL_PROVIDER`, `SMS_PROVIDER`, `STORAGE_PROVIDER`). Only the selected adapter is constructed at boot. Call typed helpers (`emailService.sendTemplate(...)`, `smsService.sendPhoneVerificationOtp(...)`), not raw `.send(...)`. Email templates compile at boot — `{{var}}` typos fail startup.
 - **Multipart uploads**: `imageUploadOptions` (`common/storage/image-upload.config.ts`) → `FilesInterceptor`; a structured body rides as a JSON-string field parsed by `ParseJsonPipe`. See `docs/resource-pattern.md`.
 - **Layering**: `src/common/` is the leaf layer — `src/modules/` builds on it, **never the reverse**. ESLint enforces it (`no-restricted-imports` on `src/common/**`). Anything needing a service belongs in a module: that is why `PermissionsGuard` lives in `modules/authorization/guards/` while the decorators it reads stay in `common/decorators/` (pure metadata, zero dependencies).
@@ -130,7 +135,8 @@ Load these on demand — they hold the long-form playbooks so this core stays le
 | Add/scaffold a CRUD resource (schema, five endpoints, list queries, response DTOs + relations, delete semantics, soft-delete filter) | `nestjs-new-resource` skill (+ code skeletons in `docs/resource-pattern.md`) |
 | Permissions, roles, business-scoped resources, `@RequirePermission`, CASL abilities, tenant isolation, escalation/rank guard, grants cache | `nestjs-authorization` skill (+ the contract in `src/common/authorization/README.md`) |
 | Auth / login / JWT / OTP / email-verify / phone-verify / lockout / timing hardening / security review | `nestjs-auth-security` skill |
-| Scheduled `@Cron` job | `nestjs-scheduled-job` skill |
+| Scheduled `@Cron` job (recurring sweep over all due rows) | `nestjs-scheduled-job` skill |
+| Background job on the BullMQ queue — immediate / delayed / recurring, with retries, cancellation, rescheduling. **The default for NEW background work**; the decision table at the top of the README says which of the two a job belongs on | `src/common/queue/README.md` |
 | Write e2e specs (harness, coverage, cadence, error-envelope assertions) | `nestjs-e2e-test` skill |
 | Error envelope contract + ErrorCode catalog + client logout rule | `src/common/errors/README.md` |
 | Deployment / infra (Caddy + per-env compose + GitHub Actions) | `docs/README.md` → `docs/prod/` + `docs/staging/` |

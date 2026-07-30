@@ -20,6 +20,7 @@ import { Errors } from './common/errors/errors';
 import { flattenValidationErrors } from './common/errors/flatten-validation-errors';
 import { EmailModule } from './common/email/email.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
+import { QueueModule } from './common/queue/queue.module';
 import { RedisModule } from './common/redis/redis.module';
 import { ScheduledJobsModule } from './common/scheduled-jobs/scheduled-jobs.module';
 import { SmsModule } from './common/sms/sms.module';
@@ -222,9 +223,16 @@ import { UsersModule } from './modules/users/users.module';
     // services. forRoot() is enough — there's no per-environment gating
     // because each scheduled job is responsible for being a no-op in
     // test (e.g. checking NODE_ENV) or just being idempotent.
+    //
+    // @Cron is one of TWO scheduling mechanisms and they are not competitors:
+    // a cron sweep is right for "run this query on a fixed cadence", the queue
+    // is right for per-entity work needing retries, cancellation or a precise
+    // future instant. The decision table in src/common/queue/README.md picks
+    // between them.
     ScheduleModule.forRoot(),
     PrismaModule,
     RedisModule,
+    QueueModule,
     EmailModule,
     SmsModule,
     AuditModule,

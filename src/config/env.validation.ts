@@ -54,6 +54,14 @@ export const envValidationSchema = Joi.object({
     .uri({ scheme: ['redis', 'rediss'] })
     .required(),
 
+  // Whether THIS process consumes queued jobs. Producing is never gated, so
+  // false yields a pure API instance that still enqueues everything.
+  QUEUE_WORKER_ENABLED: Joi.boolean().default(true),
+  // Jobs a worker runs concurrently, per queue. The lever for a growing
+  // backlog; capped because an unbounded value in a combined API+worker
+  // process starves HTTP request handling.
+  QUEUE_WORKER_CONCURRENCY: Joi.number().integer().min(1).max(100).default(10),
+
   JWT_SECRET: Joi.string()
     .min(32)
     .required()
