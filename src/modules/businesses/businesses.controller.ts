@@ -65,7 +65,7 @@ export class BusinessesController {
   @Get(':id')
   @RequirePermission('read', 'Business', { denyAsNotFound: true })
   @ApiOkResponse({ type: BusinessResponseDto })
-  async findOne(
+  async findById(
     @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentAbility() ability: AppAbility,
   ): Promise<BusinessResponseDto> {

@@ -56,7 +56,7 @@ export class RolesController {
   @Get(':id')
   @RequirePermission('read', 'Role')
   @ApiOkResponse({ type: RoleResponseDto })
-  async findOne(
+  async findById(
     @Param('id', new ParseUUIDPipe()) id: string,
   ): Promise<RoleResponseDto> {
     return new RoleResponseDto(await this.rolesService.findById(id));

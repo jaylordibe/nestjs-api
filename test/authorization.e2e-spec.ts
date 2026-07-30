@@ -191,6 +191,8 @@ describe('Authorization (e2e)', () => {
       .send({
         version: '1.0.0',
         platform: 'mobile',
+        // `mobile` ships one build per OS, so a release must name its train.
+        deviceOs: 'ios',
         releaseDate: new Date().toISOString(),
       })
       .expect(201);

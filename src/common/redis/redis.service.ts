@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
+import { formatErrorMessage } from '../util/error-message.util';
 
 // Shared Redis client for app-level use (JWT revocation blocklist, etc.).
 // The throttler maintains its own separate client via
@@ -29,8 +30,35 @@ export class RedisService implements OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
-    if (this.client.status === 'ready' || this.client.status === 'connecting') {
+    // ioredis has seven statuses, and only two of them mean "there is nothing
+    // to close": `wait` (lazyConnect, not yet dialled) and `end` (already
+    // closed). Every other status — `connecting`, `connect`, `ready`, `close`,
+    // `reconnecting` — holds either a live socket or an ARMED RECONNECT TIMER,
+    // and both outlive the app if this returns early.
+    //
+    // `reconnecting` is the dangerous one: left alone, that client reconnects
+    // AFTER the app is gone, then runs ioredis's post-connect handshake
+    // (CLIENT SETNAME / SETINFO) against a socket nothing owns any more. The
+    // handshake writes synchronously, so a dead socket surfaces as a bare
+    // `write EPIPE` with no owner — which under Jest gets attributed to
+    // whatever spec happens to be running, and is indistinguishable from a
+    // flake: a different suite fails each run, with zero failing assertions,
+    // and every suite passes in isolation.
+    if (this.client.status === 'wait' || this.client.status === 'end') {
+      return;
+    }
+
+    try {
+      // QUIT is the graceful path: Redis finishes in-flight replies first.
       await this.client.quit();
+    } catch (error) {
+      // QUIT itself rejects when the connection drops before the command lands
+      // ("Connection is closed"). A shutdown must not fail on that — force the
+      // socket down, which also cancels the reconnect timer.
+      this.logger.warn(
+        `Redis QUIT failed during shutdown, forcing disconnect: ${formatErrorMessage(error)}`,
+      );
+      this.client.disconnect();
     }
   }
 }

@@ -41,10 +41,14 @@ export class DeviceTokensController {
   @ApiCreatedResponse({ type: DeviceTokenResponseDto })
   async create(
     @Body() dto: CreateDeviceTokenDto,
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
     @CurrentAbility() ability: AppAbility,
   ): Promise<DeviceTokenResponseDto> {
-    const row = await this.deviceTokensService.create(dto, ability, current.id);
+    const row = await this.deviceTokensService.create(
+      dto,
+      ability,
+      currentUser.id,
+    );
     return new DeviceTokenResponseDto(row);
   }
 
@@ -68,7 +72,7 @@ export class DeviceTokensController {
   @Get(':id')
   @RequirePermission('read', 'DeviceToken')
   @ApiOkResponse({ type: DeviceTokenResponseDto })
-  async findOne(
+  async findById(
     @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentAbility() ability: AppAbility,
   ): Promise<DeviceTokenResponseDto> {
@@ -82,14 +86,14 @@ export class DeviceTokensController {
   async update(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateDeviceTokenDto,
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
     @CurrentAbility() ability: AppAbility,
   ): Promise<DeviceTokenResponseDto> {
     const row = await this.deviceTokensService.update(
       id,
       dto,
       ability,
-      current.id,
+      currentUser.id,
     );
     return new DeviceTokenResponseDto(row);
   }
@@ -99,9 +103,9 @@ export class DeviceTokensController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
     @CurrentAbility() ability: AppAbility,
   ): Promise<void> {
-    await this.deviceTokensService.remove(id, ability, current.id);
+    await this.deviceTokensService.remove(id, ability, currentUser.id);
   }
 }

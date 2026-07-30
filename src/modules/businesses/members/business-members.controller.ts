@@ -73,7 +73,7 @@ export class BusinessMembersController {
   @Get(':memberId')
   @RequirePermission('read', 'BusinessMember')
   @ApiOkResponse({ type: BusinessMemberResponseDto })
-  async findOne(
+  async findById(
     @Param('businessId', new ParseUUIDPipe()) businessId: string,
     @Param('memberId', new ParseUUIDPipe()) memberId: string,
   ): Promise<BusinessMemberResponseDto> {

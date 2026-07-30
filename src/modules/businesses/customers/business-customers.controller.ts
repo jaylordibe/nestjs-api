@@ -83,7 +83,7 @@ export class BusinessCustomersController {
   @Get(':customerId')
   @RequirePermission('read', 'BusinessCustomer', { denyAsNotFound: true })
   @ApiOkResponse({ type: BusinessCustomerResponseDto })
-  async findOne(
+  async findById(
     @Param('businessId', new ParseUUIDPipe()) businessId: string,
     @Param('customerId', new ParseUUIDPipe()) customerId: string,
     @CurrentAbility() ability: AppAbility,
