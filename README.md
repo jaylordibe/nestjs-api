@@ -34,7 +34,7 @@ A production-grade scaffold for building JSON APIs with **NestJS 11 + Prisma 7 +
 - **Scheduled jobs** via `@nestjs/schedule` for fixed-cadence sweeps. The decision table at the top of the queue README says which of the two mechanisms a given job belongs on.
 - **Health checks** — `/api/health/liveness` (k8s liveness, no DB) + `/api/health/readiness` (DB ping + queue connectivity) + `/api/health/workers` (queue-worker heartbeat, deliberately *off* readiness so a restarting worker can't pull the API out of rotation). All three are unauthenticated, so a failing check logs the real cause and returns a fixed string — Prisma's `P1001`/`P1000` quote your internal host and database user, and an ioredis failure quotes host and port (CWE-209). Enforced by co-located specs on both indicators.
 - **Docker** — pinned Postgres 18 + Redis 8 for dev; 3-stage production Dockerfile (non-root, tini, npm stripped).
-- **CI** — lint + build + unit + e2e + yarn audit + Trivy image scan on every PR (Postgres + Redis service containers).
+- **CI** — lint + build + unit + sharded e2e + dependency audit + Trivy image scan on every PR. The audit gate fails on any high/critical advisory *except* ones with a documented, dated exception in `.github/scripts/audit-gate.mjs` — so one genuinely-unfixable finding can't force the choice between a permanently red build and deleting the gate. It also nags when an exception goes stale or past review.
 - **DB seeder** — `yarn prisma:seed` creates admin + user accounts from env-configured credentials (idempotent, password-complexity-enforced).
 
 ## Setup guide
@@ -137,7 +137,7 @@ All routes under `/api`. See Swagger at `/api/docs` for full specs.
 - `POST /auth/resend-verification` — resends the link (always 200, no enumeration).
 - `POST /users/request-password-reset` — emails OTP.
 - `POST /users/reset-password` — consumes OTP, sets new password.
-- `GET /app-versions` (paginated), `GET /app-versions/:id`, `GET /app-versions/latest?platform=mobile` — for mobile-app update-check flows.
+- `GET /app-versions` (paginated), `GET /app-versions/:id`, `GET /app-versions/latest?platform=mobile&os=ios` — client update-check flows. `os` names the **release train**: `mobile` and `desktop` ship one independently versioned build per OS, `web` ships one for everyone and omits it.
 
 ### Authenticated (JWT)
 - `GET /auth/me` — current user.
@@ -158,7 +158,7 @@ All routes under `/api`. See Swagger at `/api/docs` for full specs.
 - `POST|GET|PATCH|DELETE /users` + `/users/:id` + `/users/:id/password` — full user management.
 - `POST|DELETE /users/:userId/roles` — grant/revoke a platform role.
 - `POST|GET|PATCH|DELETE /roles`, `GET /permissions` — custom roles; permissions are code-owned.
-- `GET /audit-logs` — the platform audit trail.
+- `GET /audit-logs` — the platform audit trail. Filter by `action` / `actorId` / `targetUserId` / `startCreatedAt` / `endCreatedAt`, or cast a wide net with `?search=`, which matches the action name, either party's email, and the `metadata` envelope as text (trigram-indexed). Rows arrive with `actor` / `targetUser` hydrated (id, email, name, current platform roles), batched one query per page, and still resolve for soft-deleted users.
 - `POST|PATCH|DELETE /app-versions` — release signal management.
 
 ## Project layout
@@ -189,7 +189,7 @@ src/
     roles/                   # roles (data) + permissions (code, read-only) + platform-role assignment
     businesses/              # tenant resource + members (staff) + customers
     audit-logs/              # read-only audit trail
-    app-versions/            # mobile app version signal
+    app-versions/            # client update signal, one row per release train
     device-tokens/           # push notification tokens (FK to User, hard delete)
     health/                  # liveness + readiness + worker heartbeat
 prisma/

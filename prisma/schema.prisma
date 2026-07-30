@@ -283,12 +283,23 @@ model AppVersion {
   version     String
   description String?
   platform    String
+  // Distinguishes independent release trains within one platform: iOS vs
+  // Android, macOS vs Windows vs Linux. They carry different version numbers,
+  // stores and force-update timing, so they cannot share a row. Null for `web`,
+  // which has a single distribution. Constrained to `DeviceOs` in the app layer
+  // and required for any platform that has more than one train — see
+  // `src/modules/app-versions/release-train-registry.ts`.
+  deviceOs    String?  @map("device_os")
   releaseDate DateTime @map("release_date")
   downloadUrl String?  @map("download_url")
   forceUpdate Boolean  @default(false) @map("force_update")
 
-  @@unique([platform, version])
-  @@index([platform, releaseDate])
+  // NULL is distinct in a Postgres unique index, so this does NOT block two
+  // `web` rows (deviceOs = null) from sharing a version — that gap is closed by
+  // a service-level guard. For a platform with real trains (deviceOs set) it
+  // enforces hard.
+  @@unique([platform, deviceOs, version])
+  @@index([platform, deviceOs, releaseDate])
   @@map("app_versions")
 }
 

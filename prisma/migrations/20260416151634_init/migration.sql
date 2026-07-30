@@ -154,6 +154,7 @@ CREATE TABLE "app_versions" (
     "version" TEXT NOT NULL,
     "description" TEXT,
     "platform" TEXT NOT NULL,
+    "device_os" TEXT,
     "release_date" TIMESTAMP(3) NOT NULL,
     "download_url" TEXT,
     "force_update" BOOLEAN NOT NULL DEFAULT false,
@@ -236,10 +237,10 @@ CREATE INDEX "audit_logs_action_created_at_idx" ON "audit_logs"("action", "creat
 CREATE INDEX "audit_logs_created_at_idx" ON "audit_logs"("created_at");
 
 -- CreateIndex
-CREATE INDEX "app_versions_platform_release_date_idx" ON "app_versions"("platform", "release_date");
+CREATE INDEX "app_versions_platform_device_os_release_date_idx" ON "app_versions"("platform", "device_os", "release_date");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "app_versions_platform_version_key" ON "app_versions"("platform", "version");
+CREATE UNIQUE INDEX "app_versions_platform_device_os_version_key" ON "app_versions"("platform", "device_os", "version");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "device_tokens_token_key" ON "device_tokens"("token");

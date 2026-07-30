@@ -22,6 +22,16 @@ The suite runs **in parallel** (`maxWorkers: 50%`), so a spec must never assume 
 
 `.env.test` is committed. Throttler disabled in test env via `skipIf` (in-memory storage, no live Redis required for rate limiting). `QUEUE_WORKER_ENABLED=false`, so no spec gets a live queue worker acting on the database its assertions read.
 
+`test/test-harness.e2e-spec.ts` asserts these invariants (server bound once, zero cron jobs, no live queue worker) rather than trusting a comment. Each has been violated for real, and each produced a flake that landed on a different test every run.
+
+## A suite that fails with ZERO failing assertions is not a flake to retry
+
+Signature: a different suite each run, no assertion failures, always passes in isolation. That is an **unowned background error** — Jest attributes it to whatever spec happened to be running, which is why the name is misleading.
+
+The usual source is a Redis client that outlived its app. `RedisService.onModuleDestroy` closes on every ioredis status except `wait`/`end`, because `reconnecting` holds an ARMED TIMER: left alone it reconnects after the app is gone and runs ioredis's post-connect handshake against a socket nobody owns, surfacing as a bare `write EPIPE`.
+
+Do **not** add `process.on('unhandledRejection')` attribution to the e2e setup. It was tried and is useless — Jest's own handler takes precedence and already names the spec and source line. Capture the failing run's full stderr instead of building tooling.
+
 ## Redis state is shared within a worker — own it or don't assert it
 
 Postgres is truncated per spec; Redis is flushed by the same `truncateAll`. A spec that asserts on Redis-backed state but never calls `truncateAll` is asserting on **whatever a sibling spec left behind** (keys outlive a spec up to their TTL), and will pass or fail on ordering.

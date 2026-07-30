@@ -220,29 +220,32 @@ export class AuthService {
   // on its own — no cleanup job needed. JwtStrategy rejects any subsequent
   // request carrying that jti. Other tokens for the same user (other
   // devices) are unaffected; use logoutAll for "sign me out everywhere."
-  async logout(current: AuthenticatedUser): Promise<void> {
-    if (!current.jti || !current.exp) {
+  async logout(currentUser: AuthenticatedUser): Promise<void> {
+    if (!currentUser.jti || !currentUser.exp) {
       // Legacy token issued before jti/exp were wired through — nothing to
       // revoke. Still record the audit event so the action isn't invisible.
       await this.auditService.record({
         action: 'auth.logout.no_jti',
-        actorId: current.id,
-        targetUserId: current.id,
+        actorId: currentUser.id,
+        targetUserId: currentUser.id,
       });
       return;
     }
-    const ttlSeconds = Math.max(1, current.exp - Math.floor(Date.now() / 1000));
+    const ttlSeconds = Math.max(
+      1,
+      currentUser.exp - Math.floor(Date.now() / 1000),
+    );
     await this.redis.client.set(
-      `${LOGOUT_KEY_PREFIX}${current.jti}`,
+      `${LOGOUT_KEY_PREFIX}${currentUser.jti}`,
       '1',
       'EX',
       ttlSeconds,
     );
     await this.auditService.record({
       action: 'auth.logout',
-      actorId: current.id,
-      targetUserId: current.id,
-      metadata: { jti: current.jti },
+      actorId: currentUser.id,
+      targetUserId: currentUser.id,
+      metadata: { jti: currentUser.jti },
     });
   }
 

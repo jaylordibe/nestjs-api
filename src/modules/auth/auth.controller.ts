@@ -133,8 +133,8 @@ export class AuthController {
   @AuthenticatedOnly()
   @ApiBearerAuth()
   @HttpCode(HttpStatus.NO_CONTENT)
-  async logout(@CurrentUser() current: AuthenticatedUser): Promise<void> {
-    await this.authService.logout(current);
+  async logout(@CurrentUser() currentUser: AuthenticatedUser): Promise<void> {
+    await this.authService.logout(currentUser);
   }
 
   // "Sign me out everywhere" — invalidates every active token for the user
@@ -144,8 +144,10 @@ export class AuthController {
   @AuthenticatedOnly()
   @ApiBearerAuth()
   @HttpCode(HttpStatus.NO_CONTENT)
-  async logoutAll(@CurrentUser() current: AuthenticatedUser): Promise<void> {
-    await this.authService.logoutAll(current.id);
+  async logoutAll(
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ): Promise<void> {
+    await this.authService.logoutAll(currentUser.id);
   }
 }
 

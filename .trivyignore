@@ -1,0 +1,18 @@
+# Trivy vulnerability exceptions for the production image scan (see the
+# `docker` job in .github/workflows/test.yml). Each entry is a conscious,
+# documented risk acceptance — keep the rationale and review date current, and
+# remove the entry the moment its upgrade path opens up. Mirror any change here
+# in the dependency-audit allowlist (.github/scripts/audit-gate.mjs), which
+# gates the same advisories from the source side.
+#
+# EMPTY BY DEFAULT, and it should stay that way as long as possible. Note that
+# the scan already passes `ignore-unfixed: true`, so anything listed here is a
+# vulnerability that HAS a published fix which you are choosing not to take —
+# that needs a stronger justification than "no patch available".
+#
+# Format is one identifier per line, with the rationale in comments above it:
+#
+#   # CVE-2026-00000 — <package>: <what the vulnerability is>.
+#   # <Why no upgrade path exists, and why it is not exploitable in THIS image.>
+#   # Review by 2026-12-31 — <what would let this be dropped>.
+#   CVE-2026-00000

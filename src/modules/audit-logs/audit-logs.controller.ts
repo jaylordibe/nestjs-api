@@ -29,7 +29,7 @@ export class AuditLogsController {
   @Get(':id')
   @RequirePermission('read', 'AuditLog', { administrative: true })
   @ApiOkResponse({ type: AuditLogResponseDto })
-  async findOne(
+  async findById(
     @Param('id', new ParseUUIDPipe()) id: string,
   ): Promise<AuditLogResponseDto> {
     return new AuditLogResponseDto(await this.auditLogsService.findById(id));

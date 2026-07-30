@@ -99,9 +99,9 @@ export class UsersController {
   @RequirePermission('read', 'User')
   @ApiOkResponse({ type: UserResponseDto })
   async getAuthUser(
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<UserResponseDto> {
-    const user = await this.usersService.findById(current.id);
+    const user = await this.usersService.findById(currentUser.id);
     return new UserResponseDto(user);
   }
 
@@ -110,12 +110,12 @@ export class UsersController {
   @ApiOkResponse({ type: UserResponseDto })
   async updateAuthUserInfo(
     @Body() dto: UpdateAuthUserInfoDto,
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<UserResponseDto> {
     const user = await this.usersService.updateInfo(
-      current.id,
+      currentUser.id,
       dto,
-      current.id,
+      currentUser.id,
     );
     return new UserResponseDto(user);
   }
@@ -124,9 +124,9 @@ export class UsersController {
   @RequirePermission('delete', 'User')
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteAuthUser(
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<void> {
-    await this.usersService.softDelete(current.id, current.id);
+    await this.usersService.softDelete(currentUser.id, currentUser.id);
   }
 
   // Right-to-be-forgotten / GDPR erase. Distinct from DELETE /me (which is
@@ -138,9 +138,9 @@ export class UsersController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async gdprErase(
     @Body() dto: GdprEraseDto,
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<void> {
-    await this.usersService.gdprErase(current.id, dto.currentPassword);
+    await this.usersService.gdprErase(currentUser.id, dto.currentPassword);
   }
 
   // Minimal GDPR "right to access" — returns the user's full row as JSON.
@@ -150,9 +150,9 @@ export class UsersController {
   @RequirePermission('read', 'User')
   @ApiOkResponse({ type: UserResponseDto })
   async exportAuthUser(
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<UserResponseDto> {
-    const user = await this.usersService.findById(current.id);
+    const user = await this.usersService.findById(currentUser.id);
     return new UserResponseDto(user);
   }
 
@@ -161,12 +161,12 @@ export class UsersController {
   @ApiOkResponse({ type: UserResponseDto })
   async updateAuthUsername(
     @Body() dto: UpdateAuthUsernameDto,
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<UserResponseDto> {
     const user = await this.usersService.updateUsername(
-      current.id,
+      currentUser.id,
       dto.username,
-      current.id,
+      currentUser.id,
     );
     return new UserResponseDto(user);
   }
@@ -176,12 +176,12 @@ export class UsersController {
   @ApiOkResponse({ type: UserResponseDto })
   async updateAuthUserEmail(
     @Body() dto: UpdateAuthUserEmailDto,
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<UserResponseDto> {
     const user = await this.usersService.updateEmail(
-      current.id,
+      currentUser.id,
       dto,
-      current.id,
+      currentUser.id,
     );
     return new UserResponseDto(user);
   }
@@ -191,12 +191,12 @@ export class UsersController {
   @ApiOkResponse({ type: UserResponseDto })
   async updateAuthUserPassword(
     @Body() dto: UpdateAuthUserPasswordDto,
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<UserResponseDto> {
     const user = await this.usersService.updateOwnPassword(
-      current.id,
+      currentUser.id,
       dto,
-      current.id,
+      currentUser.id,
     );
     return new UserResponseDto(user);
   }
@@ -206,12 +206,12 @@ export class UsersController {
   @ApiOkResponse({ type: UserResponseDto })
   async updateAuthUserProfileImage(
     @Body() dto: UpdateAuthUserProfileImageDto,
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<UserResponseDto> {
     const user = await this.usersService.updateProfileImage(
-      current.id,
+      currentUser.id,
       dto.profileImageUrl,
-      current.id,
+      currentUser.id,
     );
     return new UserResponseDto(user);
   }
@@ -227,10 +227,10 @@ export class UsersController {
   @ApiOkResponse({ type: OperationAcknowledgementDto })
   async requestPhoneVerification(
     @Body() dto: RequestPhoneVerificationDto,
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<{ ok: true }> {
     await this.usersService.requestPhoneVerification(
-      current.id,
+      currentUser.id,
       dto.currentPassword,
       dto.phoneNumber,
     );
@@ -247,12 +247,12 @@ export class UsersController {
   @ApiOkResponse({ type: UserResponseDto })
   async verifyAuthUserPhone(
     @Body() dto: VerifyAuthUserPhoneDto,
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<UserResponseDto> {
     const user = await this.usersService.verifyAndUpdatePhoneNumber(
-      current.id,
+      currentUser.id,
       dto,
-      current.id,
+      currentUser.id,
     );
     return new UserResponseDto(user);
   }
@@ -265,12 +265,12 @@ export class UsersController {
   @ApiOkResponse({ type: UserResponseDto })
   async updateAuthUserPhone(
     @Body() dto: UpdateAuthUserPhoneDto,
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<UserResponseDto> {
     const user = await this.usersService.updatePhoneNumber(
-      current.id,
+      currentUser.id,
       dto.phoneNumber,
-      current.id,
+      currentUser.id,
     );
     return new UserResponseDto(user);
   }
@@ -280,9 +280,9 @@ export class UsersController {
   @ApiCreatedResponse({ type: UserResponseDto })
   async create(
     @Body() dto: CreateUserDto,
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<UserResponseDto> {
-    const user = await this.usersService.create(dto, current.id);
+    const user = await this.usersService.create(dto, currentUser.id);
     return new UserResponseDto(user);
   }
 
@@ -302,7 +302,7 @@ export class UsersController {
   @Get(':id')
   @RequirePermission('read', 'User', { administrative: true })
   @ApiOkResponse({ type: UserResponseDto })
-  async findOne(
+  async findById(
     @Param('id', new ParseUUIDPipe()) id: string,
   ): Promise<UserResponseDto> {
     const user = await this.usersService.findById(id);
@@ -315,9 +315,9 @@ export class UsersController {
   async update(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateUserDto,
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<UserResponseDto> {
-    const user = await this.usersService.update(id, dto, current.id);
+    const user = await this.usersService.update(id, dto, currentUser.id);
     return new UserResponseDto(user);
   }
 
@@ -327,12 +327,12 @@ export class UsersController {
   async updatePassword(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdatePasswordDto,
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<UserResponseDto> {
     const user = await this.usersService.updatePasswordAsAdmin(
       id,
       dto.newPassword,
-      current.id,
+      currentUser.id,
     );
     return new UserResponseDto(user);
   }
@@ -342,8 +342,8 @@ export class UsersController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<void> {
-    await this.usersService.remove(id, current.id);
+    await this.usersService.remove(id, currentUser.id);
   }
 }

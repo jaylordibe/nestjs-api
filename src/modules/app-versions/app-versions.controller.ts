@@ -43,9 +43,9 @@ export class AppVersionsController {
   @ApiCreatedResponse({ type: AppVersionResponseDto })
   async create(
     @Body() dto: CreateAppVersionDto,
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<AppVersionResponseDto> {
-    const row = await this.appVersionsService.create(dto, current.id);
+    const row = await this.appVersionsService.create(dto, currentUser.id);
     return new AppVersionResponseDto(row);
   }
 
@@ -63,16 +63,18 @@ export class AppVersionsController {
   }
 
   // Must be before @Get(':id') — NestJS matches routes in declaration order.
-  // Clients hit `/latest?platform=mobile` at app launch to decide whether to
-  // prompt an update.
+  // Clients hit `/latest?platform=mobile&os=ios` at app launch to decide
+  // whether to prompt an update. `os` is omitted only by `web`, which ships a
+  // single distribution; every other platform resolves its own release train.
   @Get('latest')
   @Public()
   @ApiOkResponse({ type: AppVersionResponseDto })
   async findLatest(
     @Query() query: LatestAppVersionQueryDto,
   ): Promise<AppVersionResponseDto> {
-    const row = await this.appVersionsService.findLatestByPlatform(
+    const row = await this.appVersionsService.findLatest(
       query.platform,
+      query.os ?? null,
     );
     return new AppVersionResponseDto(row);
   }
@@ -80,7 +82,7 @@ export class AppVersionsController {
   @Get(':id')
   @Public()
   @ApiOkResponse({ type: AppVersionResponseDto })
-  async findOne(
+  async findById(
     @Param('id', new ParseUUIDPipe()) id: string,
   ): Promise<AppVersionResponseDto> {
     const row = await this.appVersionsService.findById(id);
@@ -93,9 +95,9 @@ export class AppVersionsController {
   async update(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateAppVersionDto,
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<AppVersionResponseDto> {
-    const row = await this.appVersionsService.update(id, dto, current.id);
+    const row = await this.appVersionsService.update(id, dto, currentUser.id);
     return new AppVersionResponseDto(row);
   }
 
@@ -104,8 +106,8 @@ export class AppVersionsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(
     @Param('id', new ParseUUIDPipe()) id: string,
-    @CurrentUser() current: AuthenticatedUser,
+    @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<void> {
-    await this.appVersionsService.remove(id, current.id);
+    await this.appVersionsService.remove(id, currentUser.id);
   }
 }

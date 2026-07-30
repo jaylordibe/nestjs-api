@@ -2,6 +2,7 @@ import { ApiHideProperty } from '@nestjs/swagger';
 import { Exclude } from 'class-transformer';
 import { AppVersion } from '@prisma/client';
 import { AppPlatform } from '../../../common/enums/app-platform.enum';
+import { DeviceOs } from '../../../common/enums/device-os.enum';
 
 export class AppVersionResponseDto {
   id!: string;
@@ -13,6 +14,10 @@ export class AppVersionResponseDto {
   version!: string;
   description!: string | null;
   platform!: AppPlatform;
+  // The release train this row describes: `ios`/`android` for mobile,
+  // `macos`/`windows`/`linux` for desktop. Null for `web`, which has a single
+  // distribution.
+  deviceOs!: DeviceOs | null;
   releaseDate!: Date;
   downloadUrl!: string | null;
   forceUpdate!: boolean;
