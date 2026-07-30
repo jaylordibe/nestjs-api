@@ -22,12 +22,22 @@
         ]
       },
       {
-        "matcher": "mcp__.*__(transitionJiraIssue|editJiraIssue)",
+        "matcher": "mcp__.*__transitionJiraIssue",
         "hooks": [
           {
             "type": "command",
-            "command": "printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Project hook: Claude must never transition a Jira issue or edit its fields. The user moves the board columns themselves after they push. Post a comment with addCommentToJiraIssue instead.\"}}'",
-            "statusMessage": "Guard: Jira transition/edit"
+            "command": "printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Project hook: Claude must never transition a Jira issue. The user moves the board columns themselves after they push.\"}}'",
+            "statusMessage": "Guard: Jira transition"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*__editJiraIssue",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"Project hook: this edits Jira issue fields. Approve for description/summary content; status changes stay with the user.\"}}'",
+            "statusMessage": "Guard: Jira field edit"
           }
         ]
       }
