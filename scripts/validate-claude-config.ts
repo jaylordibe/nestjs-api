@@ -57,11 +57,34 @@ const SUPPORTED_AGENT_KEYS = new Set([
 ]);
 
 /**
- * Built-in commands and bundled skills. A project skill taking one of these
- * names shadows it, and the resolution order is undocumented — never rely on it
- * for a mandatory gate.
+ * Namespace for every user-invocable project skill.
+ *
+ * A project skill sharing a name with a Claude Code built-in does not win — it
+ * appears *beside* it in the `/` menu, distinguished only by which row the user
+ * lands on. `review` collided with the bundled diff-review skill; `design`
+ * collided with the Design-connector command sitting next to `/desktop`.
+ *
+ * A reserved-name denylist cannot solve this: it is stale the moment a new
+ * built-in ships, and the list below is precisely what failed to catch `design`.
+ * The prefix is the structural fix — Anthropic will not ship a `/gate-*`
+ * command — and it makes the workflow discoverable as one family.
  */
-const RESERVED_COMMAND_NAMES = new Set([
+const USER_INVOCABLE_SKILL_PREFIX = 'gate-';
+
+/**
+ * Skills allowed to skip the prefix, each a deliberate decision. `ticket` is the
+ * conductor rather than a gate, so `gate-ticket` would misdescribe it. Exempt
+ * names get checked against the known built-ins below instead — a weaker net,
+ * which is exactly why the exemption list must stay short.
+ */
+const PREFIX_EXEMPT_SKILL_NAMES = new Set(['ticket']);
+
+/**
+ * Known built-in commands and bundled skills, used ONLY to screen the handful of
+ * prefix-exempt names. Necessarily incomplete: treat an addition here as a
+ * reason to reconsider the exemption, not as a substitute for the prefix.
+ */
+const KNOWN_BUILT_IN_COMMAND_NAMES = new Set([
   'init',
   'review',
   'code-review',
@@ -70,6 +93,8 @@ const RESERVED_COMMAND_NAMES = new Set([
   'verify',
   'run',
   'debug',
+  'design',
+  'desktop',
   'loop',
   'schedule',
   'compact',
@@ -198,11 +223,27 @@ function validateSkill(skillFilePath: string): void {
     );
   }
 
-  if (declaredName && RESERVED_COMMAND_NAMES.has(declaredName)) {
-    reportViolation(
-      skillFilePath,
-      `\`name: ${declaredName}\` collides with a built-in command or bundled skill. Resolution order is undocumented; rename this skill`,
-    );
+  // Only skills that appear in the `/` menu can collide with a built-in there.
+  // `user-invocable: false` skills are model-facing background knowledge.
+  const appearsInSlashMenu = frontmatter['user-invocable'] !== 'false';
+
+  if (declaredName && appearsInSlashMenu) {
+    const carriesPrefix = declaredName.startsWith(USER_INVOCABLE_SKILL_PREFIX);
+    const isExempt = PREFIX_EXEMPT_SKILL_NAMES.has(declaredName);
+
+    if (!carriesPrefix && !isExempt) {
+      reportViolation(
+        skillFilePath,
+        `user-invocable skill \`${declaredName}\` must be named \`${USER_INVOCABLE_SKILL_PREFIX}${declaredName}\` — an unprefixed name sits beside any same-named Claude Code built-in in the / menu, and the user picks by row. Rename the directory and the \`name:\` field, or add a reviewed exemption to PREFIX_EXEMPT_SKILL_NAMES`,
+      );
+    }
+
+    if (isExempt && KNOWN_BUILT_IN_COMMAND_NAMES.has(declaredName)) {
+      reportViolation(
+        skillFilePath,
+        `prefix-exempt skill \`${declaredName}\` now collides with a known built-in command — the exemption is no longer safe. Give it the \`${USER_INVOCABLE_SKILL_PREFIX}\` prefix`,
+      );
+    }
   }
 
   if (!frontmatter.description) {

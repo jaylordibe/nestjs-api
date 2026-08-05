@@ -188,7 +188,7 @@ No local migration application.
 
 ## 16. Validation record
 
-Filed after `/validate`. Validation is read-only and cannot write this section
+Filed after `/gate-validate`. Validation is read-only and cannot write this section
 itself; paste the block it emits. An empty section means the change was never
 validated — that is information, not an omission to tidy away.
 

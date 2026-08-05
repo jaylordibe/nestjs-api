@@ -32,34 +32,38 @@ Use the engineering workflow for any material feature, bug, refactor, contract c
 
 **These four gates are human-invoked and Claude cannot start them.** Each sets `disable-model-invocation: true`, which removes it from Claude's context entirely — a Skill call to one of them is not possible, by design, so that a human owns the timing of every gate. Claude's obligation is therefore to **stop and ask the user to run the next gate**, never to claim a gate ran, and never to simulate one from memory. `/ticket <KEY>` (`.claude/skills/ticket/SKILL.md`) is the top-level conductor that walks all four in one session; the individual gates below are for non-ticket work, focused operation, or recovery in a fresh session.
 
-1. **`/design <requirement>` — understand and decide.**
+1. **`/gate-design <requirement>` — understand and decide.**
    - Start with the `context-mapper` agent when impact is unclear or cross-cutting.
    - Reconcile the ticket's WHAT/HOW against repository reality.
    - Classify risk, evaluate alternatives, threat-model relevant surfaces, and produce an ADR.
    - Stop at the approval gate. `PROPOSED` is not permission to implement.
 
-2. **`/implement <accepted ADR>` — build only the approved design.**
+2. **`/gate-implement <accepted ADR>` — build only the approved design.**
    - The ADR must explicitly be `ACCEPTED`.
    - Preserve unrelated worktree changes.
    - Implement the approved behavior, security controls, tests, documentation, and observability.
    - A material divergence in behavior, architecture, contract, migration, or risk requires an ADR amendment and renewed approval.
 
-3. **`/diff-review` — independently challenge the diff.**
+3. **`/gate-review` — independently challenge the diff.**
    - Review architecture, correctness, security, tests, API contracts, database behavior, concurrency, performance, and reliability as relevant.
    - Verify every finding against the source before acting.
    - Fix confirmed findings within approved scope, add regression coverage, then re-review.
    - No unresolved Critical or High finding may pass this gate.
 
-4. **`/validate` — prove it with evidence.**
+4. **`/gate-validate` — prove it with evidence.**
    - Validation is read-only: do not modify source, tests, snapshots, lockfiles, migrations, config, or generated output to manufacture a pass.
    - Run the canonical checks appropriate to the change and risk.
    - Report exactly `PASS`, `FAIL`, or `BLOCKED`; skipped, partial, unavailable, or flaky checks are never `PASS`.
 
-Manual/ad-hoc work does not bypass the final gates. After implementation, **stop and tell the user to run `/diff-review`, then `/validate`** — summarise what changed, name the affected contracts and risk tier, and wait. An ad-hoc self-check is not a substitute for either gate and must never be reported as one.
+Manual/ad-hoc work does not bypass the final gates. After implementation, **stop and tell the user to run `/gate-review`, then `/gate-validate`** — summarise what changed, name the affected contracts and risk tier, and wait. An ad-hoc self-check is not a substitute for either gate and must never be reported as one.
+
+### Skill naming
+
+Every **user-invocable** project skill is namespaced `gate-*`. A project skill sharing a name with a Claude Code built-in does not win — it appears *beside* it in the `/` menu, and the user picks by row. This has already bitten twice (`review`, `design`), and a reserved-name denylist cannot prevent it because a new built-in can ship at any time. `yarn claude:validate` enforces the prefix. The domain playbook skills need none: they set `user-invocable: false` and never reach the menu. `/ticket` is the one reviewed exemption — it is the conductor, not a gate.
 
 ### ADR location
 
-Accepted ADRs are the durable record of every material change and are **committed**: `docs/adr/NNNN-kebab-slug.md`, sequential, zero-padded to four digits, from `.claude/templates/adr.md`. `/implement`, `/diff-review`, and `/validate` all take that path as their argument, and a resumed session finds the work by reading the ADR's `Status:` line. See `docs/adr/README.md`.
+Accepted ADRs are the durable record of every material change and are **committed**: `docs/adr/NNNN-kebab-slug.md`, sequential, zero-padded to four digits, from `.claude/templates/adr.md`. `/gate-implement`, `/gate-review`, and `/gate-validate` all take that path as their argument, and a resumed session finds the work by reading the ADR's `Status:` line. See `docs/adr/README.md`.
 
 ### Risk classification
 
@@ -203,11 +207,11 @@ Load these on demand — they hold the long-form playbooks so this core stays le
 
 | Task | Where |
 |---|---|
-| Design a material change, reconcile ticket vs code, classify risk, compare alternatives, and produce an approval-gated ADR | `design` skill + `.claude/templates/adr.md` |
-| Implement an explicitly accepted ADR without unrelated scope or Git/deployment writes | `implement` skill |
+| Design a material change, reconcile ticket vs code, classify risk, compare alternatives, and produce an approval-gated ADR | `gate-design` skill + `.claude/templates/adr.md` |
+| Implement an explicitly accepted ADR without unrelated scope or Git/deployment writes | `gate-implement` skill |
 | Drive a ticket end-to-end: map → ADR → implement → review → validate → present → report | `ticket` skill (`/ticket <KEY>`) |
-| Independently review the current diff across architecture, correctness, AppSec, tests, API, DB, and performance | `diff-review` skill + `.claude/agents/` |
-| Run read-only evidence gates and return `PASS` / `FAIL` / `BLOCKED` | `validate` skill + `.claude/templates/release-checklist.md` |
+| Independently review the current diff across architecture, correctness, AppSec, tests, API, DB, and performance | `gate-review` skill + `.claude/agents/` |
+| Run read-only evidence gates and return `PASS` / `FAIL` / `BLOCKED` | `gate-validate` skill + `.claude/templates/release-checklist.md` |
 | General architecture, coding, security, and testing rules | `.claude/standards/architecture.md`, `coding.md`, `security.md`, `testing.md` |
 | Add/scaffold a CRUD resource (schema, five endpoints, list queries, response DTOs + relations, delete semantics, soft-delete filter) | `resource-pattern` skill (+ code skeletons in `docs/resource-pattern.md`) |
 | Permissions, roles, business-scoped resources, `@RequirePermission`, CASL abilities, tenant isolation, escalation/rank guard, grants cache | `authorization` skill (+ the contract in `src/common/authorization/README.md`) |

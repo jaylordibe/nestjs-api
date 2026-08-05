@@ -183,7 +183,7 @@ the preflight is a no-op there.
 
 ## 16. Validation record
 
-Filed after `/validate`.
+Filed after `/gate-validate`.
 
 - **Verdict:**
 - **Commit/worktree:**

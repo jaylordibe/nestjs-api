@@ -43,10 +43,10 @@ write.
 At the start, read:
 
 - `CLAUDE.md`
-- `.claude/skills/design/SKILL.md`
-- `.claude/skills/implement/SKILL.md`
-- `.claude/skills/diff-review/SKILL.md`
-- `.claude/skills/validate/SKILL.md`
+- `.claude/skills/gate-design/SKILL.md`
+- `.claude/skills/gate-implement/SKILL.md`
+- `.claude/skills/gate-review/SKILL.md`
+- `.claude/skills/gate-validate/SKILL.md`
 - relevant `.claude/standards/`
 - relevant source-owned contract READMEs
 
@@ -139,7 +139,7 @@ Mark Stage 1 complete and Stage 2 in progress.
 
 # Stage 2 — Design [GATE 1]
 
-Follow `.claude/skills/design/SKILL.md`.
+Follow `.claude/skills/gate-design/SKILL.md`.
 
 Enter Plan mode when available. Remain read-only even if Plan mode is
 unavailable.
@@ -182,7 +182,7 @@ If the user requests changes, revise the ADR and remain at Stage 2.
 
 # Stage 3 — Implement
 
-Follow `.claude/skills/implement/SKILL.md` and the accepted ADR.
+Follow `.claude/skills/gate-implement/SKILL.md` and the accepted ADR.
 
 Before editing:
 
@@ -222,7 +222,7 @@ complete and Stage 4 in progress.
 
 # Stage 4 — Review
 
-Follow `.claude/skills/diff-review/SKILL.md`.
+Follow `.claude/skills/gate-review/SKILL.md`.
 
 Launch relevant project agents independently and in parallel:
 
@@ -263,7 +263,7 @@ Mark Stage 4 complete and Stage 5 in progress.
 
 # Stage 5 — Validate
 
-Follow `.claude/skills/validate/SKILL.md`.
+Follow `.claude/skills/gate-validate/SKILL.md`.
 
 Validation is read-only.
 

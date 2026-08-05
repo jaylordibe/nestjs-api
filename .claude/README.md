@@ -44,10 +44,10 @@ Use these for non-ticket work, focused operation, recovery in a new session, or
 when you deliberately want to control each stage yourself:
 
 ```text
-/design <requirement>
-/implement <accepted ADR path>
-/diff-review [ADR path or base ref]
-/validate [ADR path or scope]
+/gate-design <requirement>
+/gate-implement <accepted ADR path>
+/gate-review [ADR path or base ref]
+/gate-validate [ADR path or scope]
 ```
 
 The phase skills are human-invoked. `/ticket` does not recursively invoke them
@@ -61,10 +61,10 @@ orchestrator and the standalone gates from drifting apart.
 | Stage | What runs | Human boundary |
 |---|---|---|
 | 1. Understand | `context-mapper`; additional architect, security, API, database, performance, or test agents when relevant | |
-| 2. Design | The `design` skill contract, ticket-vs-code reconciliation, alternatives, threat model, and `PROPOSED` ADR | **GATE 1:** no source edit until explicit approval |
-| 3. Implement | The `implement` skill contract and the accepted ADR | |
+| 2. Design | The `gate-design` skill contract, ticket-vs-code reconciliation, alternatives, threat model, and `PROPOSED` ADR | **GATE 1:** no source edit until explicit approval |
+| 3. Implement | The `gate-implement` skill contract and the accepted ADR | |
 | 4. Review | Project-aware architecture, correctness, security, test, API, database, and performance agents; bundled `/security-review` or `/simplify` when useful and available | No unresolved Critical/High finding |
-| 5. Validate | The `validate` skill contract, `yarn build`, `yarn lint`, affected tests, database/security evidence, and `/run` for a runnable surface | `PASS`, `FAIL`, or `BLOCKED` only |
+| 5. Validate | The `gate-validate` skill contract, `yarn build`, `yarn lint`, affected tests, database/security evidence, and `/run` for a runnable surface | `PASS`, `FAIL`, or `BLOCKED` only |
 | 6. Present | Diff summary, review findings, evidence, risks, and consumer handoff | **GATE 2:** human owns commit, push, PR, migration application, and deployment |
 | 7. Report | One short issue comment when a real issue and tracker connection exist | Issue status and fields remain untouched |
 
@@ -76,10 +76,10 @@ The accepted ADR is the durable repository artifact. If a session is lost,
 resume with the individual skills according to ADR state:
 
 ```text
-PROPOSED  → /design or continue the approval discussion
-ACCEPTED  → /implement <ADR>
-implemented diff → /diff-review <ADR>
-reviewed diff    → /validate <ADR>
+PROPOSED  → /gate-design or continue the approval discussion
+ACCEPTED  → /gate-implement <ADR>
+implemented diff → /gate-review <ADR>
+reviewed diff    → /gate-validate <ADR>
 ```
 
 ## Ticket interpretation
@@ -103,12 +103,12 @@ Genuine product choices go back to the human.
 ### Skills
 
 - `skills/ticket/SKILL.md` — full conductor.
-- `skills/design/SKILL.md` — repository mapping, risk, alternatives, threat
+- `skills/gate-design/SKILL.md` — repository mapping, risk, alternatives, threat
   model, ADR, and approval.
-- `skills/implement/SKILL.md` — accepted-ADR implementation.
-- `skills/diff-review/SKILL.md` — independent project-specific review and
+- `skills/gate-implement/SKILL.md` — accepted-ADR implementation.
+- `skills/gate-review/SKILL.md` — independent project-specific review and
   remediation.
-- `skills/validate/SKILL.md` — read-only evidence gate.
+- `skills/gate-validate/SKILL.md` — read-only evidence gate.
 
 All five workflow skills use `disable-model-invocation: true`; only the human
 starts them. That flag removes the skill from Claude's context entirely, so
@@ -116,9 +116,36 @@ Claude cannot invoke a gate even when instructed to — it must **stop and ask t
 user** to run the next one. `CLAUDE.md` states this obligation explicitly so the
 gate is never simulated from memory.
 
-`diff-review` is deliberately not named `review`: Claude Code ships a bundled
-`review` skill, and the resolution order between a project skill and a built-in
-of the same name is undocumented. A mandatory gate must not depend on it.
+### Why the gates carry a `gate-` prefix
+
+Every user-invocable project skill is namespaced `gate-*`. This is a structural
+rule, not a stylistic one.
+
+Claude Code ships built-in commands and adds more over time, and a project skill
+that takes the same name does not cleanly win — it simply appears *beside* the
+built-in in the `/` menu, disambiguated only by which row you land on. This has
+already happened twice here: `review` collided with the bundled diff-review
+skill, and `design` collided with `/design` ("Grant or revoke Claude agent access
+to your Design projects"), which also sits next to `/desktop` under the same
+prefix. Selecting the wrong row runs something entirely unrelated.
+
+Maintaining a list of reserved built-in names does not fix this — such a list is
+stale the moment Anthropic ships a new command, and the list itself is what
+failed to catch `design`. A prefix removes the whole collision class instead:
+Anthropic will not ship a `/gate-*` command. It also groups the workflow in the
+menu, so typing `/gate` shows exactly these four and nothing else.
+
+`yarn claude:validate` enforces the prefix, so a new gate cannot be added
+without it.
+
+The five domain playbook skills below need no prefix: they set
+`user-invocable: false` and never appear in the `/` menu at all, so they have no
+collision surface there.
+
+`/ticket` is deliberately exempt — it is the conductor, not a gate, and
+`gate-ticket` would misdescribe it. That leaves it exposed to a future built-in
+of the same name; the validator flags it as an explicit, reviewed exemption
+rather than letting it pass unnoticed.
 
 ### Agents
 
@@ -248,7 +275,7 @@ operations* list is made real:
   `yarn stack:down`, which is allowed and never passes `-v`;
 - package publication and image push;
 - reading or editing real environment files and private keys. `.env.test` and
-  `.env.example` stay readable — `/validate` legitimately needs them;
+  `.env.example` stay readable — `/gate-validate` legitimately needs them;
 - Jira transition, field edit, update, delete, and assignment tools.
 
 **2. `permissions.ask` — dual-use commands needing human judgment.** `psql`,

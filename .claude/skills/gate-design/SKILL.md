@@ -1,5 +1,5 @@
 ---
-name: design
+name: gate-design
 description: Designs a material change for this NestJS, Prisma, PostgreSQL, Redis, and BullMQ API by mapping repository reality, reconciling ticket claims, evaluating architecture alternatives, threat-modeling relevant surfaces, and producing an approval-gated ADR. Use for features, bugs, refactors, migrations, integrations, authorization changes, background jobs, and unclear blast radius.
 argument-hint: "<ticket key | requirement | bug report | proposed change>"
 disable-model-invocation: true
@@ -234,5 +234,5 @@ Status: ACCEPTED
 Then direct the user to:
 
 ```text
-/implement <ADR path>
+/gate-implement <ADR path>
 ```

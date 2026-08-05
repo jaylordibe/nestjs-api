@@ -1,5 +1,5 @@
 ---
-name: validate
+name: gate-validate
 description: Performs read-only evidence validation for a reviewed change in this NestJS, Prisma, PostgreSQL, Redis, and BullMQ API using its actual Yarn build, lint, isolated e2e, database, security, runtime, and operational contracts; returns PASS, FAIL, or BLOCKED.
 argument-hint: "[ADR path | scope | risk focus]"
 disable-model-invocation: true

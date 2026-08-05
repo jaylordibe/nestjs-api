@@ -1,5 +1,5 @@
 ---
-name: diff-review
+name: gate-review
 description: Independently reviews the current NestJS and Prisma change for accepted-design conformance, correctness, application security, RBAC/CASL tenant isolation, API/error contracts, database and migration safety, BullMQ reliability, tests, and performance; fixes verified findings and re-reviews.
 argument-hint: "[ADR path | base ref | review focus]"
 disable-model-invocation: true
@@ -189,7 +189,7 @@ Report:
 - command evidence;
 - unresolved blockers/risks;
 - consumer handoff;
-- readiness for `/validate`.
+- readiness for `/gate-validate`.
 
 Do not commit, push, deploy, apply migrations, transition tickets, or claim
 production readiness.

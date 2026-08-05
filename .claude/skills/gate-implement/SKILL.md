@@ -1,5 +1,5 @@
 ---
-name: implement
+name: gate-implement
 description: Implements an explicitly accepted ADR in this NestJS, Prisma, PostgreSQL, Redis, and BullMQ API while enforcing its error, DTO, authorization, tenant-isolation, audit, Swagger, soft-delete, migration, testing, and operational contracts.
 argument-hint: "<accepted ADR path>"
 disable-model-invocation: true
@@ -203,5 +203,5 @@ Report:
 Next:
 
 ```text
-/diff-review <ADR path>
+/gate-review <ADR path>
 ```
