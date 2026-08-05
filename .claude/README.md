@@ -222,7 +222,7 @@ slash-command menu:
 ### Where ADRs live
 
 `docs/adr/NNNN-kebab-slug.md`, committed, from `templates/adr.md`. See
-`docs/adr/README.md` for the lifecycle. The four gates each take an ADR path,
+`docs/adr/README.md` for the lifecycle. Every gate after design takes an ADR path,
 and a resumed session finds its place by reading the `Status:` line — which only
 works because the location is fixed rather than chosen per session.
 

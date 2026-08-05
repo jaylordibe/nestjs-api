@@ -30,7 +30,7 @@ When a small ask conflicts with this bar (e.g. "just fix this one site"), surfac
 
 Use the engineering workflow for any material feature, bug, refactor, contract change, schema change, authorization change, background job, integration, or change whose blast radius is unclear.
 
-**These four gates are human-invoked and Claude cannot start them.** Each sets `disable-model-invocation: true`, which removes it from Claude's context entirely — a Skill call to one of them is not possible, by design, so that a human owns the timing of every gate. Claude's obligation is therefore to **stop and ask the user to run the next gate**, never to claim a gate ran, and never to simulate one from memory. `/work-item <key | URL | requirement>` (`.claude/skills/work-item/SKILL.md`) is the top-level conductor that walks all four in one session; the individual gates below are for non-ticket work, focused operation, or recovery in a fresh session.
+**These five gates are human-invoked and Claude cannot start them.** Each sets `disable-model-invocation: true`, which removes it from Claude's context entirely — a Skill call to one of them is not possible, by design, so that a human owns the timing of every gate. Claude's obligation is therefore to **stop and ask the user to run the next gate**, never to claim a gate ran, and never to simulate one from memory. `/work-item <key | URL | requirement>` (`.claude/skills/work-item/SKILL.md`) is the top-level conductor that walks all five in one session; the individual gates below are for non-work-item work, focused operation, or recovery in a fresh session.
 
 1. **`/gate-design <requirement>` — understand and decide.**
    - Start with the `context-mapper` agent when impact is unclear or cross-cutting.
@@ -38,19 +38,25 @@ Use the engineering workflow for any material feature, bug, refactor, contract c
    - Classify risk, evaluate alternatives, threat-model relevant surfaces, and produce an ADR.
    - Stop at the approval gate. `PROPOSED` is not permission to implement.
 
-2. **`/gate-implement <accepted ADR>` — build only the approved design.**
+2. **`/gate-approve <ADR>` — record the human's decision.**
+   - The design must be `PROPOSED`; a `DRAFT` is unfinished and goes back to `/gate-design`.
+   - Read the decision, rejected alternatives, residual risk, non-goals, and **every unresolved §14 row** back to the user first. An approval nobody re-read is a rubber stamp.
+   - Take an explicit decision — never infer one from praise — then write the `Status:` line and §15 together.
+   - Claude cannot invoke this gate. That, not the typing, is what stops a design from approving itself.
+
+3. **`/gate-implement <accepted ADR>` — build only the approved design.**
    - The ADR must explicitly be `ACCEPTED`.
    - Preserve unrelated worktree changes.
    - Implement the approved behavior, security controls, tests, documentation, and observability.
    - A material divergence in behavior, architecture, contract, migration, or risk requires an ADR amendment and renewed approval.
 
-3. **`/gate-review` — independently challenge the diff.**
+4. **`/gate-review` — independently challenge the diff.**
    - Review architecture, correctness, security, tests, API contracts, database behavior, concurrency, performance, and reliability as relevant.
    - Verify every finding against the source before acting.
    - Fix confirmed findings within approved scope, add regression coverage, then re-review.
    - No unresolved Critical or High finding may pass this gate.
 
-4. **`/gate-validate` — prove it with evidence.**
+5. **`/gate-validate` — prove it with evidence.**
    - Validation is read-only: do not modify source, tests, snapshots, lockfiles, migrations, config, or generated output to manufacture a pass.
    - Run the canonical checks appropriate to the change and risk.
    - Report exactly `PASS`, `FAIL`, or `BLOCKED`; skipped, partial, unavailable, or flaky checks are never `PASS`.

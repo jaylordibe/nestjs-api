@@ -38,10 +38,9 @@ another developer, gets picked up.
    An ADR cites `path:line` evidence and describes current behavior in §2, and
    `main` may have moved since it was written. `CLAUDE.md` requires verifying
    factual claims against the source before acting; the ADR's own claims are not
-   exempt. Re-run `context-mapper` when the change is cross-cutting or the ADR is
-   more than a few days old, and **explicitly re-grade §2's factual
-   reconciliation table**. A stale §2 silently invalidates every option weighed
-   on top of it.
+   exempt. Follow the mapping rule in §2 below, then **explicitly re-grade §2's
+   factual reconciliation table** in the ADR. A stale §2 silently invalidates
+   every option weighed on top of it.
 4. Report what changed underneath the ADR, if anything, before continuing.
 5. Resume at the earliest incomplete section. Keep decisions the previous author
    already justified; do not silently re-litigate them. If evidence now
@@ -84,7 +83,19 @@ Do not silently decide unresolved product behavior.
 
 ## 2. Map repository reality
 
-Launch the `context-mapper` agent first.
+**When `context-mapper` is required.** This is the single statement of the rule;
+Resume mode defers to it rather than restating it.
+
+- **New design** — always. Launch `context-mapper` **first**, before any option
+  is weighed. You cannot judge a change you have not mapped.
+- **Resumed ADR** — the map already exists in the file's §2. Re-run
+  `context-mapper` when the change is cross-cutting, the ADR is more than a few
+  days old, or the worktree has moved under it. Otherwise re-verify the ADR's
+  existing `path:line` claims directly, which is cheaper and more precise for a
+  small blast radius.
+
+Never skip both. **State which method you used and why** — an unexplained skip
+is indistinguishable from an oversight to whoever reads the ADR next.
 
 For cross-cutting work, use additional project agents in parallel:
 
