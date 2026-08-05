@@ -4,7 +4,7 @@ Team-shared Claude Code assets for this NestJS + Prisma starter.
 
 This directory contains:
 
-- an orchestrated **ticket-to-validated-diff** workflow;
+- an orchestrated **work-item-to-validated-diff** workflow;
 - independently invocable engineering gates;
 - project-aware specialist agents;
 - ADR, threat-model, API, database, and release templates;
@@ -24,16 +24,17 @@ Use this to drive work from repository research through a reviewed and validated
 working-tree diff **in one session**, stopping only at the two human gates:
 
 ```text
-/ticket IA-123
-/ticket <pasted ticket text>
-/ticket add rate limiting to the OTP resend endpoint
+/work-item IA-123
+/work-item <pasted requirement>
+/work-item add rate limiting to the OTP resend endpoint
 ```
 
-**An issue key is not required.** If the argument is not a resolvable key, it is
-treated as the requirement itself — so this is the uninterrupted path for
-non-ticket work too, not only for Jira. The name is historical.
+**An issue key is not required.** The argument may be an issue key, an issue URL
+(the key is extracted from it), or the requirement written out in plain words —
+all three are first-class. A URL that yields no key stops with a message rather
+than being mistaken for the requirement text.
 
-`/ticket` is the top-level conductor. It maintains pipeline state in the main
+`/work-item` is the top-level conductor. It maintains pipeline state in the main
 conversation, delegates read-only research/review agents, stops for design
 approval, implements only the accepted ADR, reviews and validates the diff,
 presents the result, and optionally posts one issue comment.
@@ -51,7 +52,7 @@ when you deliberately want to control each stage yourself:
 /gate-validate [ADR path or scope]
 ```
 
-The phase skills are human-invoked. `/ticket` does not recursively invoke them
+The phase skills are human-invoked. `/work-item` does not recursively invoke them
 through the Skill tool. Instead, it reads their `SKILL.md` files as the
 authoritative stage contracts and performs those stages in the main
 conversation. This preserves human invocation controls while preventing the
@@ -62,10 +63,10 @@ and offering to continue in the same session — the contract is
 `standards/gate-handoff.md`, referenced by all five rather than restated in
 each. Continuing carries authorisation for the **next gate only**. Running the
 gates individually and answering "yes" at each handoff reaches the same place as
-`/ticket`; the difference is that you decide at every boundary, and can drop into
+`/work-item`; the difference is that you decide at every boundary, and can drop into
 a fresh session whenever independence matters more than momentum.
 
-## Ticket-to-validated-diff pipeline
+## Work-item-to-validated-diff pipeline
 
 | Stage | What runs | Human boundary |
 |---|---|---|
@@ -92,9 +93,9 @@ implemented diff → /gate-review <ADR>
 reviewed diff    → /gate-validate <ADR>
 ```
 
-## Ticket interpretation
+## Work-item interpretation
 
-A ticket is a claim to validate, not a specification to transcribe.
+A work item is a claim to validate, not a specification to transcribe.
 
 The pipeline separates:
 
@@ -104,7 +105,7 @@ The pipeline separates:
 Stage 1 verifies factual claims against the source. Stage 2 recommends the
 approach supported by repository evidence and records rejected alternatives.
 Stale or unsafe technical prescriptions are not implemented merely because they
-appear in the ticket.
+appear in the work item.
 
 Genuine product choices go back to the human.
 
@@ -112,7 +113,7 @@ Genuine product choices go back to the human.
 
 ### Skills
 
-- `skills/ticket/SKILL.md` — full conductor.
+- `skills/work-item/SKILL.md` — full conductor.
 - `skills/gate-design/SKILL.md` — repository mapping, risk, alternatives, threat
   model, and the ADR. Pass an ADR path instead of a requirement to resume a
   `DRAFT` left by an earlier session or another developer.
@@ -155,10 +156,12 @@ The five domain playbook skills below need no prefix: they set
 `user-invocable: false` and never appear in the `/` menu at all, so they have no
 collision surface there.
 
-`/ticket` is deliberately exempt — it is the conductor, not a gate, and
-`gate-ticket` would misdescribe it. That leaves it exposed to a future built-in
-of the same name; the validator flags it as an explicit, reviewed exemption
-rather than letting it pass unnoticed.
+`/work-item` is deliberately exempt — it is the conductor, not a gate, so a
+`gate-` name would misdescribe it. The exemption is also safer than it looks:
+Claude Code's built-ins are single words (`init`, `review`, `design`, `run`,
+`debug`), so a hyphenated compound has a much smaller collision surface than a
+bare noun like `ticket` did. The validator still records it as an explicit,
+reviewed exemption rather than letting it pass unnoticed.
 
 ### Agents
 
@@ -246,13 +249,13 @@ without it.
 
 ## Issue-tracker behavior
 
-When `/ticket` receives a real issue key and the configured tracker MCP is
+When `/work-item` receives a real issue key and the configured tracker MCP is
 connected, it may:
 
 - read the issue during Stage 1;
 - post exactly one completion/blocker comment during Stage 7.
 
-Invoking `/ticket <ISSUE-KEY>` is standing authorization for that one comment.
+Invoking `/work-item <issue key or URL>` is standing authorization for that one comment.
 
 It must never (each is enforced by a `permissions.deny` rule, not just prose):
 

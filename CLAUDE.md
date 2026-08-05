@@ -30,7 +30,7 @@ When a small ask conflicts with this bar (e.g. "just fix this one site"), surfac
 
 Use the engineering workflow for any material feature, bug, refactor, contract change, schema change, authorization change, background job, integration, or change whose blast radius is unclear.
 
-**These four gates are human-invoked and Claude cannot start them.** Each sets `disable-model-invocation: true`, which removes it from Claude's context entirely — a Skill call to one of them is not possible, by design, so that a human owns the timing of every gate. Claude's obligation is therefore to **stop and ask the user to run the next gate**, never to claim a gate ran, and never to simulate one from memory. `/ticket <KEY>` (`.claude/skills/ticket/SKILL.md`) is the top-level conductor that walks all four in one session; the individual gates below are for non-ticket work, focused operation, or recovery in a fresh session.
+**These four gates are human-invoked and Claude cannot start them.** Each sets `disable-model-invocation: true`, which removes it from Claude's context entirely — a Skill call to one of them is not possible, by design, so that a human owns the timing of every gate. Claude's obligation is therefore to **stop and ask the user to run the next gate**, never to claim a gate ran, and never to simulate one from memory. `/work-item <key | URL | requirement>` (`.claude/skills/work-item/SKILL.md`) is the top-level conductor that walks all four in one session; the individual gates below are for non-ticket work, focused operation, or recovery in a fresh session.
 
 1. **`/gate-design <requirement>` — understand and decide.**
    - Start with the `context-mapper` agent when impact is unclear or cross-cutting.
@@ -63,11 +63,11 @@ Every gate closes the same way, per `.claude/standards/gate-handoff.md`: state t
 
 Answering "yes" authorises the **next gate only** — never a skip, never the rest of the pipeline, never a Git or deployment write. Recommend a fresh session instead when the change is High/Critical and the next gate is `/gate-review`: a review is worth more from a context that did not just write the code.
 
-**For the whole sequence in one pass, use `/ticket <requirement>` — it needs no issue key**, and falls back to treating its argument as the requirement itself. It stops only at the ADR approval gate and the human Git/release gate.
+**For the whole sequence in one pass, use `/work-item <requirement>` — it needs no issue key**, and falls back to treating its argument as the requirement itself. It stops only at the ADR approval gate and the human Git/release gate.
 
 ### Skill naming
 
-Every **user-invocable** project skill is namespaced `gate-*`. A project skill sharing a name with a Claude Code built-in does not win — it appears *beside* it in the `/` menu, and the user picks by row. This has already bitten twice (`review`, `design`), and a reserved-name denylist cannot prevent it because a new built-in can ship at any time. `yarn claude:validate` enforces the prefix. The domain playbook skills need none: they set `user-invocable: false` and never reach the menu. `/ticket` is the one reviewed exemption — it is the conductor, not a gate.
+Every **user-invocable** project skill is namespaced `gate-*`. A project skill sharing a name with a Claude Code built-in does not win — it appears *beside* it in the `/` menu, and the user picks by row. This has already bitten twice (`review`, `design`), and a reserved-name denylist cannot prevent it because a new built-in can ship at any time. `yarn claude:validate` enforces the prefix. The domain playbook skills need none: they set `user-invocable: false` and never reach the menu. `/work-item` is the one reviewed exemption — it is the conductor, not a gate.
 
 ### ADR location
 
@@ -219,7 +219,7 @@ Load these on demand — they hold the long-form playbooks so this core stays le
 |---|---|
 | Design a material change, reconcile ticket vs code, classify risk, compare alternatives, and produce an approval-gated ADR | `gate-design` skill + `.claude/templates/adr.md` |
 | Implement an explicitly accepted ADR without unrelated scope or Git/deployment writes | `gate-implement` skill |
-| Drive a ticket end-to-end: map → ADR → implement → review → validate → present → report | `ticket` skill (`/ticket <KEY>`) |
+| Drive a ticket end-to-end: map → ADR → implement → review → validate → present → report | `work-item` skill (`/work-item <key | URL | requirement>`) |
 | Independently review the current diff across architecture, correctness, AppSec, tests, API, DB, and performance | `gate-review` skill + `.claude/agents/` |
 | Run read-only evidence gates and return `PASS` / `FAIL` / `BLOCKED` | `gate-validate` skill + `.claude/templates/release-checklist.md` |
 | General architecture, coding, security, and testing rules | `.claude/standards/architecture.md`, `coding.md`, `security.md`, `testing.md` |

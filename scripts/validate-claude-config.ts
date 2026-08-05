@@ -72,12 +72,16 @@ const SUPPORTED_AGENT_KEYS = new Set([
 const USER_INVOCABLE_SKILL_PREFIX = 'gate-';
 
 /**
- * Skills allowed to skip the prefix, each a deliberate decision. `ticket` is the
- * conductor rather than a gate, so `gate-ticket` would misdescribe it. Exempt
- * names get checked against the known built-ins below instead — a weaker net,
- * which is exactly why the exemption list must stay short.
+ * Skills allowed to skip the prefix, each a deliberate decision. `work-item` is
+ * the conductor rather than a gate, so a `gate-` name would misdescribe it. The
+ * exemption is defensible partly because the name is a hyphenated compound:
+ * Claude Code's built-ins are single words (`init`, `review`, `design`, `run`,
+ * `debug`), so the collision surface is far smaller than for a bare noun.
+ *
+ * Exempt names get checked against the known built-ins below instead — a weaker
+ * net, which is exactly why this list must stay short.
  */
-const PREFIX_EXEMPT_SKILL_NAMES = new Set(['ticket']);
+const PREFIX_EXEMPT_SKILL_NAMES = new Set(['work-item']);
 
 /**
  * Known built-in commands and bundled skills, used ONLY to screen the handful of

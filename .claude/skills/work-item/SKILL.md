@@ -1,15 +1,15 @@
 ---
-name: ticket
-description: Drives a Jira issue or pasted ticket through repository mapping, an approval-gated ADR, implementation, independent project-specific review, read-only validation, presentation, and an optional single issue comment. Use when the user explicitly wants the complete ticket-to-validated-diff workflow.
-argument-hint: "<TICKET-KEY | pasted ticket text>"
+name: work-item
+description: Drives a tracked work item or pasted requirement through repository mapping, an approval-gated ADR, implementation, independent project-specific review, read-only validation, presentation, and at most one issue-tracker comment.
+argument-hint: "<issue key | issue URL | pasted requirement>"
 disable-model-invocation: true
 model: inherit
 effort: high
 ---
 
-# Ticket-to-validated-diff conductor
+# Work-item conductor
 
-Ticket input:
+Work item:
 
 ```text
 $ARGUMENTS
@@ -34,9 +34,9 @@ edit only after approval, and resume after discussion or compaction.
 - Never claim committed, pushed, merged, released, deployed, secure, or
   production-ready beyond the evidence.
 
-Invoking `/ticket <real issue key>` authorizes exactly one Stage 7 issue comment
-when the configured tracker is connected. It does not authorize any other issue
-write.
+Invoking `/work-item <real issue key or URL>` authorizes exactly one Stage 7
+issue comment when the configured tracker is connected. It does not authorize any
+other issue write. A pasted-requirement invocation authorizes none.
 
 ## Normative stage playbooks
 
@@ -51,7 +51,7 @@ At the start, read:
 - relevant `.claude/standards/`
 - relevant source-owned contract READMEs
 
-The five phase skills are human-only and must not be recursively invoked through
+The five gate skills are human-only and must not be recursively invoked through
 the Skill tool. Treat their contents as the authoritative procedures for Stages
 2–5.
 
@@ -85,17 +85,44 @@ incomplete safe stage. Never restart blindly or post a duplicate issue comment.
 
 ## Input resolution
 
-If `$ARGUMENTS` is a real issue key and the configured issue-tracker MCP is
-available:
+`$ARGUMENTS` arrives in one of three forms. Classify it **before** doing anything
+else — misclassifying a URL as requirement text means designing against a link.
 
-- fetch summary, description, acceptance criteria, comments or linked context
-  needed to understand the request;
-- record the issue key for Stage 7.
+**1. An issue key** (`IA-123`) — an uppercase project prefix, a hyphen, digits.
 
-Otherwise, treat `$ARGUMENTS` as pasted ticket content.
+**2. An issue URL.** Extract the key by pattern rather than by matching known
+hosts: pull the first `KEY-123`-shaped token out of the path or query string.
+This resolves a plain browse link and a board link carrying the issue as a query
+parameter with the same rule, and keeps working for any tracker that uses the
+same key format — no host list to maintain.
 
-Ask for missing ticket details only when neither source provides enough product
-intent to design safely.
+```text
+https://<host>/browse/IA-123                          -> IA-123
+https://<host>/jira/software/projects/IA/boards/1?selectedIssue=IA-123  -> IA-123
+```
+
+**3. Pasted requirement text** — anything else. This is a first-class input, not
+a fallback: `/work-item add rate limiting to the OTP resend endpoint` is a
+supported and common invocation. No issue key exists, so Stage 7 is skipped.
+
+### After classifying
+
+For form 1 or 2, when the configured issue-tracker MCP is available:
+
+- fetch summary, description, acceptance criteria, and any comments or linked
+  context needed to understand the request;
+- record the resolved key for Stage 7.
+
+If a key was resolved but the tracker is **not** connected, say so, and ask the
+user to paste the item's content rather than proceeding on the key alone — a key
+is an identifier, not a requirement.
+
+**If `$ARGUMENTS` looks like a URL but yields no key, stop and say so.** Do not
+fall through to treating the URL as the requirement: that silently designs
+against a link. Ask for the key or the pasted content.
+
+Ask for missing detail only when neither source provides enough product intent to
+design safely.
 
 # Stage 1 — Understand
 
@@ -343,7 +370,8 @@ Run only when all are true:
 - no completion comment has already been posted by this pipeline run.
 
 Post exactly one Markdown comment. Do not ask for a separate confirmation; the
-original `/ticket <ISSUE-KEY>` invocation authorized this single comment.
+original `/work-item <issue key or URL>` invocation authorized this single
+comment.
 
 Never transition the issue or edit fields.
 

@@ -47,7 +47,7 @@ Ask with `AskUserQuestion` — a real choice, not a rhetorical one. Keep it to o
 question, and make the options honest about what actually happens:
 
 - **Yes, continue now** — proceed in this session, following the next gate's
-  `SKILL.md` as its authoritative contract. This is the same mechanism `/ticket`
+  `SKILL.md` as its authoritative contract. This is the same mechanism `/work-item`
   uses for stages 2–5; it is a continuation of work the user just authorised, not
   Claude deciding to run a gate on its own.
 - **Stop here** — the user runs the next gate themselves, in a fresh session.
@@ -83,4 +83,4 @@ authorises:
 
 Each gate re-asks at its own end. Answering "yes" once does not run the rest of
 the pipeline — if the user wants the whole sequence in one pass, that is
-`/ticket <requirement>`, which needs no issue key.
+`/work-item <requirement>`, which needs no issue key.
