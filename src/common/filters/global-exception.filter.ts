@@ -81,9 +81,9 @@ export class GlobalExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(GlobalExceptionFilter.name);
 
   catch(exception: unknown, host: ArgumentsHost): void {
-    const ctx = host.switchToHttp();
-    const request = ctx.getRequest<Request>();
-    const response = ctx.getResponse<Response>();
+    const httpContext = host.switchToHttp();
+    const request = httpContext.getRequest<Request>();
+    const response = httpContext.getResponse<Response>();
 
     const translated = this.translate(exception);
 
@@ -118,12 +118,12 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
   private fromHttpException(exception: HttpException): Translated {
     const status = exception.getStatus();
-    const res = exception.getResponse();
+    const response = exception.getResponse();
 
     // Tagged exception (constructed via Errors.* factory) — pull the
     // structured payload off and use it verbatim.
-    if (typeof res === 'object' && res !== null) {
-      const payload = res as Partial<AppExceptionPayload> & {
+    if (typeof response === 'object' && response !== null) {
+      const payload = response as Partial<AppExceptionPayload> & {
         message?: string | string[];
       };
       if (typeof payload.errorCode === 'string') {
@@ -146,7 +146,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
     // String form: `new NotFoundException('...')` — Nest serializes the
     // string into the message field for us.
-    const message = typeof res === 'string' ? res : exception.message;
+    const message = typeof response === 'string' ? response : exception.message;
     return {
       status,
       errorCode: STATUS_TO_DEFAULT_CODE[status] ?? ErrorCode.INTERNAL_ERROR,
@@ -245,10 +245,10 @@ export class GlobalExceptionFilter implements ExceptionFilter {
   // regardless of which path the error came from. For composite
   // uniques, returns the last column — imprecise but not misleading.
   private getTargetField(
-    err: Prisma.PrismaClientKnownRequestError,
+    error: Prisma.PrismaClientKnownRequestError,
   ): string | undefined {
-    const meta = err.meta as AdapterPgMeta | undefined;
-    if (!meta) return this.extractFieldFromMessage(err.message);
+    const meta = error.meta as AdapterPgMeta | undefined;
+    if (!meta) return this.extractFieldFromMessage(error.message);
 
     if (Array.isArray(meta.target) && meta.target.length > 0) {
       const first: unknown = meta.target[0];
@@ -269,7 +269,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       return adapterFields[0];
     }
 
-    return this.extractFieldFromMessage(err.message);
+    return this.extractFieldFromMessage(error.message);
   }
 
   // Parse the field name out of Prisma's message string as a last
@@ -285,7 +285,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     return field
       .replace(/([A-Z])/g, ' $1')
       .toLowerCase()
-      .replace(/^./, (c) => c.toUpperCase());
+      .replace(/^./, (firstCharacter) => firstCharacter.toUpperCase());
   }
 
   private log(status: number, request: Request, exception: unknown): void {

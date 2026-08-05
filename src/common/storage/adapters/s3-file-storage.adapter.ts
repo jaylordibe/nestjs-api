@@ -94,9 +94,9 @@ export class S3FileStorageAdapter implements FileStorageAdapter {
       await this.client.send(
         new DeleteObjectCommand({ Bucket: this.bucket, Key: storageKey }),
       );
-    } catch (err) {
+    } catch (error) {
       this.logger.warn(
-        `Failed to delete s3://${this.bucket}/${storageKey}: ${err instanceof Error ? err.message : String(err)}`,
+        `Failed to delete s3://${this.bucket}/${storageKey}: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }

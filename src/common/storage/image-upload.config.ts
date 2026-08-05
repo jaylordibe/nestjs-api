@@ -17,18 +17,18 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set([
 // keeps the buffer in RAM until we hand it to FileStorageService).
 export const MAX_IMAGE_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 
-type FileFilterCb = (error: Error | null, acceptFile: boolean) => void;
+type FileFilterCallback = (error: Error | null, acceptFile: boolean) => void;
 
 function imageMimeFilter(
   _req: Request,
   file: Express.Multer.File,
-  cb: FileFilterCb,
+  callback: FileFilterCallback,
 ): void {
   if (ALLOWED_IMAGE_MIME_TYPES.has(file.mimetype)) {
-    cb(null, true);
+    callback(null, true);
     return;
   }
-  cb(
+  callback(
     Errors.badRequest(
       `Unsupported image type: ${file.mimetype}. Allowed: ${[...ALLOWED_IMAGE_MIME_TYPES].join(', ')}`,
     ),

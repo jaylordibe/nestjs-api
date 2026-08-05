@@ -84,11 +84,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         if (revoked) {
           throw Errors.tokenRevoked();
         }
-      } catch (err) {
-        if (err instanceof HttpException) throw err;
+      } catch (error) {
+        if (error instanceof HttpException) throw error;
         this.logger.warn(
           `Logout blocklist check failed (failing open): ${
-            err instanceof Error ? err.message : String(err)
+            error instanceof Error ? error.message : String(error)
           }`,
         );
       }

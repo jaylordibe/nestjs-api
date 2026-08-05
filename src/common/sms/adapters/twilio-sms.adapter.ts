@@ -30,8 +30,8 @@ export class TwilioSmsAdapter implements SmsAdapter {
         to: message.to,
         body: message.body,
       });
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
       this.logger.error(`Twilio send failed for ${message.to}: ${reason}`);
       throw new Error(`SMS send failed: ${reason}`);
     }

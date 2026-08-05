@@ -26,20 +26,20 @@ export function flattenValidationErrors(
   parentPath = '',
 ): ValidationFailureDetail[] {
   const out: ValidationFailureDetail[] = [];
-  for (const err of errors) {
-    const isIndex = /^\d+$/.test(err.property);
-    const segment = isIndex ? `[${err.property}]` : err.property;
+  for (const error of errors) {
+    const isIndex = /^\d+$/.test(error.property);
+    const segment = isIndex ? `[${error.property}]` : error.property;
     const path = parentPath
       ? isIndex
         ? `${parentPath}${segment}`
         : `${parentPath}.${segment}`
       : segment;
 
-    if (err.constraints && Object.keys(err.constraints).length > 0) {
-      out.push({ field: path, constraints: Object.values(err.constraints) });
+    if (error.constraints && Object.keys(error.constraints).length > 0) {
+      out.push({ field: path, constraints: Object.values(error.constraints) });
     }
-    if (err.children && err.children.length > 0) {
-      out.push(...flattenValidationErrors(err.children, path));
+    if (error.children && error.children.length > 0) {
+      out.push(...flattenValidationErrors(error.children, path));
     }
   }
   return out;
