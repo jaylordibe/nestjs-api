@@ -200,8 +200,15 @@ Report:
 - frontend/mobile handoff;
 - ADR path.
 
-Next:
+## Handoff
 
-```text
-/gate-review <ADR path>
-```
+Follow `.claude/standards/gate-handoff.md`.
+
+Close with the files changed, the contracts touched, the focused checks that
+actually ran, and any migration prepared but **not** applied. Then offer to
+continue into `/gate-review <adr>`.
+
+**Recommend a fresh session for the review when the change is High or Critical
+risk.** A review carries more weight from a context that did not just write the
+code — the reviewer should be re-reading the diff, not recalling its own
+intentions.

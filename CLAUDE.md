@@ -57,6 +57,14 @@ Use the engineering workflow for any material feature, bug, refactor, contract c
 
 Manual/ad-hoc work does not bypass the final gates. After implementation, **stop and tell the user to run `/gate-review`, then `/gate-validate`** — summarise what changed, name the affected contracts and risk tier, and wait. An ad-hoc self-check is not a substitute for either gate and must never be reported as one.
 
+### Ending a gate
+
+Every gate closes the same way, per `.claude/standards/gate-handoff.md`: state the outcome, what changed on disk, the evidence that actually ran, anything blocking the next gate, then **name the next command with its argument already filled in** and offer to continue. A developer should never finish a gate wondering what to do next.
+
+Answering "yes" authorises the **next gate only** — never a skip, never the rest of the pipeline, never a Git or deployment write. Recommend a fresh session instead when the change is High/Critical and the next gate is `/gate-review`: a review is worth more from a context that did not just write the code.
+
+**For the whole sequence in one pass, use `/ticket <requirement>` — it needs no issue key**, and falls back to treating its argument as the requirement itself. It stops only at the ADR approval gate and the human Git/release gate.
+
 ### Skill naming
 
 Every **user-invocable** project skill is namespaced `gate-*`. A project skill sharing a name with a Claude Code built-in does not win — it appears *beside* it in the `/` menu, and the user picks by row. This has already bitten twice (`review`, `design`), and a reserved-name denylist cannot prevent it because a new built-in can ship at any time. `yarn claude:validate` enforces the prefix. The domain playbook skills need none: they set `user-invocable: false` and never reach the menu. `/ticket` is the one reviewed exemption — it is the conductor, not a gate.
@@ -64,6 +72,8 @@ Every **user-invocable** project skill is namespaced `gate-*`. A project skill s
 ### ADR location
 
 Accepted ADRs are the durable record of every material change and are **committed**: `docs/adr/NNNN-kebab-slug.md`, sequential, zero-padded to four digits, from `.claude/templates/adr.md`. `/gate-implement`, `/gate-review`, and `/gate-validate` all take that path as their argument, and a resumed session finds the work by reading the ADR's `Status:` line. See `docs/adr/README.md`.
+
+Lifecycle: `DRAFT` (design in progress — resume with `/gate-design <path>`, never restart it) → `PROPOSED` (complete, awaiting approval) → **`/gate-approve <path>`** → `ACCEPTED` → `/gate-implement <path>`. The *decision* is the user's and Claude never infers it; recording it is `/gate-approve`'s job, and because that skill sets `disable-model-invocation: true`, **Claude cannot invoke it** — only a human can. Git writes stay denied, so the user's commit remains the act of record. Leaving work unfinished means `Status: DRAFT` plus the remainder written into §14 with an owner — §14 is the handoff contract. Never park an incomplete ADR at `PROPOSED`. `yarn claude:validate` fails if the `Status:` line and §15 disagree.
 
 ### Risk classification
 

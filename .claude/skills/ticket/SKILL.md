@@ -44,13 +44,14 @@ At the start, read:
 
 - `CLAUDE.md`
 - `.claude/skills/gate-design/SKILL.md`
+- `.claude/skills/gate-approve/SKILL.md`
 - `.claude/skills/gate-implement/SKILL.md`
 - `.claude/skills/gate-review/SKILL.md`
 - `.claude/skills/gate-validate/SKILL.md`
 - relevant `.claude/standards/`
 - relevant source-owned contract READMEs
 
-The four phase skills are human-only and must not be recursively invoked through
+The five phase skills are human-only and must not be recursively invoked through
 the Skill tool. Treat their contents as the authoritative procedures for Stages
 2–5.
 
@@ -168,17 +169,30 @@ Present the ADR through the normal Plan/approval interface and stop.
 
 Do not mark Stage 2 complete until the user explicitly approves.
 
+Before asking for a decision, read back the recommendation, the trade-off
+accepted by rejecting the alternatives, residual risk, non-goals, and **every
+unresolved §14 row** — the contract in `.claude/skills/gate-approve/SKILL.md`.
+Ambiguous praise is not an approval; the user's decision must be explicit.
+
 On approval:
 
 1. re-read the checklist;
 2. re-read the ADR;
-3. update it to `Status: ACCEPTED`;
-4. record approval;
-5. mark Stage 2 complete;
-6. mark Stage 3 in progress;
-7. continue the pipeline in the same session.
+3. write **both** the `Status: ACCEPTED` line and §15 — `Decision: Approved`,
+   `Approved by:` from `git config user.name`, `Date:` from the system, and any
+   conditions the user stated verbatim. `/gate-implement` branches on `Status:`
+   alone, so a header-only edit records an approval with no approver;
+   `yarn claude:validate` fails the build when the two disagree;
+4. mark Stage 2 complete;
+5. mark Stage 3 in progress;
+6. continue the pipeline in the same session.
 
 If the user requests changes, revise the ADR and remain at Stage 2.
+
+If the session ends mid-design, set `Status: DRAFT` and write what remains into
+§14 with an owner, so the work resumes with `/gate-design <ADR path>` rather than
+restarting. Never leave an unfinished ADR at `PROPOSED` — that reads as "ready
+for your approval".
 
 # Stage 3 — Implement
 

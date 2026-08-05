@@ -1,7 +1,7 @@
 ---
 name: gate-design
 description: Designs a material change for this NestJS, Prisma, PostgreSQL, Redis, and BullMQ API by mapping repository reality, reconciling ticket claims, evaluating architecture alternatives, threat-modeling relevant surfaces, and producing an approval-gated ADR. Use for features, bugs, refactors, migrations, integrations, authorization changes, background jobs, and unclear blast radius.
-argument-hint: "<ticket key | requirement | bug report | proposed change>"
+argument-hint: "<ticket key | requirement | bug report | ADR path to resume>"
 disable-model-invocation: true
 model: inherit
 effort: high
@@ -19,8 +19,37 @@ This skill is design-only. Do not edit product source, tests, Prisma schema,
 migration files, configuration, lockfiles, generated files, or deployment
 artifacts.
 
-The only allowed write is an ADR under the project's chosen ADR location, using
-`.claude/templates/adr.md`.
+The only allowed write is an ADR under `docs/adr/NNNN-kebab-slug.md`, using
+`.claude/templates/adr.md`. See `docs/adr/README.md`.
+
+## Resume mode
+
+If `$ARGUMENTS` is a path to an existing ADR, **resume it — do not start over.**
+This is the normal way an ADR left `DRAFT` at the end of a day, or handed to
+another developer, gets picked up.
+
+1. Read the ADR completely, including `Status:` and §14 Open decisions and
+   blockers. **§14 is the handoff contract** — it says what the previous author
+   left unresolved and who owns it. Read it before anything else.
+2. Refuse to proceed if `Status:` is `ACCEPTED` — that design is approved and
+   belongs to `/gate-implement`; changing it now needs an amendment and renewed
+   approval. Say so and stop.
+3. **Re-establish repository reality before trusting a single existing claim.**
+   An ADR cites `path:line` evidence and describes current behavior in §2, and
+   `main` may have moved since it was written. `CLAUDE.md` requires verifying
+   factual claims against the source before acting; the ADR's own claims are not
+   exempt. Re-run `context-mapper` when the change is cross-cutting or the ADR is
+   more than a few days old, and **explicitly re-grade §2's factual
+   reconciliation table**. A stale §2 silently invalidates every option weighed
+   on top of it.
+4. Report what changed underneath the ADR, if anything, before continuing.
+5. Resume at the earliest incomplete section. Keep decisions the previous author
+   already justified; do not silently re-litigate them. If evidence now
+   contradicts one, say which, why, and what it changes.
+6. Keep `Status: DRAFT` while work remains. Move to `PROPOSED` only when every
+   section is complete and §14 holds nothing that blocks a decision.
+
+Never restart a resumed ADR from a blank template, and never renumber it.
 
 ## Pipeline
 
@@ -209,30 +238,48 @@ Do not plan to apply migrations to the local dev database.
 
 ## 9. Write the ADR
 
-Use `.claude/templates/adr.md`.
+Use `.claude/templates/adr.md`, at `docs/adr/NNNN-kebab-slug.md` with the next
+free sequential number.
 
-Set:
-
-```text
-Status: PROPOSED
-```
+Set `Status: DRAFT` while the design is still being worked, and move it to
+`PROPOSED` only when every section is complete. Parking an unfinished ADR at
+`PROPOSED` means "ready for your approval" and invites someone to accept a
+design that was never finished.
 
 Include repository evidence, ticket reconciliation, recommendation, rejected
 alternatives, threat model, exact file plan, tests, verification, migration,
 rollout, rollback, non-goals, consumer handoff, and blockers.
 
+**If the session ends before the design is complete**, leave `Status: DRAFT` and
+write what remains into §14 with an owner, so the next person — or the next
+session — can resume with `/gate-design <ADR path>`.
+
 ## 10. Approval gate
 
-Present the ADR and stop.
+Set `Status: PROPOSED`, present the ADR, and stop.
 
-Only explicit approval changes it to:
+**Do not approve it yourself and do not infer approval.** The decision is the
+user's. Name any unresolved §14 row they would be deciding over, then hand off
+per §11 below.
 
-```text
-Status: ACCEPTED
-```
+Approval belongs to `/gate-approve`, which reads the design back to them, takes
+an explicit decision, and writes the `Status:` line and §15 together. It is
+human-invocable only, which is what keeps a design from approving itself.
 
-Then direct the user to:
+If they approve in this same conversation and explicitly ask you to record it,
+you may — write **both** fields, approver from `git config user.name`, date from
+the system. Ambiguous praise is not an approval.
 
-```text
-/gate-implement <ADR path>
-```
+## 11. Handoff
+
+Follow `.claude/standards/gate-handoff.md`.
+
+Close with the ADR path and its status, then offer:
+
+- **Approve it now** — read the design back per
+  `.claude/skills/gate-approve/SKILL.md` and record their explicit decision.
+- **Keep refining** — stay at `DRAFT`, write what remains into §14.
+- **Stop here** — they run `/gate-approve <adr>` themselves.
+
+If the ADR is still `DRAFT`, do not offer approval at all. Say what §14 still
+holds and that `/gate-design <adr>` resumes it.

@@ -193,3 +193,14 @@ Report:
 
 Do not commit, push, deploy, apply migrations, transition tickets, or claim
 production readiness.
+
+## 7. Handoff
+
+Follow `.claude/standards/gate-handoff.md`.
+
+Close with findings by severity, what was fixed, what was rejected and why, and
+the commands that actually ran. Then offer to continue into
+`/gate-validate <adr>`.
+
+**Do not offer to continue while any Critical or High finding is unresolved.**
+Name what remains and stop — that is the whole purpose of this gate.

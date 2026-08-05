@@ -1,6 +1,6 @@
 # ADR-[ID]: [Decision title]
 
-- **Status:** PROPOSED
+- **Status:** DRAFT | PROPOSED | ACCEPTED | REJECTED | SUPERSEDED by NNNN
 - **Date:** YYYY-MM-DD
 - **Owners:** [Names/roles]
 - **Source:** [Ticket/request/incident]
@@ -181,7 +181,12 @@ No local migration application.
 
 ## 15. Approval
 
-- **Decision:** Pending | Approved | Rejected | Superseded
+Recorded by `/gate-approve <this file>`, which reads the decision back to the
+human, takes an explicit choice, and writes this section together with the
+`Status:` line at the top. `/gate-implement` branches on `Status:` alone, so the
+two must agree — `yarn claude:validate` fails the build if they do not.
+
+- **Decision:** Pending
 - **Approved by:**
 - **Date:**
 - **Conditions/accepted risks:**

@@ -18,20 +18,20 @@ without it. Developers who do not use Claude Code can ignore this directory.
 
 There are two supported ways to work.
 
-### Full ticket pipeline
+### Continuous pipeline
 
-Use this for a Jira ticket or pasted ticket that should be driven from
-repository research through a reviewed and validated working-tree diff:
+Use this to drive work from repository research through a reviewed and validated
+working-tree diff **in one session**, stopping only at the two human gates:
 
 ```text
 /ticket IA-123
-```
-
-or:
-
-```text
 /ticket <pasted ticket text>
+/ticket add rate limiting to the OTP resend endpoint
 ```
+
+**An issue key is not required.** If the argument is not a resolvable key, it is
+treated as the requirement itself — so this is the uninterrupted path for
+non-ticket work too, not only for Jira. The name is historical.
 
 `/ticket` is the top-level conductor. It maintains pipeline state in the main
 conversation, delegates read-only research/review agents, stops for design
@@ -44,7 +44,8 @@ Use these for non-ticket work, focused operation, recovery in a new session, or
 when you deliberately want to control each stage yourself:
 
 ```text
-/gate-design <requirement>
+/gate-design <requirement | ADR path to resume>
+/gate-approve <ADR path>
 /gate-implement <accepted ADR path>
 /gate-review [ADR path or base ref]
 /gate-validate [ADR path or scope]
@@ -55,6 +56,14 @@ through the Skill tool. Instead, it reads their `SKILL.md` files as the
 authoritative stage contracts and performs those stages in the main
 conversation. This preserves human invocation controls while preventing the
 orchestrator and the standalone gates from drifting apart.
+
+Each standalone gate ends by naming the next command with its argument filled in
+and offering to continue in the same session — the contract is
+`standards/gate-handoff.md`, referenced by all five rather than restated in
+each. Continuing carries authorisation for the **next gate only**. Running the
+gates individually and answering "yes" at each handoff reaches the same place as
+`/ticket`; the difference is that you decide at every boundary, and can drop into
+a fresh session whenever independence matters more than momentum.
 
 ## Ticket-to-validated-diff pipeline
 
@@ -76,7 +85,8 @@ The accepted ADR is the durable repository artifact. If a session is lost,
 resume with the individual skills according to ADR state:
 
 ```text
-PROPOSED  → /gate-design or continue the approval discussion
+DRAFT     → /gate-design <ADR>      (resume; never restart)
+PROPOSED  → /gate-approve <ADR>
 ACCEPTED  → /gate-implement <ADR>
 implemented diff → /gate-review <ADR>
 reviewed diff    → /gate-validate <ADR>
@@ -104,13 +114,16 @@ Genuine product choices go back to the human.
 
 - `skills/ticket/SKILL.md` — full conductor.
 - `skills/gate-design/SKILL.md` — repository mapping, risk, alternatives, threat
-  model, ADR, and approval.
+  model, and the ADR. Pass an ADR path instead of a requirement to resume a
+  `DRAFT` left by an earlier session or another developer.
+- `skills/gate-approve/SKILL.md` — reads a `PROPOSED` ADR back to the human,
+  takes an explicit decision, and records it.
 - `skills/gate-implement/SKILL.md` — accepted-ADR implementation.
 - `skills/gate-review/SKILL.md` — independent project-specific review and
   remediation.
 - `skills/gate-validate/SKILL.md` — read-only evidence gate.
 
-All five workflow skills use `disable-model-invocation: true`; only the human
+All six workflow skills use `disable-model-invocation: true`; only the human
 starts them. That flag removes the skill from Claude's context entirely, so
 Claude cannot invoke a gate even when instructed to — it must **stop and ask the
 user** to run the next one. `CLAUDE.md` states this obligation explicitly so the
@@ -133,7 +146,7 @@ Maintaining a list of reserved built-in names does not fix this — such a list 
 stale the moment Anthropic ships a new command, and the list itself is what
 failed to catch `design`. A prefix removes the whole collision class instead:
 Anthropic will not ship a `/gate-*` command. It also groups the workflow in the
-menu, so typing `/gate` shows exactly these four and nothing else.
+menu, so typing `/gate` shows exactly these five and nothing else.
 
 `yarn claude:validate` enforces the prefix, so a new gate cannot be added
 without it.
@@ -193,6 +206,7 @@ slash-command menu:
 - `standards/coding.md`
 - `standards/security.md`
 - `standards/testing.md`
+- `standards/gate-handoff.md` — how every gate closes and hands off.
 
 ### Hooks and validation
 

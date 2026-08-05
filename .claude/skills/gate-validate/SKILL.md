@@ -204,3 +204,17 @@ a gate that could write its own passing grade is not a gate.
 
 Human approval, Git writes, migration application, deployment, and final risk
 acceptance remain outside validation.
+
+## 11. Handoff
+
+Follow `.claude/standards/gate-handoff.md`.
+
+There is no next gate. Close with the verdict, the evidence table, the §16 block
+to paste into the ADR, and the residual risk.
+
+On `PASS`, state plainly that the work exists only in the working tree and that
+the commit, PR, migration application, and deployment are the user's — never
+offer to perform them.
+
+On `FAIL` or `BLOCKED`, name what failed or could not run, and point back to
+`/gate-review <adr>` or the missing prerequisite.
