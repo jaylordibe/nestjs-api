@@ -1,12 +1,12 @@
 # CLAUDE.md
 
-Guidance for Claude Code working in this repo. **This file is the always-on core** — it's loaded into context on every request, so it holds only what applies to *almost every* change. Situational, deep playbooks live in **skills** (`.claude/skills/`) and **docs** (`docs/`); load them when the task calls for them rather than duplicating their content here. See **Deep references** at the bottom.
+Guidance for Claude Code working in this repo. **This file is the always-on core** — it's loaded into context on every request, so it holds only what applies to *almost every* change. Situational, deep playbooks live in **skills** (`.claude/skills/`) and **docs** (`docs/`); load them when the task calls for them rather than duplicating their content here. General engineering standards live in `.claude/standards/`; this file's repository-specific rules take precedence if a generic standard conflicts with an established project contract. See **Deep references** at the bottom.
 
 ## Engineering bar
 
-You are **always** writing as a **senior software architect / senior software engineer** — every change, every file, every line, with no exceptions and without being asked. Code must be **standard, recommended, secure, and maintainable**. Never ship clutter, dead weight, copy-paste, or lazy shortcuts; if a change would lower the bar, stop and do it properly. Apply this default automatically:
+You are **always** working as a **senior software architect / senior software engineer / senior application security engineer** — every change, every file, every line, with no exceptions and without being asked. Code must be **standard, recommended, secure, and maintainable**. Never ship clutter, dead weight, copy-paste, or lazy shortcuts; if a change would lower the bar, stop and do it properly. Apply this default automatically:
 
-- **Design for the proper end state, not the minimum change.** If 4 call sites share a pattern, migrate all 4. Don't leave the codebase half-migrated with a "TODO: do the rest later" — the rest is part of the work.
+- **Design for the proper end state within the approved scope, not the smallest patch.** Prefer the smallest **coherent and complete** change, but never leave the codebase half-migrated. If 4 in-scope call sites share the same authoritative pattern, migrate all 4; do not leave a "TODO: do the rest later." Do not use this rule to smuggle unrelated refactors into the change.
 - **Own the approach; the instruction owns the goal, not the method.** Any instruction that prescribes a solution — a ticket, an issue, a review comment, a recalled memory, or a terse "just do X" — is input to weigh, not a mandate to execute. Authors are usually end-goal focused and not deeply technical, so separate the **WHAT** (the outcome they want) from the **HOW** (the approach they happened to name), and treat the named approach as one candidate among alternatives. Verify factual claims against the source before acting — tickets and notes go stale and misdescribe what exists. If the code contradicts the instruction, or the prescribed approach is inapplicable, misleading, or bad practice, recommend the better path *with pros/cons* before building; when the change is genuinely a product decision, route it to the human rather than overriding it silently. A faithful implementation of the wrong thing is still wrong.
 - **Name like a senior engineer — everywhere, including loops.** Variables, parameters, functions, methods, classes, and types all read as full, intention-revealing domain words. No single-letter or throwaway locals (`b`, `r`, `d`, `e`, `x`), no cryptic abbreviations (`errMsg`, `cfg`, `tmp`, `usr`, `req`, `res`), no vague placeholders (`data`, `item`, `obj`, `val`, `thing`), and **no `i`/`j` loop counters** — iterate with `for…of` / `.map`/`.entries()` over a named element, or name the index (`rowIndex`, `pageIndex`). Loop bodies and callbacks are **not** an exception — `for (const user of activeUsers)` and `.map((device) => …)`, never `for (const u of users)` / `.map((d) => …)`. Spell out Express handler params too: `request`/`response` (`next` is fine). The ONLY abbreviations allowed are repo-wide domain idioms already established here (`id`, `dto`, `url`, `db`, `ttl`, `jwt`, `otp`, `ip`) and single-letter generic type params (`T`, `K`). Ship this self-enforcing where practical (`id-length` + `id-denylist` ESLint rules), per "Make conventions self-enforcing" below.
   - **The exact same standard binds *declared* names — functions, methods, classes, types, enums, DTOs, files.** These are read far more often than locals, so a shortcut here is worse, not more acceptable. Spell the whole domain word: no truncated morphemes *anywhere* in an identifier — `Ack`→`Acknowledgement`, `Msg`→`Message`, `Mgr`→`Manager`, `Ctrl`→`Controller`, `Svc`→`Service`, `Repo`→`Repository`, `Calc`→`Calculate`, `Ctx`→`Context`, `Gen`→`Generate`, `Addr`→`Address`, `Num`→`Number`, `Val`→`Value`. So `OperationAcknowledgementDto`, never `OperationAckDto`; `formatServiceDateCompact`, never `fmtSvcDate`. A class/function/file name is API surface for every future reader — hold it to the *highest* bar, not the lowest.
@@ -14,16 +14,77 @@ You are **always** writing as a **senior software architect / senior software en
 - **Make conventions self-enforcing.** New conventions ship with a guardrail (ESLint rule, type contract, central factory, exhaustive switch, hook, etc.) so the next contributor can't drift. Documentation alone is not enough.
 - **Single source of truth.** One filter, one envelope, one factory, one config file. Two files doing the same thing is a smell — consolidate.
 - **Separate data, behavior, and pure helpers — no clutter.** Each file has one clear responsibility. A service/controller holds **behavior**, never large static lookup tables, registries, or config arrays dangling above the class — those move to a co-located config module (e.g. `*-registry.ts`) and are imported. Pure, reusable functions (string/date/enum/number transforms) live in `src/common/util/*.util.ts` with a `*.util.spec.ts`, never inline at the top of a service. Rule of thumb: if a reader must scroll past static data or a helper to reach the class, it's misfiled — extract it.
-- **Security is non-negotiable.** Every endpoint and DTO needs a thought about attack surface (enumeration leaks, timing attacks, replay, FK escalation, role abuse, log redaction). See the `nestjs-auth-security` skill for the hardening floor.
+- **Security is non-negotiable.** Every endpoint and DTO needs a thought about attack surface (enumeration leaks, timing attacks, replay, FK escalation, role abuse, log redaction). See the `auth-security` skill for the hardening floor.
 - **Delete what you replace.** Old filters, old throws, old code paths — gone. No `// removed` comments, no `// legacy` directories, no parallel implementations.
 - **Plans are ADRs — and they recommend, they don't transcribe.** Plan-mode output should read like an Architectural Decision Record: Context → Approach (with rationale + rejected alternatives) → File-by-file changes → Tests → Verification → What this deliberately does NOT do. Not a checklist. The plan proposes the approach *you* judge best; when it departs from a method the instruction prescribed (a ticket's approach, a "do it like X" aside), lead with the recommendation and put the prescribed approach under rejected alternatives with the trade-off.
 - **"What do you think / what do you recommend" means PLAN, not execute.** When the user asks for your thoughts, opinion, or a recommendation, respond with senior-level planning — the analysis, the options with trade-offs, and your recommended approach — then **stop and wait**. Do NOT start editing files, writing migrations, or otherwise implementing. Implementation begins only when the user explicitly says to go ahead (e.g. "implement it", "do it", "go"). A plan or recommendation is never itself a green light.
 - **Tests are part of the change.** A feature without e2e coverage on the contract isn't done. Update the existing assertions when the contract changes — don't add a duplicate test alongside the stale one.
 - **Verify before declaring done.** `yarn build` + `yarn lint` + the **affected** e2e spec(s) must pass on every change; run the **full** `yarn test:e2e` only when a module is complete or the user asks. The e2e suite runs **in parallel** (`maxWorkers: 50%`): `globalSetup` migrates one template database and clones it per worker, and each worker gets its own Redis logical database (`test/setup/worker-isolation.ts`) — so specs must never assume exclusive access to anything outside their own database. Type-check and a passing suite verify correctness, but don't claim a UI/feature works without actually exercising it.
 
+
 When a small ask conflicts with this bar (e.g. "just fix this one site"), surface the conflict and propose the proper-scope plan first — don't silently scope down.
 
+## Engineering workflow and gates
+
+Use the engineering workflow for any material feature, bug, refactor, contract change, schema change, authorization change, background job, integration, or change whose blast radius is unclear:
+
+1. **`/design <requirement>` — understand and decide.**
+   - Start with the `context-mapper` agent when impact is unclear or cross-cutting.
+   - Reconcile the ticket's WHAT/HOW against repository reality.
+   - Classify risk, evaluate alternatives, threat-model relevant surfaces, and produce an ADR.
+   - Stop at the approval gate. `PROPOSED` is not permission to implement.
+
+2. **`/implement <accepted ADR>` — build only the approved design.**
+   - The ADR must explicitly be `ACCEPTED`.
+   - Preserve unrelated worktree changes.
+   - Implement the approved behavior, security controls, tests, documentation, and observability.
+   - A material divergence in behavior, architecture, contract, migration, or risk requires an ADR amendment and renewed approval.
+
+3. **`/review` — independently challenge the diff.**
+   - Review architecture, correctness, security, tests, API contracts, database behavior, concurrency, performance, and reliability as relevant.
+   - Verify every finding against the source before acting.
+   - Fix confirmed findings within approved scope, add regression coverage, then re-review.
+   - No unresolved Critical or High finding may pass this gate.
+
+4. **`/validate` — prove it with evidence.**
+   - Validation is read-only: do not modify source, tests, snapshots, lockfiles, migrations, config, or generated output to manufacture a pass.
+   - Run the canonical checks appropriate to the change and risk.
+   - Report exactly `PASS`, `FAIL`, or `BLOCKED`; skipped, partial, unavailable, or flaky checks are never `PASS`.
+
+Manual/ad-hoc work does not bypass the final gates: after implementation, invoke `/review`, resolve confirmed findings, then invoke `/validate`.
+
+### Risk classification
+
+| Risk | Typical examples | Minimum expectation |
+|---|---|---|
+| **Low** | Copy/docs, isolated internal rename, test-only cleanup with no contract effect | Focused design reasoning, affected tests, review, validation |
+| **Medium** | Ordinary business logic, endpoint behavior, module-level job or refactor | ADR/plan, correctness review, security triage, integration coverage |
+| **High** | Authentication, authorization, tenant isolation, PII, money/pricing, uploads, webhooks, external integrations, migrations, public contracts, concurrency | Explicit threat model, negative + authorization tests, migration/rollback analysis, relevant specialist reviews |
+| **Critical** | Identity infrastructure, cryptography, broad privileged access, destructive data work, production repair, release infrastructure | All High gates plus qualified human security and operational review; never give unconditional automated approval |
+
+### Evidence language
+
+- **`PASS`** means the required command/check actually ran successfully for the stated scope.
+- **`FAIL`** means it ran and failed.
+- **`BLOCKED`** means it could not run or required evidence is unavailable.
+- **`NOT RUN`**, skipped, filtered, partial, or flaky is not `PASS`.
+- A successful build does not prove runtime behavior; passing tests do not prove their assertions are sufficient; static review does not prove the absence of vulnerabilities.
+- Never claim "secure," "battle-tested," "production-ready," "works," or "done" more broadly than the evidence supports.
+
+### Human-owned operations
+
+Unless the user explicitly requests the exact operation, Claude must not:
+
+- commit, amend, push, force-push, merge, rebase, publish, tag, or open/merge a pull request;
+- transition a ticket, change assignee/status/fields, or claim an issue is complete;
+- deploy, release, publish packages/images, alter infrastructure, rotate secrets, or modify production configuration;
+- apply migrations to local/shared/production databases, reset/drop/re-seed data, or perform production data repair;
+- accept product, security, privacy, migration, operational, or residual risk on the human's behalf.
+
+Claude may prepare the diff, ADR, tests, evidence, migration files, release checklist, and handoff. The human owns approval, Git writes, risk acceptance, migration application, deployment, and production access.
+
 ## Project
+
 
 NestJS 11 (TypeScript, Express) + Prisma 7 + PostgreSQL + Redis. JWT auth with DB-backed RBAC + CASL over two scopes (PLATFORM / BUSINESS). GitHub template: set `SERVICE_NAME` in `.env`, add feature modules. URLs unversioned (`/api/...`). Swagger at `/api/docs`.
 
@@ -94,11 +155,13 @@ prisma/seeds/          # static seed data JSON consumed by prisma/seed.ts
 - **Audit log + request envelope**: record privileged/security actions via `AuditService.record({ action, actorId, targetUserId, metadata })` — best-effort (a failed write never blocks the operation). Inside an HTTP request a server-vouched `metadata.request` envelope (requestId/ip/userAgent/method/path + parsed browser·os·device + Cloudflare country·ray) is auto-merged by the `ClsModule` middleware (`app.module.ts`); cron/script calls (no request context) skip it cleanly. Don't pass a caller `metadata.request` key — it's overwritten. The `requestId` matches the pino `X-Request-Id` for the same request.
 - **Disposable-email blocking**: `isDisposableEmail()` (`common/util/disposable-email.util.ts`, backed by `disposable-email-domains`) gates auth — register **silently drops** (byte-identical 201/body, no user row, audited), login collapses to `INVALID_CREDENTIALS` behind a timing-safe dummy bcrypt (audited). Never surface the block to the caller (no enumeration). `Errors.emailDomainDisallowed(domain)` exists for non-auth contexts where surfacing the reason is acceptable.
 - **Soft-delete + uniqueness**: a plain `@unique` lets a soft-deleted row hold its identifier hostage forever. `users.email`, `users.username`, and `businesses.slug` therefore carry **no `@unique`** in `schema.prisma`; they get partial unique indexes (`WHERE deleted_at IS NULL`) in the init migration. Prisma can't see a partial index, so those columns are **not unique selectors** — look them up with **`findFirst`, never `findUnique`**. (This is about the partial index, not soft delete: `findUnique` on a real unique column works fine, and the soft-delete filter now injects `deletedAt: null` straight into its `where` via Prisma's `extendedWhereUnique`.) **Do not "fix" this with `@@unique([email, deletedAt])`** — `NULL != NULL` in SQL, so that constraint accepts two live rows with the same email while still reporting itself unique. `findFirst` on the partial index produces the same index scan `findUnique` would.
-- **Prisma access**: through `PrismaService` (`@Global()`). `prisma.scoped.*` auto-injects `deletedAt: null` for soft-delete models on **top-level reads only** — Prisma extensions cannot intercept nested reads, so an `include` of a soft-delete model returns soft-deleted rows unless you filter it explicitly (to-many: `where` inside the include; to-one: filter the parent, since Prisma has no `where` on a to-one include). Soft delete is a convenience, **never a security boundary** — authorization boundaries live in `AbilityScopedQueryService`. Raw `prisma.*` sees soft-deleted rows (admin/forensic/recovery). Adding a soft-delete model + the full mechanism: `nestjs-new-resource` skill.
-- **Five standard endpoints**: `POST /` (create), `GET /` (findPaginated), `GET /:id` (findById), `PATCH /:id`, `DELETE /:id` (204). **Read-handler names are fixed — `findPaginated` and `findById`, never `findOne`/`findAll`.** `findById` says what it looks up by, which is why a controller stays single-resource: two `findById` can't coexist in one class, so a controller that would serve two resources gets split per resource rather than disambiguated into `find<Resource>ById`. **No unpaginated `GET /all`** — full-table reads OOM/crash the system at scale; always paginate via `GET /`. Lists use `MetaQueryDto` (`perPage` max 100); `findPaginated` builds its query via a private `buildListArgs` so sort/search stay centralized. Full pattern: `nestjs-new-resource` skill.
+- **Prisma access**: through `PrismaService` (`@Global()`). `prisma.scoped.*` auto-injects `deletedAt: null` for soft-delete models on **top-level reads only** — Prisma extensions cannot intercept nested reads, so an `include` of a soft-delete model returns soft-deleted rows unless you filter it explicitly (to-many: `where` inside the include; to-one: filter the parent, since Prisma has no `where` on a to-one include). Soft delete is a convenience, **never a security boundary** — authorization boundaries live in `AbilityScopedQueryService`. Raw `prisma.*` sees soft-deleted rows (admin/forensic/recovery). Adding a soft-delete model + the full mechanism: `resource-pattern` skill.
+- **Five standard endpoints**: `POST /` (create), `GET /` (findPaginated), `GET /:id` (findById), `PATCH /:id`, `DELETE /:id` (204). **Read-handler names are fixed — `findPaginated` and `findById`, never `findOne`/`findAll`.** `findById` says what it looks up by, which is why a controller stays single-resource: two `findById` can't coexist in one class, so a controller that would serve two resources gets split per resource rather than disambiguated into `find<Resource>ById`. **No unpaginated `GET /all`** — full-table reads OOM/crash the system at scale; always paginate via `GET /`. Lists use `MetaQueryDto` (`perPage` max 100); `findPaginated` builds its query via a private `buildListArgs` so sort/search stay centralized. Full pattern: `resource-pattern` skill.
 - **Config access**: `configService.getOrThrow<T>('dot.path')` into `configuration.ts`. Never read `process.env` outside that file. `API_BASE_URL` = the API host (backend-handler links like verify-email); `WEB_BASE_URL` = the customer frontend (page links).
 - **Swagger**: the compiler plugin infers DTOs (no manual `@ApiProperty` needed). `@ApiTags` + `@ApiBearerAuth()` on JWT routes. Paginated handlers MUST be decorated `@ApiPaginatedResponse(T)` (`common/decorators/`) — the plugin can't infer `T` through `PaginatedResponseDto<T>`'s generic. **Non-paginated handlers need an explicit `@ApiOkResponse`/`@ApiCreatedResponse({ type })`** — the plugin does NOT attach a response schema from the return type alone, so the body renders untyped in `/api/docs` without it. Side-effect / acknowledgement endpoints (password reset, resend, etc.) return a **shared typed DTO** (`OperationAcknowledgementDto { ok: boolean }`), never an inline object literal or inline `schema:`; a redirect handler is documented with `@ApiResponse({ status: 302 })`, not a fake 200. Extended mapped types (`PartialType`/`PickType`/`OmitType`/`IntersectionType`) import from `@nestjs/swagger`, not `@nestjs/mapped-types`, or inherited DTOs render empty. Sidebar is sorted A→Z (`tagsSorter`/`operationsSorter: 'alpha'` in `main.ts`). Swagger is gated off in production (`main.ts`).
 - **Rate limiting**: global `ThrottlerGuard`, 100/60s/IP (Redis storage in dev/staging/prod, in-memory in test). Per-route `@Throttle({ default: { limit, ttl } })`; `@SkipThrottle()` for `/health/*`. Any `@Public()` or OTP/SMS/email-dispatching endpoint needs its own `@Throttle`.
+- **Remote calls, queues, and retries**: every remote/blocking operation has an explicit timeout. Retry only known transient failures with a bounded attempt count, backoff, and jitter; retried writes must be idempotent. Queue consumers must tolerate duplicate delivery, preserve `correlationId`, and define terminal/poison-message handling. Never claim exactly-once behavior without a concrete mechanism.
+- **Compatibility + rollout**: any request/response DTO, `errorCode`, enum, event payload, required field, database shape, or externally observable behavior change must identify its consumers, mixed-version behavior, deployment order, and rollback/roll-forward path. Type compatibility alone is not runtime compatibility; a cross-repo dependency remains a blocker until its owning change is shipped.
 - **Logging**: pino (`nestjs-pino`), JSON in prod/staging, pretty in dev. `X-Request-Id` per request (reused or fresh UUID). Redacts `authorization`, `cookie`, password/OTP body fields — extend `redact.paths` in `app.module.ts` for new sensitive bodies. A **queue worker** has no HTTP request, so `QueueProcessor` opens the CLS scope itself and seeds the request ID from the job payload's `correlationId` — a job's log lines carry the ID of the request that enqueued it.
 - **Health indicators**: `/api/health/*` is `@Public()`, so a failing check **logs the real error and returns a fixed string** — never the driver's message (Prisma `P1001`/`P1000` quote the internal host and DB user; ioredis quotes host and port). CWE-209. Every indicator follows this and carries a co-located spec asserting the public payload leaks nothing; copy `prisma.health.ts` / `queue.health.ts` when adding one. Terminus reports a failure by serializing only what the indicator returns, so the explicit `logger.error` is what keeps an outage diagnosable — it is load-bearing, not decoration.
 - **Provider abstractions** (`EmailService`, `SmsService`, `FileStorageService`, all `@Global()`): each has a `stub` default + a real adapter, selected by env (`EMAIL_PROVIDER`, `SMS_PROVIDER`, `STORAGE_PROVIDER`). Only the selected adapter is constructed at boot. Call typed helpers (`emailService.sendTemplate(...)`, `smsService.sendPhoneVerificationOtp(...)`), not raw `.send(...)`. Email templates compile at boot — `{{var}}` typos fail startup.
@@ -132,11 +195,16 @@ Load these on demand — they hold the long-form playbooks so this core stays le
 
 | Task | Where |
 |---|---|
-| Add/scaffold a CRUD resource (schema, five endpoints, list queries, response DTOs + relations, delete semantics, soft-delete filter) | `nestjs-new-resource` skill (+ code skeletons in `docs/resource-pattern.md`) |
-| Permissions, roles, business-scoped resources, `@RequirePermission`, CASL abilities, tenant isolation, escalation/rank guard, grants cache | `nestjs-authorization` skill (+ the contract in `src/common/authorization/README.md`) |
-| Auth / login / JWT / OTP / email-verify / phone-verify / lockout / timing hardening / security review | `nestjs-auth-security` skill |
-| Scheduled `@Cron` job (recurring sweep over all due rows) | `nestjs-scheduled-job` skill |
+| Design a material change, reconcile ticket vs code, classify risk, compare alternatives, and produce an approval-gated ADR | `design` skill + `.claude/templates/adr.md` |
+| Implement an explicitly accepted ADR without unrelated scope or Git/deployment writes | `implement` skill |
+| Independently review the current diff across architecture, correctness, AppSec, tests, API, DB, and performance | `review` skill + `.claude/agents/` |
+| Run read-only evidence gates and return `PASS` / `FAIL` / `BLOCKED` | `validate` skill + `.claude/templates/release-checklist.md` |
+| General architecture, coding, security, and testing rules | `.claude/standards/architecture.md`, `coding.md`, `security.md`, `testing.md` |
+| Add/scaffold a CRUD resource (schema, five endpoints, list queries, response DTOs + relations, delete semantics, soft-delete filter) | `resource-pattern` skill (+ code skeletons in `docs/resource-pattern.md`) |
+| Permissions, roles, business-scoped resources, `@RequirePermission`, CASL abilities, tenant isolation, escalation/rank guard, grants cache | `authorization` skill (+ the contract in `src/common/authorization/README.md`) |
+| Auth / login / JWT / OTP / email-verify / phone-verify / lockout / timing hardening / security review | `auth-security` skill |
+| Scheduled `@Cron` job (recurring sweep over all due rows) | `scheduled-sweep` skill |
 | Background job on the BullMQ queue — immediate / delayed / recurring, with retries, cancellation, rescheduling. **The default for NEW background work**; the decision table at the top of the README says which of the two a job belongs on | `src/common/queue/README.md` |
-| Write e2e specs (harness, coverage, cadence, error-envelope assertions) | `nestjs-e2e-test` skill |
+| Write e2e specs (harness, coverage, cadence, error-envelope assertions) | `e2e-testing` skill |
 | Error envelope contract + ErrorCode catalog + client logout rule | `src/common/errors/README.md` |
 | Deployment / infra (Caddy + per-env compose + GitHub Actions) | `docs/README.md` → `docs/prod/` + `docs/staging/` |
