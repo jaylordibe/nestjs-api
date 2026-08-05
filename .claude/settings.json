@@ -1,43 +1,128 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(git merge *)",
+      "Bash(git rebase *)",
+      "Bash(git tag *)",
+      "Bash(git reset *)",
+      "Bash(git clean *)",
+      "Bash(git stash *)",
+      "Bash(git checkout *)",
+      "Bash(git switch *)",
+      "Bash(git restore *)",
+      "Bash(git cherry-pick *)",
+      "Bash(git revert *)",
+      "Bash(git am *)",
+      "Bash(git apply *)",
+      "Bash(git remote *)",
+      "Bash(git filter-branch *)",
+      "Bash(gh pr create *)",
+      "Bash(gh pr merge *)",
+      "Bash(gh pr close *)",
+      "Bash(gh pr edit *)",
+      "Bash(gh release *)",
+      "Bash(gh workflow run *)",
+      "Bash(gh api *)",
+      "Bash(yarn prisma:migrate *)",
+      "Bash(yarn prisma:deploy *)",
+      "Bash(yarn prisma:reset *)",
+      "Bash(yarn prisma:seed *)",
+      "Bash(yarn prisma migrate *)",
+      "Bash(yarn prisma db *)",
+      "Bash(npx prisma migrate *)",
+      "Bash(npx prisma db *)",
+      "Bash(prisma migrate *)",
+      "Bash(prisma db *)",
+      "Bash(docker compose down *)",
+      "Bash(docker volume rm *)",
+      "Bash(docker volume prune *)",
+      "Bash(docker system prune *)",
+      "Bash(dropdb *)",
+      "Bash(npm publish *)",
+      "Bash(yarn publish *)",
+      "Bash(yarn npm publish *)",
+      "Bash(docker push *)",
+      "Read(.env)",
+      "Read(.env.local)",
+      "Read(.env.development)",
+      "Read(.env.staging)",
+      "Read(.env.production)",
+      "Read(.env.*.local)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Read(**/id_rsa*)",
+      "Edit(.env)",
+      "Edit(.env.local)",
+      "Edit(.env.development)",
+      "Edit(.env.staging)",
+      "Edit(.env.production)",
+      "Edit(.env.*.local)",
+      "mcp__atlassian__*transition*",
+      "mcp__atlassian__*Transition*",
+      "mcp__atlassian__*edit*",
+      "mcp__atlassian__*Edit*",
+      "mcp__atlassian__*update*",
+      "mcp__atlassian__*Update*",
+      "mcp__atlassian__*delete*",
+      "mcp__atlassian__*Delete*",
+      "mcp__atlassian__*assign*",
+      "mcp__atlassian__*Assign*"
+    ],
+    "ask": [
+      "Bash(psql *)",
+      "Bash(docker exec *)",
+      "Bash(pg_dump *)",
+      "Bash(redis-cli *)",
+      "mcp__atlassian__*create*",
+      "mcp__atlassian__*Create*"
+    ],
+    "allow": [
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git blame *)",
+      "Bash(git ls-files *)",
+      "Bash(git check-ignore *)",
+      "Bash(yarn install *)",
+      "Bash(yarn build *)",
+      "Bash(yarn lint *)",
+      "Bash(yarn format *)",
+      "Bash(yarn test *)",
+      "Bash(yarn test:e2e *)",
+      "Bash(yarn prisma:generate *)",
+      "Bash(yarn claude:validate *)",
+      "Bash(yarn stack:up *)",
+      "Bash(yarn stack:down *)",
+      "Bash(docker compose ps *)",
+      "Bash(docker compose logs *)",
+      "Bash(docker compose up *)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cmd=$(jq -r '.tool_input.command // \"\"'); if printf '%s' \"$cmd\" | grep -Eq 'git[[:space:]]+([^&|;]*[[:space:]])?(commit|push)([[:space:]]|$)'; then printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Project hook: Claude must never run git commit or git push. The user handles all git writes; make file changes only.\"}}'; fi",
-            "statusMessage": "Guard: git commit/push"
-          }
-        ]
-      },
       {
         "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "f=$(jq -r '.tool_input.file_path // \"\"'); case \"$f\" in */prisma/migrations/*) printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"Project hook: this edits a file under prisma/migrations/. Never edit an already-applied migration (causes prod drift). Approve only for a fresh --create-only migration; otherwise add a NEW migration via yarn prisma:migrate dev.\"}}';; esac",
-            "statusMessage": "Guard: migration edit"
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-protected-paths.sh",
+            "statusMessage": "Guard: protected path"
           }
         ]
-      },
+      }
+    ],
+    "PostToolUse": [
       {
-        "matcher": "mcp__.*__transitionJiraIssue",
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Project hook: Claude must never transition a Jira issue. The user moves the board columns themselves after they push.\"}}'",
-            "statusMessage": "Guard: Jira transition"
-          }
-        ]
-      },
-      {
-        "matcher": "mcp__.*__editJiraIssue",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"Project hook: this edits Jira issue fields. Approve for description/summary content; status changes stay with the user.\"}}'",
-            "statusMessage": "Guard: Jira field edit"
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/format-changed-file.sh",
+            "statusMessage": "Formatting changed file"
           }
         ]
       }

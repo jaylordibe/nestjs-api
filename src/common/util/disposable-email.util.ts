@@ -76,8 +76,8 @@ export function isDisposableEmail(email: string): boolean {
   if (OPERATOR_DENYLIST.has(domain)) return true;
   if (DISPOSABLE_DOMAINS.has(domain)) return true;
   const parts = domain.split('.');
-  for (let i = 0; i < parts.length; i++) {
-    const suffix = parts.slice(i).join('.');
+  for (let labelIndex = 0; labelIndex < parts.length; labelIndex++) {
+    const suffix = parts.slice(labelIndex).join('.');
     if (DISPOSABLE_WILDCARD_DOMAINS.has(suffix)) return true;
   }
   return false;

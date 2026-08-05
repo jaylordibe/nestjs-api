@@ -46,7 +46,7 @@ when you deliberately want to control each stage yourself:
 ```text
 /design <requirement>
 /implement <accepted ADR path>
-/review [ADR path or base ref]
+/diff-review [ADR path or base ref]
 /validate [ADR path or scope]
 ```
 
@@ -64,7 +64,7 @@ orchestrator and the standalone gates from drifting apart.
 | 2. Design | The `design` skill contract, ticket-vs-code reconciliation, alternatives, threat model, and `PROPOSED` ADR | **GATE 1:** no source edit until explicit approval |
 | 3. Implement | The `implement` skill contract and the accepted ADR | |
 | 4. Review | Project-aware architecture, correctness, security, test, API, database, and performance agents; bundled `/security-review` or `/simplify` when useful and available | No unresolved Critical/High finding |
-| 5. Validate | The `validate` skill contract, `yarn build`, `yarn lint`, affected tests, database/security evidence, and `/verify` for a runnable surface | `PASS`, `FAIL`, or `BLOCKED` only |
+| 5. Validate | The `validate` skill contract, `yarn build`, `yarn lint`, affected tests, database/security evidence, and `/run` for a runnable surface | `PASS`, `FAIL`, or `BLOCKED` only |
 | 6. Present | Diff summary, review findings, evidence, risks, and consumer handoff | **GATE 2:** human owns commit, push, PR, migration application, and deployment |
 | 7. Report | One short issue comment when a real issue and tracker connection exist | Issue status and fields remain untouched |
 
@@ -78,7 +78,7 @@ resume with the individual skills according to ADR state:
 ```text
 PROPOSED  → /design or continue the approval discussion
 ACCEPTED  → /implement <ADR>
-implemented diff → /review <ADR>
+implemented diff → /diff-review <ADR>
 reviewed diff    → /validate <ADR>
 ```
 
@@ -106,12 +106,19 @@ Genuine product choices go back to the human.
 - `skills/design/SKILL.md` — repository mapping, risk, alternatives, threat
   model, ADR, and approval.
 - `skills/implement/SKILL.md` — accepted-ADR implementation.
-- `skills/review/SKILL.md` — independent project-specific review and
+- `skills/diff-review/SKILL.md` — independent project-specific review and
   remediation.
 - `skills/validate/SKILL.md` — read-only evidence gate.
 
 All five workflow skills use `disable-model-invocation: true`; only the human
-starts them.
+starts them. That flag removes the skill from Claude's context entirely, so
+Claude cannot invoke a gate even when instructed to — it must **stop and ask the
+user** to run the next one. `CLAUDE.md` states this obligation explicitly so the
+gate is never simulated from memory.
+
+`diff-review` is deliberately not named `review`: Claude Code ships a bundled
+`review` skill, and the resolution order between a project skill and a built-in
+of the same name is undocumented. A mandatory gate must not depend on it.
 
 ### Agents
 
@@ -160,6 +167,21 @@ slash-command menu:
 - `standards/security.md`
 - `standards/testing.md`
 
+### Hooks and validation
+
+- `hooks/guard-protected-paths.sh` — path-specific `ask` with the precondition
+  that path requires.
+- `hooks/format-changed-file.sh` — formats the single file just edited.
+- `../scripts/validate-claude-config.ts` — the guardrail for this directory,
+  run by `yarn claude:validate` and in CI.
+
+### Where ADRs live
+
+`docs/adr/NNNN-kebab-slug.md`, committed, from `templates/adr.md`. See
+`docs/adr/README.md` for the lifecycle. The four gates each take an ADR path,
+and a resumed session finds its place by reading the `Status:` line — which only
+works because the location is fixed rather than chosen per session.
+
 `CLAUDE.md` is the always-on project constitution. Repository-specific rules in
 `CLAUDE.md`, source-owned contract READMEs, and accepted ADRs take precedence
 over generic guidance.
@@ -174,7 +196,8 @@ Bundled Claude Code skills may supplement them:
 - `/security-review` for an additional read-only security pass;
 - `/simplify` after correctness/security findings are resolved, with every
   proposed change verified against the ADR and project standards;
-- `/verify` or `/run` for actual runtime exercise.
+- `/run` for actual runtime exercise (`/verify` is a bundled skill on some
+  installations only — check `/skills` before relying on it).
 
 Do not depend on a bundled command that is unavailable on a developer's Claude
 Code version or plan. The project review and validation skills remain complete
@@ -190,7 +213,7 @@ connected, it may:
 
 Invoking `/ticket <ISSUE-KEY>` is standing authorization for that one comment.
 
-It must never:
+It must never (each is enforced by a `permissions.deny` rule, not just prose):
 
 - transition the issue;
 - edit fields, status, assignee, priority, or sprint;
@@ -208,18 +231,53 @@ No file paths, function names, or internal error codes belong in the comment.
 
 ## Guardrails
 
-Project hooks in `.claude/settings.json` are enforcement, not reminders.
+`.claude/settings.json` is enforcement, not reminders — and it is committed, so
+every developer inherits the same floor. Three mechanisms, each with a distinct
+job:
 
-Recommended enforced boundaries:
+**1. `permissions.deny` — the hard floor.** Declarative, evaluated before every
+hook, and impossible to fail open. This is where `CLAUDE.md`'s *Human-owned
+operations* list is made real:
 
-- deny `git commit`, `git push`, force-push, and other publication writes;
-- deny issue transition and field-edit MCP operations;
-- ask before editing `prisma/migrations/**`;
-- deny destructive database/reset commands;
-- protect secrets and environment files;
-- optionally block deployment and package publication commands.
+- git history and publication writes (`commit`, `push`, `merge`, `rebase`,
+  `tag`, `reset`, `clean`, `stash`, `checkout`, `cherry-pick`, `revert`);
+- `gh pr create|merge|close|edit`, `gh release`, `gh workflow run`, `gh api`;
+- every migration application and database reset (`prisma migrate`, `prisma db
+  push`, `yarn prisma:migrate|deploy|reset|seed`);
+- volume destruction (`docker compose down`, `docker volume rm|prune`) — use
+  `yarn stack:down`, which is allowed and never passes `-v`;
+- package publication and image push;
+- reading or editing real environment files and private keys. `.env.test` and
+  `.env.example` stay readable — `/validate` legitimately needs them;
+- Jira transition, field edit, update, delete, and assignment tools.
 
-Review hook implementations when Claude Code or MCP tool names change.
+**2. `permissions.ask` — dual-use commands needing human judgment.** `psql`,
+`pg_dump`, `redis-cli`, `docker exec`, and Jira issue creation.
+
+**3. Hooks — only where a *custom explanation* changes behavior.** A deny rule
+gives an anonymous refusal; a hook can teach the rule. Both live in
+`.claude/hooks/` as real scripts (syntax-checked in CI, `set -euo pipefail`,
+**fail closed** — an unavailable `jq` degrades to a prompt, never to silent
+approval):
+
+- `guard-protected-paths.sh` — `ask` before editing `prisma/migrations/**`,
+  `prisma/schema.prisma`, auth/authorization surfaces, or the error contract,
+  each with the specific precondition that path requires;
+- `format-changed-file.sh` — formats and auto-fixes the single `.ts` file just
+  edited, so lint stays green continuously.
+
+Precedence is `deny` → `ask` → `allow`, first match wins, and a deny rule cannot
+carry an exception. Deny rules in this file override any allow rule a developer
+adds in their own `settings.local.json`.
+
+> **Note on file rules:** Claude Code checks file permissions against `Edit()`
+> and `Read()` only. A `Write(...)` rule is accepted, never consulted, and warns
+> at startup. Always write `Edit(...)`.
+
+`yarn claude:validate` checks the hook scripts exist, parse, and are executable.
+Re-verify the MCP matcher names whenever the tracker server changes: the Jira
+deny patterns are written as case-tolerant globs, but a server that renames its
+tools to a different shape would slip through.
 
 ## Issue tracker setup
 
@@ -240,22 +298,23 @@ Stage 7 is skipped.
 Use a project-specific MCP server name so OAuth state does not accidentally
 cross projects.
 
-## Migration from the legacy command
-
-The old file:
+## Validating this directory
 
 ```text
-.claude/commands/ticket.md
+yarn claude:validate
 ```
 
-still works as a legacy custom command, but it should be removed after installing:
+`.claude/` is several thousand lines of frontmatter and cross-references that
+fail *silently*: a mistyped key is ignored, a renamed symbol leaves a skill
+quoting code that no longer exists, and a skill whose name collides with a
+bundled command resolves unpredictably. `CLAUDE.md` requires every convention to
+ship with a guardrail; this is the tooling's own.
 
-```text
-.claude/skills/ticket/SKILL.md
-```
-
-Do not keep both with the same `/ticket` name. Skills are the current format and
-support invocation controls and supporting files.
+`scripts/validate-claude-config.ts` checks frontmatter against the documented
+schema, skill/agent name agreement, collisions with built-in commands, the
+1,536-character skill-listing cap, cross-reference resolution, doc-vs-code symbol
+drift, dead `Write()` permission rules, and hook scripts that are missing,
+unparseable, or not executable. It runs in CI beside `yarn lint`.
 
 Restart Claude Code after adding or replacing skills and agents.
 

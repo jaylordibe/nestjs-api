@@ -24,7 +24,9 @@ async function bootstrap(): Promise<void> {
   app.setGlobalPrefix('api');
   app.enableCors({
     origin:
-      corsOrigin === '*' ? true : corsOrigin.split(',').map((o) => o.trim()),
+      corsOrigin === '*'
+        ? true
+        : corsOrigin.split(',').map((origin) => origin.trim()),
     credentials: true,
   });
 

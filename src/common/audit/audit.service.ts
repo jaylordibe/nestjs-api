@@ -63,10 +63,10 @@ export class AuditService {
           metadata,
         },
       });
-    } catch (err) {
+    } catch (error) {
       this.logger.error(
         `Failed to write audit log for action ${entry.action}: ${
-          err instanceof Error ? err.message : String(err)
+          error instanceof Error ? error.message : String(error)
         }`,
       );
     }

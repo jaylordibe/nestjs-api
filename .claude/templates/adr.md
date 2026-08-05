@@ -185,3 +185,23 @@ No local migration application.
 - **Approved by:**
 - **Date:**
 - **Conditions/accepted risks:**
+
+## 16. Validation record
+
+Filed after `/validate`. Validation is read-only and cannot write this section
+itself; paste the block it emits. An empty section means the change was never
+validated — that is information, not an omission to tidy away.
+
+- **Verdict:** PASS | FAIL | BLOCKED
+- **Commit/worktree:**
+- **Date:**
+
+| Gate | Command/check | Exact scope | Result | Evidence/notes |
+|---|---|---|---|---|
+| | | | | |
+
+- **Coverage of acceptance criteria:**
+- **Residual risk:**
+- **Blockers and prerequisites:**
+- **Migration/rollback readiness:**
+- **Consumer handoff status:**

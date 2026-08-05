@@ -24,8 +24,8 @@ export class RedisService implements OnModuleDestroy {
       // loudly if Redis is misconfigured.
       maxRetriesPerRequest: 3,
     });
-    this.client.on('error', (err) => {
-      this.logger.warn(`Redis error: ${err.message}`);
+    this.client.on('error', (error) => {
+      this.logger.warn(`Redis error: ${error.message}`);
     });
   }
 

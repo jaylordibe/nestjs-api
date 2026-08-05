@@ -45,7 +45,7 @@ At the start, read:
 - `CLAUDE.md`
 - `.claude/skills/design/SKILL.md`
 - `.claude/skills/implement/SKILL.md`
-- `.claude/skills/review/SKILL.md`
+- `.claude/skills/diff-review/SKILL.md`
 - `.claude/skills/validate/SKILL.md`
 - relevant `.claude/standards/`
 - relevant source-owned contract READMEs
@@ -222,7 +222,7 @@ complete and Stage 4 in progress.
 
 # Stage 4 — Review
 
-Follow `.claude/skills/review/SKILL.md`.
+Follow `.claude/skills/diff-review/SKILL.md`.
 
 Launch relevant project agents independently and in parallel:
 

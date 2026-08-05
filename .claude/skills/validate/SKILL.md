@@ -187,5 +187,20 @@ State:
 - residual risk;
 - release recommendation.
 
+## 10. File the evidence into the ADR
+
+An evidence table that lives only in a chat transcript proves nothing a week
+later. Close the loop: emit a **paste-ready block** for the accepted ADR's
+**§16 Validation record** (`.claude/templates/adr.md`), filled in with the
+verdict, the exact worktree or commit, today's date, and the gate table exactly
+as run.
+
+Emit it fenced, then tell the user to paste it into `docs/adr/NNNN-*.md`.
+
+You are read-only and `disallowed-tools` removes Edit and Write — do **not**
+attempt to write the ADR yourself, and do not treat the inability to write as a
+reason to skip this step. The human filing it is what makes the record trustworthy:
+a gate that could write its own passing grade is not a gate.
+
 Human approval, Git writes, migration application, deployment, and final risk
 acceptance remain outside validation.

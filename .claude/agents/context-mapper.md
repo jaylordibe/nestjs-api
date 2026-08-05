@@ -2,6 +2,7 @@
 name: context-mapper
 description: Maps the complete repository reality and blast radius of a proposed change across this NestJS, Prisma, PostgreSQL, Redis, and BullMQ API, including execution paths, modules, DTOs, enums, stable error codes, soft-delete behavior, trust boundaries, consumers, tests, operations, and ticket-vs-code discrepancies. Use before design or whenever impact is unclear. Read-only and never chooses or implements the solution.
 tools: Read, Glob, Grep, Bash
+disallowedTools: Edit, Write, NotebookEdit
 model: inherit
 permissionMode: plan
 effort: high

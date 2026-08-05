@@ -203,5 +203,5 @@ Report:
 Next:
 
 ```text
-/review <ADR path>
+/diff-review <ADR path>
 ```

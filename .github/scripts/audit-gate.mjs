@@ -51,23 +51,17 @@ const BLOCKING_SEVERITIES = new Set(['high', 'critical']);
 //       'rationale.',
 //     reviewBy: '2026-12-31',
 //   }
-const ALLOWLISTED_ADVISORIES = [
-  {
-    ids: ['GHSA-mh99-v99m-4gvg', 'CVE-2026-14257', '1124334'],
-    package: 'brace-expansion',
-    reason:
-      'DoS via unbounded brace expansion. The only patched line is 5.0.8+, and the ' +
-      'transitive CJS minimatch versions that pull this in declare incompatible ' +
-      'ranges — minimatch@3 wants ^1.1.7, minimatch@5 wants ^2.0.1 — so no in-range ' +
-      'bump reaches the fix. Forcing it via resolutions was TRIED and breaks eslint ' +
-      "outright (crash in eslint-helpers' globMultiSearch), because 5.x changed to " +
-      'named exports. No 1.x/2.x backport exists. Not exploitable here: every path ' +
-      'to it is dev tooling — eslint, typescript-eslint, jest, @nestjs/cli — none of ' +
-      'which ships in the pruned runtime image, and the brace patterns reached are ' +
-      'internal lint/test globs, never attacker input.',
-    reviewBy: '2026-12-31',
-  },
-];
+// Currently empty — as intended. The previous brace-expansion entry
+// (GHSA-mh99-v99m-4gvg) was removed on 2026-08-06: upstream published
+// backports to BOTH maintenance lines (1.1.17/1.1.18 and 2.1.3/2.1.4) plus
+// 5.0.8/5.0.9, and every consumer's declared range already permitted them
+// (`^1.1.7`, `^2.0.2`, `^5.0.5`). The entry's premise — "no 1.x/2.x backport
+// exists, so no in-range bump reaches the fix" — had simply expired. The
+// lockfile was stale, not the constraint. Refreshing those four resolutions
+// cleared the advisory outright, which is exactly the outcome rung 1 of the
+// ladder below is meant to produce, and why an allowlist entry must always
+// carry a review date.
+const ALLOWLISTED_ADVISORIES = [];
 
 const auditJsonPath = process.argv[2];
 if (!auditJsonPath) {

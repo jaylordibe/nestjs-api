@@ -1,5 +1,5 @@
 ---
-name: review
+name: diff-review
 description: Independently reviews the current NestJS and Prisma change for accepted-design conformance, correctness, application security, RBAC/CASL tenant isolation, API/error contracts, database and migration safety, BullMQ reliability, tests, and performance; fixes verified findings and re-reviews.
 argument-hint: "[ADR path | base ref | review focus]"
 disable-model-invocation: true
@@ -144,6 +144,27 @@ For each candidate:
 8. state confidence.
 
 Reject speculative, duplicate, irrelevant, or style-only findings.
+
+### Adversarial verification — Critical and High only
+
+You commissioned the review, so you are the worst available judge of whether its
+findings are real: the same context that produced a finding will tend to confirm
+it. For each **Critical or High** finding on a **High or Critical risk** change,
+launch one independent agent — the specialist whose lens owns the finding — with
+the single instruction to **refute** it:
+
+> Here is a claimed defect at `path:line`: <claim>. Read the surrounding source
+> and try to prove it is NOT a defect: that the trigger is unreachable, the
+> invariant is enforced elsewhere, the behavior is intended, or the cited line
+> does not say what the claim says. Default to `refuted: true` when the evidence
+> is ambiguous. Return `refuted` plus the evidence that settles it.
+
+A refuted finding is dropped and recorded in the rejected-findings summary with
+the refutation. A surviving finding proceeds to remediation with its refutation
+attempt on record — that record is what makes the severity credible later.
+
+Do not run this for Medium and below, and do not run it on Low-risk changes; the
+cycle costs more than the precision it buys there.
 
 ## 5. Remediate
 

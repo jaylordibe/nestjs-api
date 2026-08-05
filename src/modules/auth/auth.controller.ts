@@ -92,21 +92,21 @@ export class AuthController {
   })
   async verifyEmailGet(
     @Query() dto: VerifyEmailDto,
-    @Res() res: Response,
+    @Res() response: Response,
   ): Promise<void> {
     const baseUrl = this.configService.getOrThrow<string>(
       'emailVerifiedRedirectUrl',
     );
     try {
       await this.usersService.verifyEmailByToken(dto.token);
-      res.redirect(302, `${baseUrl}?status=success`);
-    } catch (err) {
+      response.redirect(302, `${baseUrl}?status=success`);
+    } catch (error) {
       // Map known auth failures to a stable `reason` slug the frontend
       // can branch on (e.g. show "link expired" vs a generic error).
       // Any other exception falls through to a generic error so we
       // don't leak internals into the URL.
-      const reason = mapVerifyEmailError(err);
-      res.redirect(
+      const reason = mapVerifyEmailError(error);
+      response.redirect(
         302,
         `${baseUrl}?status=error&reason=${encodeURIComponent(reason)}`,
       );
@@ -153,10 +153,10 @@ export class AuthController {
 
 // Frontend-stable slugs for verification failures. Keep this list in sync
 // with the web app's verify-email view's switch on `?reason=`.
-function mapVerifyEmailError(err: unknown): string {
-  if (err instanceof HttpException) {
-    const status = err.getStatus();
-    const message = err.message.toLowerCase();
+function mapVerifyEmailError(error: unknown): string {
+  if (error instanceof HttpException) {
+    const status = error.getStatus();
+    const message = error.message.toLowerCase();
     if (status === 410 || message.includes('expired')) return 'expired';
     if (status === 400 && message.includes('already'))
       return 'already-verified';

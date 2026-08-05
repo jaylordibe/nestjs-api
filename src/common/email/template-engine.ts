@@ -108,8 +108,8 @@ export class EmailTemplateEngine implements OnModuleInit {
     key: K,
     vars: EmailTemplates[K],
   ): { subject: string; html: string; text: string } {
-    const t = this.compiled.get(key);
-    if (!t) {
+    const compiledTemplate = this.compiled.get(key);
+    if (!compiledTemplate) {
       throw new Error(
         `Unknown email template: "${key}" — did you add ${key}.html.hbs to the templates directory?`,
       );
@@ -119,8 +119,10 @@ export class EmailTemplateEngine implements OnModuleInit {
     // type (`SubjectDefinition<K>`) through a typeof guard.
     const subject: string =
       typeof subjectDef === 'function' ? subjectDef(vars) : subjectDef;
-    const html = t.html(vars).trim();
-    const text = t.text ? t.text(vars).trim() : this.htmlToText(html);
+    const html = compiledTemplate.html(vars).trim();
+    const text = compiledTemplate.text
+      ? compiledTemplate.text(vars).trim()
+      : this.htmlToText(html);
     return { subject: subject.trim(), html, text };
   }
 

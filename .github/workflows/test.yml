@@ -84,6 +84,12 @@ jobs:
       - name: Generate Prisma client
         run: yarn prisma:generate
 
+      # Guards the Claude Code configuration the same way lint guards source:
+      # frontmatter schema, skill/command name collisions, cross-reference rot,
+      # doc-vs-code symbol drift, and hooks that would fail open.
+      - name: Validate Claude Code config
+        run: yarn claude:validate
+
       - name: Lint
         run: yarn lint
 
@@ -94,9 +100,24 @@ jobs:
         run: yarn test --passWithNoTests
 
       # Informational: lists everything moderate and above. Never fails.
-      # Known moderate: `uuid` via `resend > svix > uuid` (CVE fixed in
-      # uuid >= 14.0.0, but uuid 11+ is ESM-only and breaks the CJS
-      # `require` path svix uses — can't bump until svix updates upstream).
+      #
+      # Known moderates, each blocked by a range its parent PINS (verified
+      # 2026-08-06 — anything whose fix is in-range gets the lockfile refresh
+      # instead of a note here):
+      #   - uuid       `resend > svix > uuid` — svix declares ^10.0.0, fix is
+      #                11.1.1+, and uuid 11+ is ESM-only so it breaks the CJS
+      #                `require` path svix uses. Blocked until svix bumps.
+      #   - valibot    `prisma > @prisma/dev > valibot` — pinned to an exact
+      #                1.2.0, fix is 1.4.2+. Blocked until Prisma bumps.
+      #   - @hono/node-server  `prisma > @prisma/dev` — our own `resolutions`
+      #                entry pins ^1.19.13; the fix is 2.0.5, a major bump of a
+      #                Prisma dev-tooling transitive. Revisit with the next
+      #                Prisma upgrade rather than forcing it here.
+      #
+      # None of the three ships in the pruned runtime image (`prisma` and
+      # `resend > svix` dev/CLI paths). Runtime-path moderates are NOT accepted
+      # this way — `qs` reached production via `platform-express > express` and
+      # was fixed by refreshing the lockfile, not documented as known.
       - name: Dependency audit (informational)
         run: yarn audit --level moderate || true
 

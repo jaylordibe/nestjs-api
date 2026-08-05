@@ -32,6 +32,65 @@ export default tseslint.config(
       'prettier/prettier': ['error', { endOfLine: 'auto' }],
     },
   },
+  // Make CLAUDE.md's naming bar self-enforcing rather than advisory. Names are
+  // read far more often than they are written, and a review comment does not
+  // survive the next contributor. `id-length` kills throwaway locals and `i`/`j`
+  // loop counters; `id-denylist` kills the truncated morphemes and vague
+  // placeholders CLAUDE.md enumerates. Established domain idioms (id, db, ttl,
+  // jwt, otp, ip, dto, url) and single-letter generic type parameters stay legal.
+  {
+    files: ['src/**/*.ts'],
+    rules: {
+      'id-length': [
+        'error',
+        {
+          min: 2,
+          properties: 'never',
+          exceptions: ['id', 'db', 'ip', 'to', 'T', 'K', 'V', '_'],
+        },
+      ],
+      'id-denylist': [
+        'error',
+        'e',
+        'err',
+        'errMsg',
+        'msg',
+        'cfg',
+        'tmp',
+        'temp',
+        'usr',
+        'req',
+        'res',
+        'ctx',
+        'item',
+        'obj',
+        'val',
+        'thing',
+        'arr',
+        'num',
+        'str',
+        'cb',
+        'fn',
+        'svc',
+        'repo',
+        'mgr',
+        'ack',
+        'addr',
+        'gen',
+        'calc',
+        'ctrl',
+      ],
+    },
+  },
+  // Specs narrow supertest responses and build throwaway fixtures; the naming
+  // bar above is a production-code rule, not a reason to make tests unreadable.
+  {
+    files: ['test/**/*.ts', 'src/**/*.spec.ts'],
+    rules: {
+      'id-length': 'off',
+      'id-denylist': 'off',
+    },
+  },
   // Channel every domain exception through the Errors factory. Direct
   // construction of Nest's built-in HttpException subclasses bypasses
   // the standard error envelope (errorCode, details). The factory at

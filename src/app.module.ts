@@ -63,11 +63,11 @@ import { UsersModule } from './modules/users/users.module';
     //
     // `setup` captures everything AuditService merges into `metadata.request`
     // on every `record()` call. Two tiers of forensic value:
-    //   - Tier 1 (zero-ops): `req.ip`, `User-Agent` (+ parsed
+    //   - Tier 1 (zero-ops): `request.ip`, `User-Agent` (+ parsed
     //     browser/os/device via `ua-parser-js`), `Accept-Language`, `method`,
     //     `path`. Pure local parsing; works in dev and behind any proxy.
     //   - Tier 2 (free behind Cloudflare): `CF-Connecting-IP` overrides
-    //     `req.ip`; `CF-IPCountry` gives a 2-letter ISO country; `CF-Ray` is
+    //     `request.ip`; `CF-IPCountry` gives a 2-letter ISO country; `CF-Ray` is
     //     the cross-system trace id. Trusted blindly because the origin is
     //     allowlisted to CF IPs at the infra layer — don't expose the origin
     //     directly or an attacker can spoof these.
@@ -78,15 +78,15 @@ import { UsersModule } from './modules/users/users.module';
       middleware: {
         mount: true,
         generateId: true,
-        idGenerator: (req: Request) => {
-          const headerId = req.headers['x-request-id'];
+        idGenerator: (request: Request) => {
+          const headerId = request.headers['x-request-id'];
           return typeof headerId === 'string' && headerId.length > 0
             ? headerId
             : randomUUID();
         },
-        setup: (cls, req: Request) => {
+        setup: (cls, request: Request) => {
           // Tier 1: User-Agent + parsed browser/OS/device.
-          const uaHeader = req.headers['user-agent'];
+          const uaHeader = request.headers['user-agent'];
           const userAgent =
             typeof uaHeader === 'string' && uaHeader.length > 0
               ? uaHeader
@@ -121,34 +121,34 @@ import { UsersModule } from './modules/users/users.module';
             }
           }
 
-          const acceptLanguage = req.headers['accept-language'];
+          const acceptLanguage = request.headers['accept-language'];
           if (typeof acceptLanguage === 'string' && acceptLanguage.length > 0) {
             cls.set('acceptLanguage', acceptLanguage);
           }
 
           // Tier 2: Cloudflare-injected headers. `CF-Connecting-IP` is the
-          // canonical client IP; falls back to `req.ip` (Express-resolved via
+          // canonical client IP; falls back to `request.ip` (Express-resolved via
           // `trust proxy`) for non-CF traffic / local dev.
-          const cfConnectingIp = req.headers['cf-connecting-ip'];
+          const cfConnectingIp = request.headers['cf-connecting-ip'];
           cls.set(
             'ip',
             typeof cfConnectingIp === 'string' && cfConnectingIp.length > 0
               ? cfConnectingIp
-              : req.ip,
+              : request.ip,
           );
 
-          const cfCountry = req.headers['cf-ipcountry'];
+          const cfCountry = request.headers['cf-ipcountry'];
           if (typeof cfCountry === 'string' && cfCountry.length > 0) {
             cls.set('country', cfCountry);
           }
 
-          const cfRay = req.headers['cf-ray'];
+          const cfRay = request.headers['cf-ray'];
           if (typeof cfRay === 'string' && cfRay.length > 0) {
             cls.set('cfRay', cfRay);
           }
 
-          cls.set('method', req.method);
-          cls.set('path', req.originalUrl || req.url);
+          cls.set('method', request.method);
+          cls.set('path', request.originalUrl || request.url);
         },
       },
     }),
@@ -170,23 +170,23 @@ import { UsersModule } from './modules/users/users.module';
               !isProd && !isTest
                 ? { target: 'pino-pretty', options: { singleLine: true } }
                 : undefined,
-            genReqId: (req: IncomingMessage, res: ServerResponse) => {
-              const headerId = req.headers['x-request-id'];
+            genReqId: (request: IncomingMessage, response: ServerResponse) => {
+              const headerId = request.headers['x-request-id'];
               const id =
                 typeof headerId === 'string' && headerId.length > 0
                   ? headerId
                   : randomUUID();
-              res.setHeader('X-Request-Id', id);
+              response.setHeader('X-Request-Id', id);
               return id;
             },
             redact: {
               paths: [
-                'req.headers.authorization',
-                'req.headers.cookie',
-                'req.body.password',
-                'req.body.newPassword',
-                'req.body.currentPassword',
-                'req.body.otp',
+                'request.headers.authorization',
+                'request.headers.cookie',
+                'request.body.password',
+                'request.body.newPassword',
+                'request.body.currentPassword',
+                'request.body.otp',
               ],
               censor: '[redacted]',
             },
