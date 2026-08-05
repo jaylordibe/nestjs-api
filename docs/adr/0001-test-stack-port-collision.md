@@ -1,6 +1,6 @@
 # ADR-0001: Make a second clone of this template able to run its Docker stacks
 
-- **Status:** PROPOSED
+- **Status:** ACCEPTED
 - **Date:** 2026-08-06
 - **Risk:** Low (developer environment and CI ergonomics; no runtime, contract, schema, or authorization surface)
 - **Supersedes:** —
@@ -37,6 +37,8 @@ work on 2026-08-06.
 | Host ports are fixed literals | Confirmed | `docker-compose.yml:13,30` publish `${DB_PORT}:5432` / `${REDIS_PORT}:6379`; `.env.test:28,34` set `5434`/`6380`; `.env` sets `5433`/`6378`. |
 | A sibling clone collides | Confirmed | InfoAlanya (a fork of this template) held `5434`/`6380` for two days; `docker compose --env-file .env.test up -d --wait` failed with `Bind for 0.0.0.0:5434 failed: port is already allocated`. |
 | The failure is legible | **False** | See below. |
+| Port clashes are undocumented | **Incorrect** *(added on resume, 2026-08-06)* | `README.md:56` already warns about "host ports 5433 / 6378 to avoid clashing with **local installs**", and `README.md:104` already troubleshoots "Port already in use (5433 / 6378)". The guidance exists — it is scoped to a locally-installed Postgres and to the **dev** ports only. |
+| The test stack is covered by that guidance | **False** *(added on resume)* | Neither README location mentions `5434`/`6380`, another clone of this template, or the created-without-published-ports state. The e2e path — the only one that actually broke — is the uncovered one. |
 
 ### Current authoritative flow
 
@@ -79,6 +81,12 @@ Add the reassignment step to the fork checklist; change no code.
 - **For:** zero risk, zero maintenance.
 - **Against:** leaves the opaque `AggregateError` in place, which is the part
   that actually costs time. Rejected on that basis alone.
+- **Strengthened on resume:** documentation alone has effectively already been
+  tried. `README.md` warns about port clashes in *two* places and still did not
+  prevent this, because a reader only meets that text at clone time and the
+  failure arrives weeks later wearing an unrelated face — a Jest `globalSetup`
+  stack trace. Extending those sections is necessary and is folded into Option C;
+  it is not sufficient on its own.
 
 ### Option B — Derive ports from a `PORT_OFFSET`
 
@@ -131,8 +139,8 @@ test-only constants by design.
 |---|---|
 | `scripts/preflight-test-stack.ts` | **New.** Resolve `DB_PORT`/`REDIS_PORT` from `.env.test`; if a port is held by a container whose name does not start with this project's `SERVICE_NAME`, fail naming the holder and the fix. If this project's containers exist but publish no host port, fail naming `--force-recreate`. Exit 0 when the ports are free or already correctly ours. |
 | `package.json` | `pretest:e2e` becomes `ts-node --transpile-only scripts/preflight-test-stack.ts && docker compose --env-file .env.test up -d --wait`. |
-| `README.md` | Add to the fork/scaffold checklist: change `DB_PORT`/`REDIS_PORT` in **both** `.env` and `.env.test` (and the ports inside `DATABASE_URL`/`REDIS_URL`) when another clone of this template will run on the same machine. |
-| `docs/README.md` | Cross-reference the same note where the two-stack table is explained. |
+| `README.md` §First-time setup (~line 56) | **Extend, do not add.** The step already reads "host ports 5433 / 6378 to avoid clashing with local installs"; widen it to *"…with local installs **and with other clones of this template**"*, and state that a fork must reassign `DB_PORT`/`REDIS_PORT` in **both** `.env` and `.env.test`, including the ports embedded in `DATABASE_URL`/`REDIS_URL`. |
+| `README.md` §Troubleshooting (~line 104) | **Extend, do not add.** The entry covers only the dev ports; add `5434`/`6380`, name a sibling clone as the likely holder, and give `docker compose --env-file .env.test up -d --force-recreate --wait` as the fix for a stack that reports healthy but publishes no host port. |
 
 ## 10. Test plan
 
@@ -169,17 +177,19 @@ the preflight is a no-op there.
 
 ## 14. Open decisions and blockers
 
-| Type | Question/blocker | Why it matters | Owner/evidence needed |
-|---|---|---|---|
-| Product | Is per-machine multi-clone actually a supported workflow, or is one-clone-at-a-time acceptable? | If the latter, Option A is sufficient and this ADR should be rejected. | Human |
-| Scope | Should the fork checklist live in `README.md` or a dedicated `docs/scaffolding.md`? | Affects file-by-file plan only. | Human |
+**None. Both rows were resolved on resume (2026-08-06); nothing blocks a decision.**
+
+| Type | Question/blocker | Resolution |
+|---|---|---|
+| Product | Is per-machine multi-clone actually a supported workflow, or is one-clone-at-a-time acceptable? | **Resolved — supported.** Confirmed by the owner. Not hypothetical: InfoAlanya, a fork of this template, ran alongside this repository on the same machine for two days and is what produced the collision. Option C stands; the ADR is not a rejection candidate. |
+| Scope | Should the fork checklist live in `README.md` or a dedicated `docs/scaffolding.md`? | **Resolved — extend `README.md`.** Both relevant sections already exist and already discuss port clashes (`:56`, `:104`); they are incomplete, not absent. A third location for port guidance is where the single-source-of-truth rule breaks down. `docs/scaffolding.md` rejected. |
 
 ## 15. Approval
 
-- **Decision:** Pending
-- **Approved by:**
-- **Date:**
-- **Conditions/accepted risks:**
+- **Decision:** Approved
+- **Approved by:** jaylordibe
+- **Date:** 2026-08-06
+- **Conditions/accepted risks:** none
 
 ## 16. Validation record
 
