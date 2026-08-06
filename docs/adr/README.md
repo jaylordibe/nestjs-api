@@ -22,6 +22,22 @@ number is assigned when the ADR is first written, not when it is accepted.
 
 Start from `.claude/templates/adr.md`.
 
+## The worked example
+
+`0002-claude-framework-hardening.md` is kept as the reference. It is a real
+decision with real evidence, not a specimen, and it is the fastest way to
+calibrate how much an ADR is supposed to contain.
+
+Three things in it are worth copying deliberately:
+
+- **§6 and §7 say "not applicable" and why.** They are not deleted. A missing
+  section and a section that says "this change touches no database" read very
+  differently to whoever picks the work up later.
+- **§16 records `NOT RUN` with a justification.** Skipped is not PASS, and a
+  suite that would prove nothing about the diff is worth saying so about.
+- **§14 stays open after approval.** A question the approver explicitly accepted
+  is recorded as accepted, not quietly closed to make the document look finished.
+
 ## Lifecycle
 
 | Status | Meaning | Next gate |

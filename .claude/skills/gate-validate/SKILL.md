@@ -189,8 +189,13 @@ State:
 
 ## 10. File the evidence into the ADR
 
-An evidence table that lives only in a chat transcript proves nothing a week
-later. Close the loop: emit a **paste-ready block** for the accepted ADR's
+**Skip this section entirely when the change is Low risk and has no ADR** — say
+so in one line. Filing evidence into a document that does not exist is the kind
+of step people learn to ignore, and a step people ignore is worse than no step,
+because a reader cannot tell it from a completed one.
+
+Otherwise: an evidence table that lives only in a chat transcript proves nothing
+a week later. Close the loop: emit a **paste-ready block** for the accepted ADR's
 **§16 Validation record** (`.claude/templates/adr.md`), filled in with the
 verdict, the exact worktree or commit, today's date, and the gate table exactly
 as run.

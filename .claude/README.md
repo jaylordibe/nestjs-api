@@ -1,6 +1,12 @@
-# Claude Code tooling
+# Claude Engineering Framework
 
-Team-shared Claude Code assets for this NestJS + Prisma starter.
+Team-shared Claude Code assets for this NestJS + Prisma starter, versioned and
+adopted as a unit.
+
+**The framework** is `.claude/`, `CLAUDE.md`, `scripts/validate-claude-config.ts`,
+and `docs/adr/`. **The starter repository** is the whole NestJS API that ships
+it. The two move at different speeds and are upgraded differently, which is why
+they have different names — see `.claude/ADOPTING.md`.
 
 This directory contains:
 
@@ -13,6 +19,14 @@ This directory contains:
 
 This is developer tooling, not part of the API. The API builds, runs, and tests
 without it. Developers who do not use Claude Code can ignore this directory.
+
+**Framework version: `.claude/VERSION`.** What each version contains is in
+`.claude/CHANGELOG.md`; how to adopt the framework into a new project, upgrade an
+existing one, or back-port a fix found downstream is `.claude/ADOPTING.md`. It is
+copied rather than installed, so the version is the only thing that tells an
+adopted project what it has — and the adoption checks in `yarn claude:validate`
+stay quiet until `package.json` is renamed, then fail until the copy actually
+describes *your* repository.
 
 ## Recommended workflows
 

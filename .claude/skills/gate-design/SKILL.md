@@ -141,22 +141,25 @@ A faithful implementation of a wrong premise is not acceptable.
 
 ## 4. Classify risk
 
-Use `CLAUDE.md` risk levels.
+Classify the change against `CLAUDE.md` — *Risk classification*. Its High row is
+the trigger list; take the higher tier whenever the change sits on a boundary.
 
-Explicitly identify whether the change touches:
+**The tier decides how much design this change gets, and whether it gets an ADR
+at all.**
 
-- authentication or account recovery;
-- permissions, ownership, role rank, or tenant scope;
-- PII or security-sensitive logs;
-- money, pricing, totals, discounts, or entitlements;
-- public endpoints, OTP/email/SMS dispatch, or throttling;
-- uploads, URLs, webhooks, parsers, or external providers;
-- Prisma schema, existing data, indexes, uniqueness, or soft deletion;
-- transactions, counters, races, retries, or jobs;
-- stable error codes, DTOs, response shapes, or event payloads;
-- infrastructure or deployment ordering.
+| Tier | Design artifact |
+|---|---|
+| **Low** | **No ADR.** Say so, state the tier and the evidence, and hand back — the change goes straight to implementation, and `/gate-review` and `/gate-validate` still run. |
+| **Medium** | ADR with §§1–7 and §§9–14. Sections 8 (threat model) and the alternatives comparison stay brief unless the change earns them. |
+| **High** | Full ADR, explicit threat model in §8, at least two credible alternatives compared, migration/rollback analysis. |
+| **Critical** | Everything High requires, and the ADR states plainly that automated review is not sufficient and names the human review still owed. |
 
-High/Critical work requires an explicit threat model.
+This tiering exists because a ceremony applied uniformly is a ceremony that gets
+skipped, and a skipped step reads exactly like a completed one. Refusing to write
+an ADR for a copy fix is what keeps the ADR meaningful for a schema change.
+
+Do not use a Low classification to avoid an ADR the change actually needs. If you
+are choosing between two tiers, you are in the higher one.
 
 ## 5. Evaluate alternatives
 
@@ -199,43 +202,35 @@ At minimum consider:
 
 ## 7. Plan exact project changes
 
-Produce a file-by-file plan.
+Produce a file-by-file plan: for each file, what changes and which contract it
+has to satisfy.
 
-Address exact repository conventions:
+**Name the contracts; do not restate them.** The authoritative text is
+`CLAUDE.md` — *Cross-cutting conventions* — plus `.claude/standards/` and the
+source-owned READMEs, and `gate-implement` carries the lens-to-source table. An
+ADR that paraphrases a convention creates a third copy that outlives the rule it
+was copied from; an ADR that cites one stays correct for free.
 
-- route annotation: exactly one of `@Public()`, `@AuthenticatedOnly()`, or
-  `@RequirePermission(...)`;
-- query-level authorization through `AbilityScopedQueryService`;
-- `Errors.*` factory and stable `errorCode`;
-- `new <Resource>ResponseDto(row)` and sensitive-field exclusion;
-- DTO validation, UTC timestamp handling, query-boolean transforms;
-- Swagger response decorators and `@ApiPaginatedResponse`;
-- `createdBy`/`updatedBy` actor propagation;
-- `AuditService` for privileged/security actions;
-- Prisma soft-delete nested-read filtering;
-- partial unique index implications and `findFirst` selectors;
-- snake_case mappings and `is`-prefixed booleans;
-- config through `configuration.ts` and `getOrThrow`;
-- remote timeouts and bounded retries;
-- queue correlation and idempotency;
-- one consolidated migration file and no local application.
+What the plan must decide, because the sources cannot decide it for you:
+
+- which route access decorator each new or changed handler declares, and why;
+- where the tenant/ownership boundary sits for each query;
+- which `errorCode` values are new, and whether any existing one changes meaning;
+- which response fields are sensitive, and what the DTO exposes;
+- the exact Prisma shape, including soft-delete classification and any partial
+  unique index;
+- whether new background work belongs on the queue or a scheduled sweep;
+- the single consolidated migration, prepared but not applied.
 
 ## 8. Plan tests and verification
 
-Map requirements and risks to:
+Map each requirement and each identified risk to a specific test. The catalogue
+of scenarios is `.claude/standards/testing.md` — *Required scenarios*; the design
+work is deciding **which of them this change makes reachable**, and naming the
+spec file that will cover each.
 
-- unit specs for pure helpers and domain rules;
-- controller/service integration behavior;
-- affected e2e specs;
-- stable error-envelope and `errorCode` assertions;
-- response serialization and secret exclusion;
-- route authorization metadata;
-- permission/ownership/tenant isolation;
-- 404 enumeration protection and 403 action denial;
-- soft-delete visibility and partial uniqueness;
-- concurrency, duplicate, replay, retry, and failure behavior;
-- Swagger/contract compatibility;
-- queue and audit behavior.
+A risk with no test mapped to it is an accepted risk. Say so in §14 rather than
+leaving the gap implicit.
 
 Verification must include:
 

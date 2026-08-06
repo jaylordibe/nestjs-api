@@ -35,7 +35,8 @@ Use the engineering workflow for any material feature, bug, refactor, contract c
 1. **`/gate-design <requirement>` — understand and decide.**
    - Start with the `context-mapper` agent when impact is unclear or cross-cutting.
    - Reconcile the ticket's WHAT/HOW against repository reality.
-   - Classify risk, evaluate alternatives, threat-model relevant surfaces, and produce an ADR.
+   - Classify risk first — **the tier decides the artifact.** Low risk gets no ADR at all (say so and hand back; the later gates still run); Medium and above get an ADR whose depth matches the tier. The table below is the contract, and `gate-design` §4 expands it.
+   - Evaluate alternatives and threat-model relevant surfaces in proportion to that tier.
    - Stop at the approval gate. `PROPOSED` is not permission to implement.
 
 2. **`/gate-approve <ADR>` — record the human's decision.**
@@ -85,10 +86,15 @@ Lifecycle: `DRAFT` (design in progress — resume with `/gate-design <path>`, ne
 
 | Risk | Typical examples | Minimum expectation |
 |---|---|---|
-| **Low** | Copy/docs, isolated internal rename, test-only cleanup with no contract effect | Focused design reasoning, affected tests, review, validation |
-| **Medium** | Ordinary business logic, endpoint behavior, module-level job or refactor | ADR/plan, correctness review, security triage, integration coverage |
-| **High** | Authentication, authorization, tenant isolation, PII, money/pricing, uploads, webhooks, external integrations, migrations, public contracts, concurrency | Explicit threat model, negative + authorization tests, migration/rollback analysis, relevant specialist reviews |
+| **Low** | Copy/docs, isolated internal rename, test-only cleanup with no contract effect | **No ADR.** Focused design reasoning, affected tests, self-review + `/code-review`, validation |
+| **Medium** | Ordinary business logic, endpoint behavior, module-level job or refactor | ADR (brief threat model), correctness review + the one domain lens touched, integration coverage |
+| **High** | Authentication, authorization, tenant isolation, PII, money/pricing, uploads, webhooks, external integrations, migrations, public contracts, concurrency | Full ADR, explicit threat model, negative + authorization tests, migration/rollback analysis, multi-lens review with adversarial verification of Critical/High findings |
 | **Critical** | Identity infrastructure, cryptography, broad privileged access, destructive data work, production repair, release infrastructure | All High gates plus qualified human security and operational review; never give unconditional automated approval |
+
+**Take the higher tier whenever the change sits on a boundary.** The tiering is
+what keeps the process honest in both directions: a uniform ceremony gets skipped,
+and a skipped step reads exactly like a completed one — so refusing to write an
+ADR for a copy fix is what keeps the ADR meaningful for a schema change.
 
 ### Evidence language
 
@@ -132,6 +138,18 @@ Package manager: **yarn** (yarn.lock committed). Scripts: `start:dev`, `start:pr
 **`.env.test` is the single source of truth for test config** — CI defines no env vars and no service containers of its own; `.github/workflows/test.yml` loads this same file and starts these same compose services, so what passes locally is what runs in CI. Never add a value to a workflow that `.env.test` already declares: a workflow `env:` block silently shadows the file (`dotenv` never overrides an existing `process.env`), which is how CI ends up testing a different configuration than every developer.
 
 `SERVICE_NAME` is the single source of truth — drives `DB_NAME` default (`${SERVICE_NAME}_local`), container name, and JWT `iss`/`aud`.
+
+## Consumers
+
+**FILL THIS IN when you adopt this template.** Every client that programs against this API goes in the table, and it is load-bearing: `gate-design`, `gate-implement`, and `gate-review` all ask "which consumers does this change force a matching change in?", and with an empty table the honest answer is always "none". A contract change that silently skips a consumer is how a broken client reaches a real user, and it is the single most common way a multi-repo change goes wrong.
+
+| Consumer | Repo / location | Audience | Owner |
+|---|---|---|---|
+| _(none declared yet)_ | | | |
+
+A **contract change** — any request/response DTO field, `errorCode`, enum value, HTTP status, required/optional/null change, pagination or ordering change, or event payload — is not done when this API compiles. It is done when every consumer in this table has either been updated or been explicitly recorded as unaffected, with the deployment order stated. Cross-repo work is a **handoff note plus a blocker**, never a sentence buried in a summary; if the other repo is owned by someone else, say who and what must ship first.
+
+If this API genuinely has no external consumers, replace the row with `_(none — internal only)_` and say why. `yarn claude:validate` fails while the placeholder is still there, because an unfilled table and a deliberately empty one are indistinguishable to every later reader.
 
 ## Architecture
 
@@ -231,6 +249,7 @@ Load these on demand — they hold the long-form playbooks so this core stays le
 | Independently review the current diff across architecture, correctness, AppSec, tests, API, DB, and performance | `gate-review` skill + `.claude/agents/` |
 | Run read-only evidence gates and return `PASS` / `FAIL` / `BLOCKED` | `gate-validate` skill + `.claude/templates/release-checklist.md` |
 | General architecture, coding, security, and testing rules | `.claude/standards/architecture.md`, `coding.md`, `security.md`, `testing.md` |
+| Adopt the Claude Engineering Framework into a new project, upgrade a copy, or back-port a fix | `.claude/ADOPTING.md` (+ `.claude/VERSION`, `.claude/CHANGELOG.md`) |
 | Add/scaffold a CRUD resource (schema, five endpoints, list queries, response DTOs + relations, delete semantics, soft-delete filter) | `resource-pattern` skill (+ code skeletons in `docs/resource-pattern.md`) |
 | Permissions, roles, business-scoped resources, `@RequirePermission`, CASL abilities, tenant isolation, escalation/rank guard, grants cache | `authorization` skill (+ the contract in `src/common/authorization/README.md`) |
 | Auth / login / JWT / OTP / email-verify / phone-verify / lockout / timing hardening / security review | `auth-security` skill |

@@ -40,16 +40,19 @@ other issue write. A pasted-requirement invocation authorizes none.
 
 ## Normative stage playbooks
 
-At the start, read:
+Each stage below is governed by a gate skill. **Read that skill's `SKILL.md` when
+you enter its stage — not now.** The five gate skills total over a thousand
+lines; front-loading all of them spends the context this pipeline needs for the
+actual diff, and four of the five would be read long before they are relevant.
+Loading on demand is the entire reason the gates are separate files.
 
-- `CLAUDE.md`
-- `.claude/skills/gate-design/SKILL.md`
-- `.claude/skills/gate-approve/SKILL.md`
-- `.claude/skills/gate-implement/SKILL.md`
-- `.claude/skills/gate-review/SKILL.md`
-- `.claude/skills/gate-validate/SKILL.md`
-- relevant `.claude/standards/`
-- relevant source-owned contract READMEs
+Do **not** read `CLAUDE.md` as a step: it is the always-on project constitution
+and is already in context on every request. Re-reading it is a wasted call.
+
+Read alongside a stage, when that stage's work touches them:
+
+- the relevant `.claude/standards/` document;
+- the source-owned contract README for the area being changed.
 
 The five gate skills are human-only and must not be recursively invoked through
 the Skill tool. Treat their contents as the authoritative procedures for Stages
@@ -167,12 +170,18 @@ Mark Stage 1 complete and Stage 2 in progress.
 
 # Stage 2 — Design [GATE 1]
 
-Follow `.claude/skills/gate-design/SKILL.md`.
+Read `.claude/skills/gate-design/SKILL.md` now, and follow it.
 
 Enter Plan mode when available. Remain read-only even if Plan mode is
 unavailable.
 
-Create an ADR using `.claude/templates/adr.md` with:
+**Classify the risk tier first — it decides whether this stage produces an ADR
+at all.** `gate-design` §4 holds the table. A **Low** risk change gets no ADR:
+state the tier and the evidence, present the approach in the normal Plan/approval
+interface, and on approval go straight to Stage 3. Stages 4–7 still run in full.
+Everything Medium and above gets an ADR whose depth matches the tier.
+
+For an ADR, use `.claude/templates/adr.md` with:
 
 ```text
 Status: PROPOSED
@@ -223,7 +232,8 @@ for your approval".
 
 # Stage 3 — Implement
 
-Follow `.claude/skills/gate-implement/SKILL.md` and the accepted ADR.
+Read `.claude/skills/gate-implement/SKILL.md` now, and follow it together with
+the accepted ADR.
 
 Before editing:
 
@@ -233,25 +243,11 @@ Before editing:
 
 Implement coherent slices with tests.
 
-Enforce every applicable `CLAUDE.md` contract, including:
-
-- intention-revealing complete names;
-- `Errors.*`, stable error codes, and global Prisma error handling;
-- response DTO instances and sensitive-field exclusion;
-- established DTO validation and UTC/query-boolean conventions;
-- exactly one route access decorator;
-- query-level `AbilityScopedQueryService` scope;
-- 404-versus-403 behavior;
-- server-derived ownership, roles, prices, totals, discounts, and entitlements;
-- actor-scoped audit fields and `AuditService`;
-- `prisma.scoped`, nested soft-delete filtering, and partial unique indexes;
-- snake_case mappings and `is` booleans;
-- Swagger response decorators and bounded pagination;
-- typed config/provider/queue abstractions;
-- timeouts, bounded retries, idempotency, duplicate safety, correlation, and
-  terminal failure behavior;
-- one consolidated migration file and no local migration application;
-- parallel-safe tests.
+The contracts to enforce are `CLAUDE.md`'s *Cross-cutting conventions* and the
+relevant `.claude/standards/` document. `gate-implement` carries the checklist of
+lenses and names the authoritative source for each; neither it nor this file
+restates the contracts themselves, because a second copy drifts and nothing can
+detect that it has. Work from the source, never from a summary.
 
 Run focused checks after coherent slices.
 
@@ -263,9 +259,10 @@ complete and Stage 4 in progress.
 
 # Stage 4 — Review
 
-Follow `.claude/skills/gate-review/SKILL.md`.
+Read `.claude/skills/gate-review/SKILL.md` now, and follow it. It selects the
+review lenses by risk tier; do not fan out the full panel by default.
 
-Launch relevant project agents independently and in parallel:
+The lenses available to it:
 
 - `architect`
 - `reviewer`
@@ -275,18 +272,8 @@ Launch relevant project agents independently and in parallel:
 - `database`
 - `performance`
 
-Verify every candidate finding before reporting or fixing it.
-
-Supplementary bundled skills:
-
-- invoke `/security-review` for High/Critical work and changes involving auth,
-  authorization, tenancy, money, uploads, webhooks, secrets, or admin behavior,
-  when it is available through the Skill tool;
-- invoke `/simplify` only after correctness and security findings are resolved,
-  when useful and available; verify every proposed change against the ADR and
-  project rules.
-
-Do not rely on bundled skills as the only review.
+Verify every candidate finding before reporting or fixing it, and adversarially
+refute Critical/High findings on High/Critical work — the gate defines both.
 
 Remediate verified findings within accepted scope, add regression tests, run
 focused checks, and re-run affected reviewers.
@@ -304,7 +291,7 @@ Mark Stage 4 complete and Stage 5 in progress.
 
 # Stage 5 — Validate
 
-Follow `.claude/skills/gate-validate/SKILL.md`.
+Read `.claude/skills/gate-validate/SKILL.md` now, and follow it.
 
 Validation is read-only.
 

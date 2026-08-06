@@ -35,7 +35,7 @@ The sequence:
 
 | Just finished | Next | Skip only when |
 |---|---|---|
-| `/gate-design` | `/gate-approve <adr>` | the design is still `DRAFT` — say so and stop |
+| `/gate-design` | `/gate-approve <adr>` | the design is still `DRAFT` — say so and stop; or the change is **Low risk and has no ADR**, in which case the next step is implementation and there is nothing to approve |
 | `/gate-approve` | `/gate-implement <adr>` | decision was Rejected |
 | `/gate-implement` | `/gate-review <adr>` | never |
 | `/gate-review` | `/gate-validate <adr>` | a Critical/High finding is unresolved |

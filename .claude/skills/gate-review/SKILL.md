@@ -18,7 +18,7 @@ $ARGUMENTS
 The main agent is the conductor and remediation owner. Specialist agents are
 read-only and independent.
 
-## 1. Establish exact target
+## 1. Establish exact target and risk
 
 State the exact target:
 
@@ -29,106 +29,65 @@ State the exact target:
 
 Exclude unrelated user changes.
 
-## 2. Delegate review
+Then state the **risk tier** from `CLAUDE.md` — *Risk classification*. It decides
+how much review this change gets. Name the tier and the evidence for it before
+launching anything; an unstated tier defaults to the panel it happens to get,
+which is how every change ends up costing the same regardless of what it is.
 
-Run relevant agents in parallel:
+Take the higher tier whenever the change is on a boundary.
 
-- `architect`
-- `reviewer`
-- `security`
-- `tester`
-- `api`
-- `database`
-- `performance`
+## 2. Select the review lenses by risk
 
-Provide the ADR, exact diff, changed-file scope, `CLAUDE.md`, relevant standards,
-and source-owned README contracts.
+Reviewing a copy fix with seven agents and reviewing an authorization change with
+one are the same mistake in opposite directions. Fan out to what the tier and the
+touched surface justify:
 
-## 3. Mandatory project checks
+| Tier | Lenses |
+|---|---|
+| **Low** | No subagents. Review it yourself and run `/code-review` if available. |
+| **Medium** | `reviewer`, plus the one domain lens the change actually touches. |
+| **High** | `reviewer`, `security`, `tester`, plus every domain lens touched. `/security-review` as well, when available. |
+| **Critical** | The full panel including `architect`, plus everything High requires. Automated review is never sufficient on its own here — say so explicitly in the report. |
 
-### Design and architecture
+Domain lenses: `api` (DTO, error, Swagger, consumer contracts) · `database`
+(Prisma, constraints, queries, migrations) · `performance` (queues, retries,
+resource bounds) · `security` · `tester` · `architect`.
 
-- accepted ADR and deliberate non-goals;
-- `src/common` leaf-layer rule;
-- module ownership and dependency direction;
-- no duplicated business rules or parallel implementations;
-- coherent complete migration across all in-scope call sites;
-- no unrelated scope or speculative abstraction.
+Launch the selected agents **in parallel**, and give each: the ADR, the exact
+diff, the changed-file scope, and the standards or source-owned README for its
+lens. Do not paste contract text into the prompt — name the file and let the
+agent read it.
 
-### Naming and code quality
+Bundled skills supplement the panel; they never replace it. Run `/simplify` only
+after correctness and security findings are resolved, and verify each of its
+proposals against the ADR before accepting it.
 
-- intention-revealing full names in locals, callbacks, declarations, files,
-  DTOs, and loops;
-- no prohibited abbreviations or vague placeholders;
-- data/registries separated from behavior;
-- pure reusable helpers in `src/common/util` with specs;
-- obsolete code removed;
-- new conventions made self-enforcing where practical.
+## 3. What to review against
 
-### Errors, DTOs, and API
+**The contracts live in `CLAUDE.md` — *Cross-cutting conventions* — and in
+`.claude/standards/`. This skill does not restate them**, for the same reason
+`gate-implement` does not: a paraphrased checklist drifts from the rule it
+paraphrases, silently, and no tooling can detect it.
 
-- no direct Nest HTTP exception construction;
-- stable `Errors.*` code and envelope;
-- no raw Prisma rows;
-- response DTO constructors;
-- sensitive `@Exclude()` + `@ApiHideProperty()`;
-- exact validation patterns;
-- explicit Swagger response types;
-- `@ApiPaginatedResponse`;
-- acknowledgement DTOs;
-- no unpaginated full-table route;
-- compatibility of required/optional/null fields, enums, and error codes.
+Each lens reviews against its authoritative source:
 
-### Authorization and AppSec
+| Lens | Reviews against |
+|---|---|
+| `reviewer` | `CLAUDE.md`; `.claude/standards/coding.md` — correctness, state transitions, naming, responsibility placement, dead code, half-migrated call sites |
+| `architect` | `.claude/standards/architecture.md`; the accepted ADR — boundaries, `src/common` leaf rule, deliberate non-goals, no parallel implementations |
+| `security` | `.claude/standards/security.md`; `src/common/authorization/README.md`; `auth-security` and `authorization` skills |
+| `api` | `CLAUDE.md`; `src/common/errors/README.md`; `.claude/standards/architecture.md` — *Contracts* |
+| `database` | `CLAUDE.md`; `resource-pattern` skill — soft delete, partial uniqueness, transactions, one consolidated migration, no local application |
+| `performance` | `src/common/queue/README.md`; `.claude/standards/architecture.md` — *State and distributed behavior* |
+| `tester` | `.claude/standards/testing.md`; `e2e-testing` skill |
 
-- exactly one access decorator per route;
-- permission catalog and route boot audit;
-- object/tenant scope in the Prisma query through
-  `AbilityScopedQueryService`;
-- no direct external `@casl/prisma`;
-- 404 for invisible records and 403 for visible forbidden actions;
-- no client-trusted ownership, role, money, totals, discounts, or entitlements;
-- public and dispatching endpoints have explicit throttling;
-- enumeration/timing behavior preserved;
-- mass assignment, FK/role escalation, replay, race, and abuse checked;
-- logs/errors/Swagger do not leak secrets or sensitive data;
-- audit actor and security events are present.
+Three checks belong to the conductor rather than to any lens, because they are
+about the change as a whole:
 
-### Prisma and migration
-
-- correct `prisma.scoped` use;
-- nested soft-delete reads filtered;
-- partial live-row unique index semantics preserved;
-- `findFirst` used where Prisma has no unique selector;
-- snake_case mappings and `is` booleans;
-- transaction/invariant and concurrency safety;
-- one consolidated migration;
-- no evidence of local migration application/reset;
-- expand/backfill/constraint/contract ordering if deployed environments exist.
-
-### Queues, external providers, and reliability
-
-- BullMQ versus scheduled-job decision follows repository guidance;
-- typed provider methods;
-- timeouts;
-- bounded transient retries;
-- idempotency and duplicate safety;
-- correlation ID propagation;
-- cancellation/rescheduling;
-- terminal and poison-message behavior;
-- actionable non-sensitive observability.
-
-### Tests
-
-- affected e2e contract coverage;
-- unit coverage for pure rules;
-- regression case;
-- negative, boundary, authorization, and tenant tests;
-- stable error-envelope assertions;
-- serialization and secret exclusion;
-- concurrency/replay/retry behavior;
-- parallel-worker isolation assumptions;
-- no weakened assertions, focused tests, broad sleeps, or hidden flakiness.
+- the diff does what the **accepted ADR** says, and nothing it excluded;
+- no unrelated scope, speculative abstraction, or opportunistic refactor;
+- every in-scope call site of a changed pattern was migrated, not just the
+  first one.
 
 ## 4. Verify every finding
 
@@ -163,8 +122,8 @@ A refuted finding is dropped and recorded in the rejected-findings summary with
 the refutation. A surviving finding proceeds to remediation with its refutation
 attempt on record — that record is what makes the severity credible later.
 
-Do not run this for Medium and below, and do not run it on Low-risk changes; the
-cycle costs more than the precision it buys there.
+Do not run this for Medium and below, and do not run it on Low or Medium risk
+changes; the cycle costs more than the precision it buys there.
 
 ## 5. Remediate
 
@@ -181,8 +140,8 @@ Perform at most two full remediation/re-review cycles.
 
 Report:
 
-- exact target;
-- agents/lenses;
+- exact target and risk tier;
+- lenses selected, and why that set;
 - findings by severity;
 - fixes and tests;
 - rejected findings summary;

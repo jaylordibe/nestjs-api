@@ -25,9 +25,6 @@ Status: ACCEPTED
 
 If it does not, stop.
 
-Read `CLAUDE.md`, the relevant `.claude/standards/`, source-owned README
-contracts, and project skills referenced by `CLAUDE.md`.
-
 ## Protect the worktree
 
 Before edits:
@@ -53,123 +50,54 @@ For each slice:
 5. run focused checks;
 6. inspect the diff.
 
-## Mandatory project contracts
+## Contracts to enforce
 
-### Errors and response serialization
+**The contracts live in `CLAUDE.md` — *Cross-cutting conventions* — and in
+`.claude/standards/`. This skill does not restate them.**
 
-- Throw through `Errors.*`; never construct Nest HTTP exceptions directly
-  outside the error subsystem.
-- Preserve the stable error envelope and machine-readable `errorCode`.
-- Let the global filter handle Prisma P2002/P2003/P2025 unless the accepted ADR
-  requires additional domain translation.
-- Return `new <Resource>ResponseDto(row)`, never raw Prisma rows.
-- Use both `@Exclude()` and `@ApiHideProperty()` for sensitive response fields.
+That is a deliberate constraint, not an omission. A second copy of a contract is
+a second thing to drift, and nothing can detect a prose list that has quietly
+fallen behind the rule it paraphrases. `CLAUDE.md` is always in context; the
+standards and the source-owned READMEs are one read away. Work from those, never
+from a summary — including this one.
 
-### Validation and DTOs
+What this skill owns is the **checklist of lenses**: the areas a change in this
+repository must be examined through before it is complete. For each one that the
+ADR touches, go to the authoritative text and satisfy it.
 
-- Respect whitelist + forbid-non-whitelisted global validation.
-- Use established cross-field validators and `HHMM_PATTERN`.
-- Use `@IsUtcIsoString()` for timestamps and `@IsDateString()` only for
-  calendar dates.
-- Use `toOptionalBoolean` plus `@Type(() => String)` for optional boolean query
-  filters.
-- Use TypeScript enums under `src/common/enums`; do not introduce PostgreSQL
-  enums unless an accepted ADR explicitly changes project policy.
+| Lens | Authoritative source |
+|---|---|
+| Errors, `errorCode`, response DTOs, serialization | `CLAUDE.md`; `src/common/errors/README.md` |
+| Validation, DTO shape, datetime and query-boolean handling | `CLAUDE.md`; `.claude/standards/coding.md` |
+| Route access metadata, permissions, tenant scope, 404-vs-403 | `CLAUDE.md`; `src/common/authorization/README.md`; `authorization` skill |
+| Audit actor fields, audit events, logging and redaction | `CLAUDE.md`; `.claude/standards/security.md` |
+| Prisma models, soft delete, partial uniqueness, transactions | `CLAUDE.md`; `resource-pattern` skill |
+| Endpoints, pagination, Swagger, consumer contracts | `CLAUDE.md`; `.claude/standards/architecture.md` |
+| Config, providers, queues, timeouts, retries, idempotency | `CLAUDE.md`; `src/common/queue/README.md` |
+| Migrations and schema change | `CLAUDE.md` — *Migrations while work is in progress* is STRICT |
+| Naming, file responsibility, completion hygiene | `CLAUDE.md`; `.claude/standards/coding.md` |
 
-### Authorization and tenant isolation
+Two rules are repeated here rather than referenced, because violating either is
+unrecoverable rather than merely wrong:
 
-- Every handler declares exactly one route access decorator.
-- Do not add controller-level global auth guards already provided by the app.
-- Add permissions to the permission catalog; the DB remains a projection.
-- Treat JWT claims as `{ sub, jti }`; do not add role grants to JWT.
-- Scope record reads and mutations through `AbilityScopedQueryService`.
-- Never import `@casl/prisma` outside the authorized module.
-- Return 404 when record visibility is denied; use 403 when the record is
-  visible but the action is forbidden.
-- Never trust client-supplied owner, tenant, provider, role, price, total,
-  discount, entitlement, or approval state.
-
-### Audit and observability
-
-- Mutating service methods accept and persist `actorId: string | null`.
-- Controllers pass `@CurrentUser().id` or `null` for an intentionally public
-  create.
-- Record privileged/security actions through `AuditService`.
-- Do not supply caller-controlled `metadata.request`.
-- Preserve request/queue correlation IDs.
-- Extend pino redaction for new sensitive fields.
-- Public health errors return fixed safe messages and log internal diagnostics.
-
-### Prisma and PostgreSQL
-
-- Access through `PrismaService`.
-- Use `prisma.scoped` for top-level user-facing reads of soft-delete models.
-- Explicitly filter nested to-many soft-delete includes; protect to-one access
-  at the parent query.
-- Do not treat soft deletion as authorization.
-- Preserve partial unique index semantics; use `findFirst` for fields that are
-  unique only among live rows.
-- Do not replace partial indexes with `@@unique([field, deletedAt])`.
-- Map camelCase fields to snake_case columns and models to plural snake_case
-  tables.
-- Prefix boolean fields with `is`.
-- Cover full invariants with transactions and address concurrency.
-
-### API and Swagger
-
-- Use the five standard endpoints and fixed `findPaginated` / `findById` names
-  when the resource pattern applies.
-- Do not add unpaginated full-table endpoints.
-- Use `MetaQueryDto`, `perPage <= 100`, and centralized list-query construction.
-- Add `@ApiPaginatedResponse(T)` for paginated handlers.
-- Add explicit response decorators for non-paginated handlers.
-- Use shared typed acknowledgement DTOs, not inline objects or schemas.
-- Import mapped DTO helpers from `@nestjs/swagger`.
-- Treat request/response DTOs, enums, error codes, and events as consumer
-  contracts.
-
-### Config, providers, queues, and reliability
-
-- Read config through typed `configuration.ts` keys with `getOrThrow`.
-- Do not read `process.env` elsewhere.
-- Use typed provider helpers rather than raw generic sends.
-- New background work defaults to the BullMQ framework unless the queue README's
-  decision table selects a scheduled sweep.
-- Remote calls have explicit timeouts.
-- Retry only transient failures with bounds, backoff, and jitter.
-- Retried writes and job consumers are idempotent and duplicate-safe.
-- Define cancellation, rescheduling, terminal failure, and poison-message
-  behavior when applicable.
-
-### Migrations
-
-- Consolidate the complete schema change into one migration file.
-- Do not apply migrations to the local dev DB.
-- Do not reset, drop, re-seed, or destroy local data.
-- Use `yarn build` to verify generated Prisma shape.
-- Test DB migration execution belongs to the e2e harness.
-- Let the user apply finalized migrations.
+- **Do not apply migrations to any local or shared database.** `yarn build`
+  verifies the generated Prisma shape. The e2e harness owns the only database
+  that may be dropped automatically. Consolidate the change into one migration
+  file and let the human apply it.
+- **Do not reset, drop, or re-seed local data**, for any reason, without an
+  explicit instruction in this conversation.
 
 ## Tests
 
-Tests are implementation work.
+Tests are implementation work, not a follow-up.
 
-Add/update relevant:
+Cover the scenarios in `.claude/standards/testing.md` — *Required scenarios* —
+that this change makes reachable, plus a regression case for any defect fixed.
+Placement, harness, and worker-isolation rules are in the `e2e-testing` skill.
 
-- unit specs for pure utilities and rules;
-- affected e2e specs for the contract;
-- error-envelope/error-code assertions;
-- validation and serialization;
-- authorization and tenant isolation;
-- 404 versus 403;
-- audit actor/event behavior;
-- soft-delete and partial uniqueness;
-- duplicate, replay, transaction, concurrency, retry, and queue behavior;
-- regression reproduction;
-- Swagger/consumer compatibility where testable.
-
-Tests must remain safe under parallel workers. Never assume exclusive access
-outside the worker's isolated database and Redis logical DB.
+The one property worth restating: specs run in parallel against a per-worker
+cloned database and Redis logical DB, so a spec must never assume exclusive
+access to anything outside its own worker.
 
 ## Focused implementation checks
 
@@ -197,7 +125,7 @@ Report:
 - focused command results;
 - migration files prepared but not applied;
 - deviations/blockers;
-- frontend/mobile handoff;
+- frontend/mobile handoff, per the *Consumers* table in `CLAUDE.md`;
 - ADR path.
 
 ## Handoff
