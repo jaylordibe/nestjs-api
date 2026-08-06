@@ -155,11 +155,17 @@ production readiness.
 
 ## 7. Handoff
 
-Follow `.claude/standards/gate-handoff.md`.
+Follow `.claude/standards/gate-handoff.md`, starting with its §0 mode table.
 
 Close with findings by severity, what was fixed, what was rejected and why, and
-the commands that actually ran. Then offer to continue into
-`/gate-validate <adr>`.
+the commands that actually ran.
 
-**Do not offer to continue while any Critical or High finding is unresolved.**
-Name what remains and stop — that is the whole purpose of this gate.
+**Standalone** — then offer to continue into `/gate-validate <adr>`.
+
+**Conductor** (`/work-item` Stage 4) — emit the stage marker and go straight into
+validation.
+
+**An unresolved Critical or High finding stops the work in both modes.** Name
+what remains and stop. This is not the inter-stage prompt that conductor mode
+removes — it is the gate itself doing its only job, and a pipeline that runs
+past it has not saved anyone time.

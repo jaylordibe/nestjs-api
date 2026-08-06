@@ -38,6 +38,46 @@ Invoking `/work-item <real issue key or URL>` authorizes exactly one Stage 7
 issue comment when the configured tracker is connected. It does not authorize any
 other issue write. A pasted-requirement invocation authorizes none.
 
+## Autonomy contract
+
+**This pipeline runs to completion on its own.** Invoking `/work-item` is the
+authorisation for the whole sequence; the human is interrupted exactly twice:
+
+| Stop | Stage | Why it cannot be automated |
+|---|---|---|
+| **ADR approval** | 2 | `gate-approve` sets `disable-model-invocation: true`. A design must not approve itself. |
+| **Present, then human review and push** | 6 | Git writes are denied. The commit is the human's act of record. |
+
+Everything between those two runs without asking. You are operating the gate
+skills in **conductor mode** — `.claude/standards/gate-handoff.md` §0 and §5 —
+so when a gate's own `SKILL.md` ends by offering to continue, recommending a
+fresh session, or printing the next `/gate-*` command, **that instruction is
+addressed to a human who typed that command directly, and does not apply here.**
+Emit the stage marker and proceed.
+
+Removing the prompts removes no rigor. Every subagent panel still fans out at
+full width for the risk tier, every check still runs, and every stop condition
+below still stops. On **High or Critical** work, Stage 4 must fan out to
+independent read-only subagents and run the adversarial refutation pass — that
+is what preserves review independence now that no human checkpoint sits between
+writing the diff and reviewing it. A conductor that reviews High/Critical work
+by itself has skipped the gate, not accelerated it.
+
+Stop mid-pipeline **only** for:
+
+- a material divergence from the accepted ADR — propose an amendment and return
+  to the approval gate;
+- an unresolved product decision that reading the repository cannot settle;
+- two complete remediation cycles exhausted with findings still unresolved;
+- a Stage 5 `FAIL` or `BLOCKED` that Stage 3 or 4 cannot fix within the accepted
+  ADR;
+- a missing prerequisite — an unavailable service, absent credential, or a check
+  that cannot run.
+
+Name which one fired and what it blocks. Never stop to confirm a stage that had
+no such problem, and never ask the human to authorise a step they already
+authorised by invoking this skill.
+
 ## Normative stage playbooks
 
 Each stage below is governed by a gate skill. **Read that skill's `SKILL.md` when
@@ -201,14 +241,33 @@ The ADR must:
 - address migration, deployment ordering, rollback/roll-forward, and non-goals;
 - identify unresolved product decisions and blockers.
 
-Present the ADR through the normal Plan/approval interface and stop.
+## Presenting for approval
 
-Do not mark Stage 2 complete until the user explicitly approves.
+This is one of the pipeline's two human stops, so make the decision **one
+action**, not a typed command.
 
-Before asking for a decision, read back the recommendation, the trade-off
-accepted by rejecting the alternatives, residual risk, non-goals, and **every
-unresolved §14 row** — the contract in `.claude/skills/gate-approve/SKILL.md`.
-Ambiguous praise is not an approval; the user's decision must be explicit.
+Call `ExitPlanMode` with the read-back below as the plan. The user gets an
+approve/reject control, and an affirmative click **is** the explicit decision
+this gate requires — record it and continue in the same turn. Do not tell them
+to run `/gate-approve`: that command exists for an ADR designed in an earlier
+session, and routing a live pipeline through it turns one click into a typed
+command plus a second reading of a document they just read.
+
+The read-back is not the ADR pasted back. It is, concisely and in your own
+words: the recommendation; the trade-off accepted by rejecting the alternatives;
+contract and data impact; residual security and privacy risk; the
+rollback path; **what this deliberately does NOT do**; and **every unresolved
+§14 row, individually**. Scope disappointment surfaces at the non-goals more
+often than any technical objection does, which is why they are read back rather
+than left in the file.
+
+If §14 has an unresolved row, the user must resolve it or accept it as a stated
+condition. Put that question in the plan, and record verbatim what they accept.
+
+Approval must be unambiguous. A click approves. Ambiguous praise in passing —
+"nice", "ok" while discussing something else — does not, in either direction. If
+`ExitPlanMode` is unavailable, fall back to `AskUserQuestion`; never infer a
+decision from prose that was not a decision.
 
 On approval:
 
@@ -233,7 +292,9 @@ for your approval".
 # Stage 3 — Implement
 
 Read `.claude/skills/gate-implement/SKILL.md` now, and follow it together with
-the accepted ADR.
+the accepted ADR — except for its closing handoff, which is written for a human
+who typed `/gate-implement`. Its fresh-session recommendation does not apply
+here; see the autonomy contract above.
 
 Before editing:
 
@@ -255,7 +316,8 @@ If a material ADR divergence becomes necessary, stop Stage 3, propose an ADR
 amendment, and return to the approval gate.
 
 When the accepted implementation and focused tests are complete, mark Stage 3
-complete and Stage 4 in progress.
+complete, emit the stage marker, and **begin Stage 4 immediately**. Do not ask
+whether to proceed.
 
 # Stage 4 — Review
 
@@ -275,6 +337,12 @@ The lenses available to it:
 Verify every candidate finding before reporting or fixing it, and adversarially
 refute Critical/High findings on High/Critical work — the gate defines both.
 
+On High or Critical work this fan-out is **mandatory, not tier-suggested**: the
+subagents are the only independent readers of this diff, because no human
+checkpoint separates writing it from reviewing it. Each starts from a clean
+context and reads the diff from disk. Never substitute your own reading of code
+you just wrote.
+
 Remediate verified findings within accepted scope, add regression tests, run
 focused checks, and re-run affected reviewers.
 
@@ -287,13 +355,16 @@ Stage 4 exits only when:
   action;
 - review fixes have focused test evidence.
 
-Mark Stage 4 complete and Stage 5 in progress.
+Mark Stage 4 complete, emit the stage marker, and **begin Stage 5 immediately**.
 
 # Stage 5 — Validate
 
 Read `.claude/skills/gate-validate/SKILL.md` now, and follow it.
 
-Validation is read-only.
+Validation is read-only. That constraint is about *evidence*: never edit source,
+tests, snapshots, or configuration to manufacture a pass. It is not a reason to
+stop and hand the user a block of text to copy — see the §16 filing rule at the
+end of Stage 5.
 
 At minimum, when applicable:
 
@@ -323,8 +394,32 @@ If the verdict is FAIL because of an implementation defect, return to Stage 3 or
 
 If BLOCKED, do not invent evidence.
 
+## Filing the validation record
+
+`gate-validate` §10 emits the §16 evidence block and tells the user to paste it,
+because that skill runs with Edit and Write removed. **In conductor mode, write
+it into the ADR yourself** — you are not running under those restrictions, and
+handing the human a copy-paste chore at the end of an autonomous pipeline is the
+manual step this design exists to remove.
+
+The record stays trustworthy because of where it lands, not who typed it: §16
+goes into a file the human reads in the Stage 6 diff and commits by hand. A
+verdict they never see is the problem; a verdict they read before pushing is the
+control.
+
+Two limits still bind:
+
+- write **only** §16 of the ADR — nothing else in it, and no source, test,
+  snapshot, or configuration file. The read-only rule is about not manufacturing
+  a pass, and it is absolute.
+- file the verdict **exactly as it came out**, including `FAIL` or `BLOCKED`
+  with the gate that produced it. A validation record that only ever says `PASS`
+  records nothing.
+
+Skip this when the change is Low risk and has no ADR. Say so in one line.
+
 Mark Stage 5 complete only when the evidence report is complete, even if the
-verdict is FAIL or BLOCKED. Mark Stage 6 in progress.
+verdict is FAIL or BLOCKED, then continue to Stage 6.
 
 # Stage 6 — Present [HUMAN GIT/RELEASE GATE]
 

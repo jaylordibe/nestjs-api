@@ -278,14 +278,21 @@ the system. Ambiguous praise is not an approval.
 
 ## 11. Handoff
 
-Follow `.claude/standards/gate-handoff.md`.
+Follow `.claude/standards/gate-handoff.md`, starting with its §0 mode table.
 
-Close with the ADR path and its status, then offer:
+Close with the ADR path and its status.
+
+**Standalone** — then offer:
 
 - **Approve it now** — read the design back per
   `.claude/skills/gate-approve/SKILL.md` and record their explicit decision.
 - **Keep refining** — stay at `DRAFT`, write what remains into §14.
 - **Stop here** — they run `/gate-approve <adr>` themselves.
 
-If the ADR is still `DRAFT`, do not offer approval at all. Say what §14 still
-holds and that `/gate-design <adr>` resumes it.
+**Conductor** (`/work-item` Stage 2) — do not offer these. This is the pipeline's
+first human stop and Stage 2 owns how it is presented: the read-back goes through
+`ExitPlanMode` so the decision is a click, and on approval the conductor records
+`Status: ACCEPTED` and §15 and continues into implementation in the same turn.
+
+If the ADR is still `DRAFT`, do not offer approval at all, in either mode. Say
+what §14 still holds and that `/gate-design <adr>` resumes it.

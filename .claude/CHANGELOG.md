@@ -25,6 +25,62 @@ starter repository as a whole.
 
 Upgrade procedure and adoption checklist: `.claude/ADOPTING.md`.
 
+## 1.1.0 — 2026-08-06
+
+Additive and safe to copy over. Found by running `/work-item` on a real ticket in
+an adopting project: the pipeline asked for four confirmations after the ADR was
+approved, none of which decided anything.
+
+### Two-mode gate handoff
+
+`gate-handoff.md` had one closing protocol, written for a human typing
+`/gate-implement` by hand: close, name the next command, ask whether to continue.
+But `/work-item` Stages 3–5 execute those same gate skills as their playbooks, so
+the conductor inherited that closing question at every stage boundary — plus a
+fresh-session recommendation on High/Critical work. Approval itself handed back a
+`/gate-approve` command to type rather than a decision the user could click.
+
+`.claude/standards/gate-handoff.md` now establishes the invocation mode first:
+
+- **Standalone** — a human typed the command. Behaviour unchanged.
+- **Conductor** — a `/work-item` stage. Emit a one-line stage marker, keep going.
+
+A `/work-item` run now stops exactly twice: **ADR approval**, presented through
+`ExitPlanMode` so the decision is a click, and **Stage 6**, where the human
+reviews the diff and pushes. Both are boundaries the pipeline cannot cross on its
+own — `gate-approve` keeps `disable-model-invocation: true`, and Git writes stay
+denied. §5 lists the five conditions that still stop a run mid-pipeline.
+
+No rigor was traded for the autonomy. Every panel still fans out, every check
+still runs. Two things tightened to keep it that way:
+
+- **Review independence is now structural.** The fresh-session advice protected a
+  real property: the reviewer should not be the context that just wrote the diff.
+  Conductor mode makes the independent read-only subagent fan-out *mandatory* on
+  High/Critical rather than tier-suggested; each subagent starts clean and reads
+  the diff from disk.
+- **An unresolved Critical or High finding still stops the work, in both modes.**
+  That is the gate doing its job, not an inter-stage prompt.
+
+`gate-validate` stays read-only and still only emits the §16 evidence block; in a
+`/work-item` run the conductor files it into the ADR, so an autonomous pipeline
+does not end with a copy-paste chore. The record is trustworthy because of where
+it lands — a file the human reads in the Stage 6 diff and commits by hand — and
+the verdict is filed exactly as produced, `FAIL` and `BLOCKED` included.
+
+Guardrail: `validateHandoffModeContract` in `scripts/validate-claude-config.ts`
+fails the build if `gate-handoff.md` loses either mode section, if any `gate-*`
+skill's Handoff section stops distinguishing the two modes, or if `work-item`
+loses its `## Autonomy contract`. Verified by deliberate breakage on all four
+conditions. The split lives entirely in prose across seven files, so nothing else
+would catch it drifting back to one mode.
+
+**Adopters:** copy `.claude/standards/gate-handoff.md`, the six skills under
+`.claude/skills/` (`work-item` and the five `gate-*`), and
+`scripts/validate-claude-config.ts`. Then apply the `CLAUDE.md` changes by hand —
+the *Ending a gate* section and the `/work-item` exception paragraph — since
+`CLAUDE.md` is project-owned and cannot be copied wholesale.
+
 ## 1.0.0 — 2026-08-06
 
 First versioned baseline. Copies taken before this are unversioned; diff them

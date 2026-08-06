@@ -130,13 +130,17 @@ Report:
 
 ## Handoff
 
-Follow `.claude/standards/gate-handoff.md`.
+Follow `.claude/standards/gate-handoff.md`, starting with its §0 mode table.
 
 Close with the files changed, the contracts touched, the focused checks that
-actually ran, and any migration prepared but **not** applied. Then offer to
-continue into `/gate-review <adr>`.
+actually ran, and any migration prepared but **not** applied.
 
-**Recommend a fresh session for the review when the change is High or Critical
-risk.** A review carries more weight from a context that did not just write the
-code — the reviewer should be re-reading the diff, not recalling its own
-intentions.
+**Standalone** — then offer to continue into `/gate-review <adr>`, and
+**recommend a fresh session when the change is High or Critical risk**. A review
+carries more weight from a context that did not just write the code; the
+reviewer should be re-reading the diff, not recalling its own intentions.
+
+**Conductor** (`/work-item` Stage 3) — emit the stage marker and go straight into
+the review. Do not offer, and do not recommend a fresh session: independence
+there comes from the review's read-only subagents, which is why that fan-out is
+mandatory rather than optional on High and Critical work.

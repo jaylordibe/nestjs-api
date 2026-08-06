@@ -1229,6 +1229,110 @@ function validateConsumersTable(): void {
 }
 
 /**
+ * A gate ends one way when a human typed its command and another way when it is
+ * a `/work-item` stage. Getting that wrong is not cosmetic: a gate that offers
+ * to continue inside the conductor turns one authorisation into a confirmation
+ * at every stage boundary, which is the exact friction the two-mode split
+ * removed. Nothing about that split is machine-checkable from behaviour — it
+ * lives entirely in prose across seven files — so this check holds the prose
+ * together.
+ */
+const HANDOFF_CONTRACT_RELATIVE_PATH = 'standards/gate-handoff.md';
+
+const REQUIRED_HANDOFF_CONTRACT_SECTIONS = [
+  {
+    marker: '## 0. Establish the mode first',
+    requirement:
+      'the mode table that tells a gate whether it was invoked standalone or as a /work-item stage',
+  },
+  {
+    marker: '## 5. Closing a gate in conductor mode',
+    requirement:
+      'the conductor-mode closing rules and the exhaustive list of what still stops a run mid-pipeline',
+  },
+];
+
+/** A gate's handoff section must say which mode it is describing. */
+const MODE_AWARE_TERMS = ['conductor', '/work-item'];
+
+function validateHandoffModeContract(): void {
+  const handoffContractPath = join(
+    claudeDirectory,
+    HANDOFF_CONTRACT_RELATIVE_PATH,
+  );
+
+  if (!existsSync(handoffContractPath)) {
+    reportViolation(
+      handoffContractPath,
+      'missing — every gate skill defers its closing behaviour to this file, so without it each gate invents its own and the pipeline stops in different places depending on which gate ran',
+    );
+    return;
+  }
+
+  const handoffContract = readFileSync(handoffContractPath, 'utf8');
+
+  REQUIRED_HANDOFF_CONTRACT_SECTIONS.forEach(({ marker, requirement }) => {
+    if (!handoffContract.includes(marker)) {
+      reportViolation(
+        handoffContractPath,
+        `has no \`${marker}\` section — it must document ${requirement}`,
+      );
+    }
+  });
+
+  const gateSkillFiles = listMarkdownFilesRecursively(
+    join(claudeDirectory, 'skills'),
+  ).filter(
+    (filePath) =>
+      basename(filePath) === 'SKILL.md' &&
+      basename(dirname(filePath)).startsWith('gate-'),
+  );
+
+  gateSkillFiles.forEach((gateSkillFile) => {
+    const gateSkill = readFileSync(gateSkillFile, 'utf8');
+    if (!gateSkill.includes(HANDOFF_CONTRACT_RELATIVE_PATH)) {
+      reportViolation(
+        gateSkillFile,
+        `does not reference \`.claude/${HANDOFF_CONTRACT_RELATIVE_PATH}\` — a gate that closes on its own restated rules is a second copy of the sequence, and a second copy drifts silently`,
+      );
+      return;
+    }
+
+    const handoffSectionIndex = gateSkill.lastIndexOf('Handoff');
+    const handoffSection = gateSkill.slice(handoffSectionIndex).toLowerCase();
+    const isModeAware = MODE_AWARE_TERMS.some((term) =>
+      handoffSection.includes(term),
+    );
+
+    if (!isModeAware) {
+      reportViolation(
+        gateSkillFile,
+        'its Handoff section never distinguishes standalone invocation from a /work-item stage. State both, or say plainly that the conductor does not route through this gate — an unqualified "offer to continue" makes an autonomous run stop and ask at every stage boundary',
+      );
+    }
+  });
+
+  const conductorSkillPath = join(
+    claudeDirectory,
+    'skills',
+    'work-item',
+    'SKILL.md',
+  );
+
+  if (!existsSync(conductorSkillPath)) {
+    return;
+  }
+
+  const conductorSkill = readFileSync(conductorSkillPath, 'utf8');
+  if (!conductorSkill.includes('## Autonomy contract')) {
+    reportViolation(
+      conductorSkillPath,
+      "has no `## Autonomy contract` section — it must name the pipeline's only two human stops (ADR approval and the Stage 6 present/push boundary) and the conditions that stop a run mid-pipeline. Without it the conductor inherits each gate's standalone closing behaviour and asks for permission it already has",
+    );
+  }
+}
+
+/**
  * `.claude/` is copied, not installed — there is no package manager to say a
  * copy is stale and no lockfile to diff. The version and its changelog entry
  * are the only way an adopted project can tell what it has. They must agree, or
@@ -1313,6 +1417,7 @@ function main(): void {
   validateGuardHookBehaviour();
   validateArchitecturalIdioms();
   validateConsumersTable();
+  validateHandoffModeContract();
   validateFrameworkVersion();
 
   const adrFiles = listMarkdownFilesRecursively(

@@ -204,18 +204,28 @@ Emit it fenced, then tell the user to paste it into `docs/adr/NNNN-*.md`.
 
 You are read-only and `disallowed-tools` removes Edit and Write — do **not**
 attempt to write the ADR yourself, and do not treat the inability to write as a
-reason to skip this step. The human filing it is what makes the record trustworthy:
-a gate that could write its own passing grade is not a gate.
+reason to skip this step. Emitting the block is the whole of your obligation
+here; someone else files it.
+
+Who that someone is depends on the mode. Standalone, it is the user. Under
+`/work-item`, the conductor files §16 as part of Stage 5 — it is not running
+under this skill's `disallowed-tools`, and see that skill for the limits that
+apply to it. Either way the record earns trust from where it lands, not from who
+typed it: §16 sits in a file the human reads in the Stage 6 diff and commits by
+hand, and the verdict is filed exactly as produced, `FAIL` and `BLOCKED`
+included.
 
 Human approval, Git writes, migration application, deployment, and final risk
 acceptance remain outside validation.
 
 ## 11. Handoff
 
-Follow `.claude/standards/gate-handoff.md`.
+Follow `.claude/standards/gate-handoff.md`, starting with its §0 mode table.
 
-There is no next gate. Close with the verdict, the evidence table, the §16 block
-to paste into the ADR, and the residual risk.
+There is no next gate. Close with the verdict, the evidence table, the §16
+record, and the residual risk. In conductor mode, continue into `/work-item`
+Stage 6 — the presentation the human actually acts on — rather than closing
+here.
 
 On `PASS`, state plainly that the work exists only in the working tree and that
 the commit, PR, migration application, and deployment are the user's — never

@@ -144,7 +144,19 @@
       "mcp__*__createJiraIssue",
       "mcp__*__createIssueLink",
       "mcp__*__*CreateIssue*",
-      "mcp__*__*createIssue*"
+      "mcp__*__*createIssue*",
+      "Bash(yarn start:worker *)",
+      "PowerShell(yarn start:worker *)",
+      "Bash(yarn start:worker:dev *)",
+      "PowerShell(yarn start:worker:dev *)",
+      "Bash(yarn prisma:studio *)",
+      "PowerShell(yarn prisma:studio *)",
+      "Bash(yarn test:watch *)",
+      "PowerShell(yarn test:watch *)",
+      "Bash(yarn test:debug *)",
+      "PowerShell(yarn test:debug *)",
+      "Bash(yarn rbac:sync *)",
+      "PowerShell(yarn rbac:sync *)"
     ],
     "allow": [
       "Bash(git status *)",
@@ -166,7 +178,14 @@
       "Bash(yarn stack:down *)",
       "Bash(docker compose ps *)",
       "Bash(docker compose logs *)",
-      "Bash(docker compose up *)"
+      "Bash(docker compose up *)",
+      "Bash(yarn test:cov *)",
+      "Bash(yarn pretest:e2e *)",
+      "Bash(yarn start *)",
+      "Bash(yarn start:dev *)",
+      "Bash(yarn start:debug *)",
+      "Bash(yarn start:prod *)",
+      "Bash(yarn rbac:check *)"
     ]
   },
   "hooks": {

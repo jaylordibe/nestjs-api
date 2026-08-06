@@ -30,7 +30,7 @@ When a small ask conflicts with this bar (e.g. "just fix this one site"), surfac
 
 Use the engineering workflow for any material feature, bug, refactor, contract change, schema change, authorization change, background job, integration, or change whose blast radius is unclear.
 
-**These five gates are human-invoked and Claude cannot start them.** Each sets `disable-model-invocation: true`, which removes it from Claude's context entirely — a Skill call to one of them is not possible, by design, so that a human owns the timing of every gate. Claude's obligation is therefore to **stop and ask the user to run the next gate**, never to claim a gate ran, and never to simulate one from memory. `/work-item <key | URL | requirement>` (`.claude/skills/work-item/SKILL.md`) is the top-level conductor that walks all five in one session; the individual gates below are for non-work-item work, focused operation, or recovery in a fresh session.
+**These five gates are human-invoked and Claude cannot start them.** Each sets `disable-model-invocation: true`, which removes it from Claude's context entirely — a Skill call to one of them is not possible, by design. When work is proceeding gate-by-gate, Claude's obligation is therefore to **stop and ask the user to run the next gate**, never to claim a gate ran, and never to simulate one from memory. `/work-item <key | URL | requirement>` (`.claude/skills/work-item/SKILL.md`) is the top-level conductor that walks all five in one session; the individual gates below are for non-work-item work, focused operation, or recovery in a fresh session.
 
 1. **`/gate-design <requirement>` — understand and decide.**
    - Start with the `context-mapper` agent when impact is unclear or cross-cutting.
@@ -64,11 +64,17 @@ Use the engineering workflow for any material feature, bug, refactor, contract c
 
 Manual/ad-hoc work does not bypass the final gates. After implementation, **stop and tell the user to run `/gate-review`, then `/gate-validate`** — summarise what changed, name the affected contracts and risk tier, and wait. An ad-hoc self-check is not a substitute for either gate and must never be reported as one.
 
+**A `/work-item` run is the exception, and runs to completion on its own.** Invoking it authorises the whole pipeline, so it interrupts the human exactly twice: at **ADR approval** (presented via `ExitPlanMode`, so the decision is a click) and at **Stage 6**, where they review the diff and push. It does not ask permission to move between implement, review, and validate — that would turn one authorisation into four confirmations of a decision already made. Every panel, check, and stop condition still runs at full strength; only the prompting is removed, and on High/Critical work the review's independent subagent fan-out becomes mandatory to preserve the independence a human checkpoint used to supply. The exhaustive list of what still stops a run mid-pipeline is in `.claude/standards/gate-handoff.md` §5.
+
 ### Ending a gate
 
-Every gate closes the same way, per `.claude/standards/gate-handoff.md`: state the outcome, what changed on disk, the evidence that actually ran, anything blocking the next gate, then **name the next command with its argument already filled in** and offer to continue. A developer should never finish a gate wondering what to do next.
+How a gate closes depends on how it was entered — `.claude/standards/gate-handoff.md` §0 holds the mode table, and every gate reads it first.
 
-Answering "yes" authorises the **next gate only** — never a skip, never the rest of the pipeline, never a Git or deployment write. Recommend a fresh session instead when the change is High/Critical and the next gate is `/gate-review`: a review is worth more from a context that did not just write the code.
+**Standalone** (a human typed the command): state the outcome, what changed on disk, the evidence that actually ran, anything blocking the next gate, then **name the next command with its argument already filled in** and offer to continue. A developer should never finish a gate wondering what to do next.
+
+**Conductor** (a `/work-item` stage): the same close, then a one-line stage marker and straight on to the next stage. No next-command line, no offer, no fresh-session recommendation.
+
+In standalone mode, answering "yes" authorises the **next gate only** — never a skip, never the rest of the pipeline, never a Git or deployment write. Recommend a fresh session instead when the change is High/Critical and the next gate is `/gate-review`: a review is worth more from a context that did not just write the code. In conductor mode that independence comes from the review's read-only subagents, which is why their fan-out is mandatory rather than optional on High/Critical work.
 
 **For the whole sequence in one pass, use `/work-item <requirement>` — it needs no issue key**, and falls back to treating its argument as the requirement itself. It stops only at the ADR approval gate and the human Git/release gate.
 
