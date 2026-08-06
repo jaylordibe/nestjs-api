@@ -37,12 +37,12 @@ Use the engineering workflow for any material feature, bug, refactor, contract c
    - Reconcile the ticket's WHAT/HOW against repository reality.
    - Classify risk first — **the tier decides the artifact.** Low risk gets no plan document at all (say so and hand back; the later gates still run); Medium and above get a plan whose depth matches the tier. The table below is the contract, and `gate-design` §4 expands it.
    - Evaluate alternatives and threat-model relevant surfaces in proportion to that tier.
-   - Stop at the approval gate. `PROPOSED` is not permission to implement.
+   - Stop at the approval gate. A presented plan is not permission to implement.
 
 2. **`/gate-approve` — take the human's decision.**
-   - The design must be `PROPOSED`; a `DRAFT` is unfinished and goes back to `/gate-design`.
-   - Read the decision, rejected alternatives, residual risk, non-goals, and **every unresolved §14 row** back to the user first. An approval nobody re-read is a rubber stamp.
-   - Take an explicit decision — never infer one from praise — then write the `Status:` line and §15 together.
+   - The design must be a finished plan; an unfinished one goes back to `/gate-design`.
+   - Read the recommendation, rejected alternatives, residual risk, non-goals, and **every unresolved blocker** back to the user first. An approval nobody re-read is a rubber stamp.
+   - Take an explicit decision — never infer one from praise — then record what was approved and every condition attached to it.
    - Claude cannot invoke this gate. That, not the typing, is what stops a design from approving itself.
 
 3. **`/gate-implement` — build only the approved design.**
@@ -151,7 +151,7 @@ Package manager: **yarn** (yarn.lock committed). Scripts: `start:dev`, `start:pr
 
 ## Consumers
 
-**FILL THIS IN when you adopt this template.** Every client that programs against this API goes in the table, and it is load-bearing: `gate-design`, `gate-implement`, and `gate-review` all ask "which consumers does this change force a matching change in?", and with an empty table the honest answer is always "none". A contract change that silently skips a consumer is how a broken client reaches a real user, and it is the single most common way a multi-repo change goes wrong.
+**FILL THIS IN after cloning this starter.** Every client that programs against this API goes in the table, and it is load-bearing: `gate-design`, `gate-implement`, and `gate-review` all ask "which consumers does this change force a matching change in?", and with an empty table the honest answer is always "none". A contract change that silently skips a consumer is how a broken client reaches a real user, and it is the single most common way a multi-repo change goes wrong.
 
 | Consumer | Repo / location | Audience | Owner |
 |---|---|---|---|

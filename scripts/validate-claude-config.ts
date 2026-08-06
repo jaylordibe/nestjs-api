@@ -420,7 +420,7 @@ const SYMBOL_REFERENCE_PATTERN =
  *
  * These matter more than the class-suffix pattern above, because they are how a
  * skill states an *architectural* rule rather than a code reference. Comparing
- * this template against a project that adopted it, the gate skills mandated
+ * this starter against a project cloned from it, the gate skills mandated
  * `@RequirePermission`, `@AuthenticatedOnly` and `AbilityScopedQueryService` —
  * none of which existed there, because that project uses a plain role guard.
  * Only the class-suffixed one was caught. A framework whose skills confidently
@@ -444,8 +444,8 @@ const NAMED_CONSTANT_REFERENCE_PATTERN = /`([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)`/g;
  * extensions just trades false positives for a list that goes stale.
  *
  * These are instead the handful of idioms that *define* the architecture this
- * framework asserts. An adopting project either has them or has to rewrite the
- * skills, which is exactly the decision this check exists to force. Keep the
+ * tooling asserts. A project either has them or has to rewrite the skills,
+ * which is exactly the decision this check exists to force. Keep the
  * list short: an idiom belongs here only if a skill would be wrong without it.
  */
 const ARCHITECTURAL_IDIOMS = [
@@ -746,8 +746,8 @@ function validateShellRuleParity(
 /**
  * The portability bug this repository exists to avoid shipping.
  *
- * An MCP tool is named `mcp__<server>__<tool>`, and `<server>` is whatever the
- * adopting project called it in `.mcp.json`. A rule hardcoding `mcp__atlassian__`
+ * An MCP tool is named `mcp__<server>__<tool>`, and `<server>` is whatever this
+ * project called it in `.mcp.json`. A rule hardcoding `mcp__atlassian__`
  * matches nothing in a project whose server is `atlassian-acme` — the tracker
  * floor is simply absent, while `.claude/README.md` still promises it. Deny and
  * ask rules accept a glob in the server segment (only *allow* rules require it
@@ -1032,10 +1032,9 @@ function validateGuardHookBehaviour(): void {
 }
 
 /**
- * The architectural idioms the skills assert must actually exist here. This is
- * the adoption check: copy this framework into a project built on different
- * foundations and it fails immediately, instead of quietly reviewing that
- * project's code against contracts it never had.
+ * The architectural idioms the skills assert must actually exist here. Build on
+ * different foundations and this fails immediately, instead of quietly reviewing
+ * the code against contracts it never had.
  */
 function validateArchitecturalIdioms(): void {
   for (const idiom of ARCHITECTURAL_IDIOMS) {
@@ -1044,7 +1043,7 @@ function validateArchitecturalIdioms(): void {
     }
     reportViolation(
       join(claudeDirectory, 'skills'),
-      `the skills describe \`${idiom}\` as a project idiom, but it appears nowhere in the code. Either the code moved, or the Claude Engineering Framework was adopted into a project with a different architecture — rewrite the affected skills to describe THIS repository, or drop the idiom from ARCHITECTURAL_IDIOMS with a note saying why`,
+      `the skills describe \`${idiom}\` as a project idiom, but it appears nowhere in the code. Either the code moved, or this project was built on a different architecture than the skills describe — rewrite the affected skills to describe THIS repository, or drop the idiom from ARCHITECTURAL_IDIOMS with a note saying why`,
     );
   }
 }
@@ -1055,8 +1054,8 @@ function validateArchitecturalIdioms(): void {
  *
  * An unfilled table and a deliberately empty one look identical to every later
  * reader, and to the review gate — so "which consumers does this break?" gets
- * the answer "none" for the wrong reason. Failing here forces the adopter to
- * make that a decision instead of an oversight. Declaring `none — internal
+ * the answer "none" for the wrong reason. Failing here forces that to be a
+ * decision instead of an oversight. Declaring `none — internal
  * only` satisfies it.
  */
 const CONSUMERS_PLACEHOLDER_ROW = '_(none declared yet)_';
@@ -1065,13 +1064,13 @@ const CONSUMERS_PLACEHOLDER_ROW = '_(none declared yet)_';
 const UNADOPTED_TEMPLATE_PACKAGE_NAME = 'nestjs-api';
 
 /**
- * True while the repository is still the template itself, or a clone nobody has
- * bootstrapped. Adoption checks stay quiet until then, so the template ships
- * with a green build — an adopter has to be able to tell a real failure from a
- * ritual one, and a starter whose CI is red on day zero teaches them to ignore
- * it.
+ * True while the repository is still the starter itself, or a clone nobody has
+ * renamed yet. The project-specific checks stay quiet until then, so a fresh
+ * clone ships with a green build — you have to be able to tell a real failure
+ * from a ritual one, and a starter whose CI is red on day zero teaches you to
+ * ignore it.
  */
-function isUnadoptedTemplate(): boolean {
+function isUnrenamedStarterClone(): boolean {
   const packageManifestPath = join(repositoryRoot, 'package.json');
   if (!existsSync(packageManifestPath)) {
     return false;
@@ -1099,7 +1098,7 @@ function validateConsumersTable(): void {
 
   if (
     fileContent.includes(CONSUMERS_PLACEHOLDER_ROW) &&
-    !isUnadoptedTemplate()
+    !isUnrenamedStarterClone()
   ) {
     reportViolation(
       projectInstructionsPath,

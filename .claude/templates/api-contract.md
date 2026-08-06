@@ -2,8 +2,7 @@
 
 - **Related plan/ticket:**
 - **Owner:**
-- **Consumers:** web | mobile | external | worker
-- **Status:** Proposed | Active | Deprecated
+- **Consumers affected:** name them from the *Consumers* table in `CLAUDE.md`
 
 ## Endpoint or event
 

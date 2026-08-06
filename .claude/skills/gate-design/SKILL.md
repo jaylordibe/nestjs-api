@@ -197,6 +197,19 @@ What the plan must decide, because the sources cannot decide it for you:
 - whether new background work belongs on the queue or a scheduled sweep;
 - the single consolidated migration, prepared but not applied.
 
+Two worksheets carry the per-field detail those bullets only name. Use
+`.claude/templates/api-contract.md` when the change adds or alters an endpoint,
+event, or DTO — it is where the *authoritative source* of every request field
+and the *enumeration behaviour* of every error code get decided. Use
+`.claude/templates/database-design.md` when it adds or alters a Prisma model —
+it carries the partial-index predicate and its `findFirst`/`findUnique`
+implication, the soft-delete classification, and the `@map`/`@@map` and
+`is`-boolean naming rules.
+
+**Both are thinking aids, not deliverables.** Fill one in to reach the decision,
+fold the conclusion into the plan, and commit neither — a template that becomes
+a maintained document is the model this workflow deliberately left behind.
+
 ## 8. Plan tests and verification
 
 Map each requirement and each identified risk to a specific test. The catalogue
@@ -204,7 +217,7 @@ of scenarios is `.claude/standards/testing.md` — *Required scenarios*; the des
 work is deciding **which of them this change makes reachable**, and naming the
 spec file that will cover each.
 
-A risk with no test mapped to it is an accepted risk. Say so in §14 rather than
+A risk with no test mapped to it is an accepted risk. Say so in §13 rather than
 leaving the gap implicit.
 
 Verification must include:

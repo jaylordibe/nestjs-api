@@ -204,9 +204,8 @@ slash-command menu:
 
 - `templates/plan.md`
 - `templates/threat-model.md`
-- `templates/api-contract.md`
-- `templates/database-design.md`
-- `templates/release-checklist.md`
+- `templates/api-contract.md` — worksheet for endpoint/event/DTO changes
+- `templates/database-design.md` — worksheet for Prisma model changes
 
 ### Standards
 
@@ -311,7 +310,7 @@ warning anywhere. `yarn claude:validate` fails when the two lists diverge.
 
 MCP rules use a **glob server segment** — `mcp__*__transitionJiraIssue`, never
 `mcp__atlassian__…`. A tool is named `mcp__<server>__<tool>`, and `<server>` is
-whatever the adopting project called it in `.mcp.json`; a hardcoded name matches
+whatever this project called it in `.mcp.json`; a hardcoded name matches
 nothing in a project that named its server differently, so the tracker floor is
 absent while this document still promises it. Deny and ask rules accept a glob
 there (only *allow* rules require a literal server). The validator enforces it.
