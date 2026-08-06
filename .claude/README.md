@@ -1,32 +1,31 @@
 # Claude Engineering Framework
 
-Team-shared Claude Code assets for this NestJS + Prisma starter, versioned and
-adopted as a unit.
+Team-shared Claude Code assets for this NestJS + Prisma starter.
 
-**The framework** is `.claude/`, `CLAUDE.md`, `scripts/validate-claude-config.ts`,
-and `scripts/validate-claude-config.ts`. **The starter repository** is the whole NestJS API that ships
-it. The two move at different speeds and are upgraded differently, which is why
-they have different names — see `.claude/ADOPTING.md`.
+**The tooling** is `.claude/`, `CLAUDE.md`, and
+`scripts/validate-claude-config.ts`. It ships inside the starter: clone the
+repository and it is already here, ready to use or ignore.
 
 This directory contains:
 
 - an orchestrated **work-item-to-validated-diff** workflow;
 - independently invocable engineering gates;
 - project-aware specialist agents;
-- ADR, threat-model, API, database, and release templates;
+- plan, threat-model, API, database, and release templates;
 - deeper architecture, coding, security, and testing standards;
 - harness-enforced safety hooks.
 
 This is developer tooling, not part of the API. The API builds, runs, and tests
 without it. Developers who do not use Claude Code can ignore this directory.
 
-**Framework version: `.claude/VERSION`.** What each version contains is in
-`.claude/CHANGELOG.md`; how to adopt the framework into a new project, upgrade an
-existing one, or back-port a fix found downstream is `.claude/ADOPTING.md`. It is
-copied rather than installed, so the version is the only thing that tells an
-adopted project what it has — and the adoption checks in `yarn claude:validate`
-stay quiet until `package.json` is renamed, then fail until the copy actually
-describes *your* repository.
+`yarn claude:validate` keeps it honest: it fails when a skill cites a decorator,
+constant, idiom, or path that does not exist in `src/`, so the gates cannot end
+up reviewing your code against contracts it does not have. Those checks stay
+quiet while `package.json` is still named `nestjs-api`, so a fresh clone ships
+green; **renaming the package turns them on**, and they then fail until
+`CLAUDE.md` actually describes your repository. Rewrite the affected skills
+rather than deleting the check — a gate confidently measuring your code against
+an architecture you do not have is worse than no gate at all.
 
 ## Recommended workflows
 

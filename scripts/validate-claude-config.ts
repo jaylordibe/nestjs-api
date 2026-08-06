@@ -1212,63 +1212,6 @@ function validateHandoffModeContract(): void {
   }
 }
 
-/**
- * `.claude/` is copied, not installed — there is no package manager to say a
- * copy is stale and no lockfile to diff. The version and its changelog entry
- * are the only way an adopted project can tell what it has. They must agree, or
- * the number means nothing.
- */
-const SEMANTIC_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
-
-function validateFrameworkVersion(): void {
-  const versionPath = join(claudeDirectory, 'VERSION');
-  const changelogPath = join(claudeDirectory, 'CHANGELOG.md');
-
-  if (!existsSync(versionPath)) {
-    reportViolation(
-      versionPath,
-      'missing — an adopted copy of the Claude Engineering Framework has no other way to identify what it contains. See .claude/ADOPTING.md',
-    );
-    return;
-  }
-
-  const declaredVersion = readFileSync(versionPath, 'utf8').trim();
-  if (!SEMANTIC_VERSION_PATTERN.test(declaredVersion)) {
-    reportViolation(
-      versionPath,
-      `\`${declaredVersion}\` is not MAJOR.MINOR.PATCH`,
-    );
-    return;
-  }
-
-  if (!existsSync(changelogPath)) {
-    reportViolation(
-      changelogPath,
-      'missing — a version with no changelog tells an adopter a number and nothing else',
-    );
-    return;
-  }
-
-  const newestEntryVersion = /^## (\d+\.\d+\.\d+) — \d{4}-\d{2}-\d{2}$/m.exec(
-    readFileSync(changelogPath, 'utf8'),
-  )?.[1];
-
-  if (newestEntryVersion === undefined) {
-    reportViolation(
-      changelogPath,
-      'has no `## MAJOR.MINOR.PATCH — YYYY-MM-DD` entry',
-    );
-    return;
-  }
-
-  if (newestEntryVersion !== declaredVersion) {
-    reportViolation(
-      changelogPath,
-      `newest entry is \`${newestEntryVersion}\` but .claude/VERSION says \`${declaredVersion}\`. Whichever is right, an adopter upgrading from an older copy reads the changelog and trusts the version — they cannot both be true`,
-    );
-  }
-}
-
 function main(): void {
   const skillFiles = listMarkdownFilesRecursively(
     join(claudeDirectory, 'skills'),
@@ -1298,7 +1241,6 @@ function main(): void {
   validateArchitecturalIdioms();
   validateConsumersTable();
   validateHandoffModeContract();
-  validateFrameworkVersion();
 
   const checkedCount =
     skillFiles.length + agentFiles.length + crossReferencedFiles.length;

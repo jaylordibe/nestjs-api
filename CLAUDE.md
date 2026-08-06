@@ -261,7 +261,6 @@ Load these on demand — they hold the long-form playbooks so this core stays le
 | Independently review the current diff across architecture, correctness, AppSec, tests, API, DB, and performance | `gate-review` skill + `.claude/agents/` |
 | Run read-only evidence gates and return `PASS` / `FAIL` / `BLOCKED` | `gate-validate` skill + `.claude/templates/release-checklist.md` |
 | General architecture, coding, security, and testing rules | `.claude/standards/architecture.md`, `coding.md`, `security.md`, `testing.md` |
-| Adopt the Claude Engineering Framework into a new project, upgrade a copy, or back-port a fix | `.claude/ADOPTING.md` (+ `.claude/VERSION`, `.claude/CHANGELOG.md`) |
 | Add/scaffold a CRUD resource (schema, five endpoints, list queries, response DTOs + relations, delete semantics, soft-delete filter) | `resource-pattern` skill (+ code skeletons in `docs/resource-pattern.md`) |
 | Permissions, roles, business-scoped resources, `@RequirePermission`, CASL abilities, tenant isolation, escalation/rank guard, grants cache | `authorization` skill (+ the contract in `src/common/authorization/README.md`) |
 | Auth / login / JWT / OTP / email-verify / phone-verify / lockout / timing hardening / security review | `auth-security` skill |
