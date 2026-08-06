@@ -25,6 +25,69 @@ starter repository as a whole.
 
 Upgrade procedure and adoption checklist: `.claude/ADOPTING.md`.
 
+## 1.2.0 — 2026-08-06
+
+**Adopters of 1.0.0 and 1.1.0: your build is very likely broken. Read this
+first.**
+
+Adopting the framework adds `scripts/validate-claude-config.ts`. For most NestJS
+projects that is the first and only `.ts` file outside `src/`, and TypeScript
+infers `rootDir` as the common ancestor of every file in the build program — so
+it silently rebases the emit root to the repository root. `dist/main.js` becomes
+`dist/src/main.js`, and a Dockerfile that runs `CMD ["node", "dist/main.js"]`
+cannot resolve its entrypoint.
+
+`yarn build` still exits 0. Nothing fails until a container will not start. This
+is how it was found: a staging deploy in an adopting project crash-looped with
+`MODULE_NOT_FOUND`, and the same defect was then confirmed latent in this
+baseline.
+
+**Check your project in one command:**
+
+```bash
+yarn build && ls dist/main.js
+```
+
+If that says "No such file" and `dist/src/main.js` exists instead, you have it.
+
+### The fix
+
+Copy `scripts/verify-build-artifacts.ts`, `scripts/verify-build-artifacts.spec.ts`
+and `scripts/build-config-contract.spec.ts`, then apply by hand — these are
+project-owned files an upgrade cannot overwrite for you:
+
+- **`tsconfig.build.json`** — add `"include": ["src/**/*"]`, and in
+  `compilerOptions` add `"rootDir": "./src"` and
+  `"tsBuildInfoFile": "./dist/tsconfig.build.tsbuildinfo"`. Add your tooling
+  directory to `exclude`.
+- **`package.json`** — add
+  `"postbuild": "ts-node --transpile-only scripts/verify-build-artifacts.ts"`,
+  and set jest `rootDir: "."` with `roots: ["<rootDir>/src", "<rootDir>/scripts"]`
+  (otherwise a spec under `scripts/` is collected by nothing and reports as
+  passing). Adjust `collectCoverageFrom` and `coverageDirectory` accordingly.
+- **`.dockerignore`** / **`.gitignore`** — add `**/*.tsbuildinfo` and
+  `*.tsbuildinfo`.
+- **`.github/workflows/test.yml`** — the `docker` job now runs the image it
+  builds, rather than only CVE-scanning it.
+
+`tsBuildInfoFile` is **not optional**. Pinning `rootDir` moves the incremental
+cache out of `dist/`, where `deleteOutDir` can no longer clear it; a stale cache
+then makes tsc emit nothing while exiting 0, so `yarn build` twice in a row
+yields assets with no code.
+
+Do **not** add your tooling directory to `.dockerignore`: `postbuild` runs inside
+the Docker build stage, so the check script must be in the build context.
+
+Rationale, alternatives, and the two self-inflicted defects found while fixing it:
+`docs/adr/0003-build-entrypoint-path-contract.md`.
+
+### Why the framework carries a project-build fix
+
+The framework's own file is the trigger. Shipping the validator without this
+warning means every adopter inherits a silent, deploy-breaking defect — so the
+warning belongs with the thing that causes it, even though the fix lives in
+project-owned files.
+
 ## 1.1.0 — 2026-08-06
 
 Additive and safe to copy over. Found by running `/work-item` on a real ticket in

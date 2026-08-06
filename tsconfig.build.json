@@ -1,5 +1,40 @@
 {
   "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Pin the emit root. Without this, tsc infers rootDir as the common
+    // ancestor of every included file, so the OUTPUT LAYOUT depends on which
+    // files happen to be in scope. Adding one .ts file outside src/ silently
+    // moves the application from dist/main.js to dist/src/main.js, and the
+    // container entrypoint (`CMD ["node", "dist/main.js"]`) then cannot resolve
+    // — a build that exits 0 and produces an image that crash-loops.
+    //
+    // Pinned, the layout is a property of this file rather than of the file
+    // tree. A stray source file outside src/ now fails the build loudly with
+    // "is not under rootDir", naming the file, instead of relocating the
+    // entrypoint and passing.
+    "rootDir": "./src",
+    // Keep the incremental cache inside dist/. This is NOT cosmetic: tsc
+    // derives the default cache path from `rootDir` relative to `outDir`, so
+    // pinning rootDir to ./src alone pushes it OUT of dist/ to the project
+    // root. There it survives nest-cli's `deleteOutDir`, and the next build
+    // sees an up-to-date cache against a dist/ that was just wiped — emitting
+    // nothing while exiting 0. `yarn build` twice in a row would produce assets
+    // with no compiled code.
+    "tsBuildInfoFile": "./dist/tsconfig.build.tsbuildinfo"
+  },
+  // Positive include: the build compiles src/ and nothing else. This is the
+  // primary mechanism and it ends the maintenance obligation that caused the
+  // repeat failures below — a new top-level .ts file is simply out of scope,
+  // with nobody needing to remember to blacklist it. `tsconfig.scripts.json`
+  // has always used this form; the asymmetry between the two configs WAS the
+  // defect.
+  //
+  // `rootDir` above remains the backstop, because `include` alone is not
+  // sufficient: TypeScript still pulls in any file reached by an import, so a
+  // stray `src → ../scripts/x` import would re-enter the program and rebase an
+  // unpinned rootDir. The exclude list below is a third layer, kept because
+  // `**/*spec.ts` is genuinely load-bearing (specs live inside src/).
+  "include": ["src/**/*"],
   "exclude": [
     "node_modules",
     "test",
@@ -12,6 +47,11 @@
     // which drags `prisma/` into the program and widens TypeScript's inferred
     // rootDir to the repo root — emitting `dist/src/main.js` and breaking
     // `start:prod` (`node dist/main`).
-    "prisma"
+    "prisma",
+    // Repository tooling (the Claude Engineering Framework validator and the
+    // build-artifact check). Run via ts-node and must never ship in the
+    // runtime image. Type-checked by tsconfig.scripts.json, which sets noEmit
+    // so it cannot write to dist/.
+    "scripts"
   ]
 }

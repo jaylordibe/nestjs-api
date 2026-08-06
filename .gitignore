@@ -3,6 +3,13 @@
 /node_modules
 /build
 
+# TypeScript incremental build cache. Once `rootDir` is pinned tsc writes it at
+# the project root, NOT inside dist/, so nest-cli's `deleteOutDir` cannot clear
+# it. A stale one plus a wiped dist/ makes tsc conclude there is nothing to
+# emit: the build exits 0 and produces assets with no code.
+# See docs/adr/0003-build-entrypoint-path-contract.md.
+*.tsbuildinfo
+
 # Logs
 logs
 *.log
