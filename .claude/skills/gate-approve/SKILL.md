@@ -109,7 +109,7 @@ that makes this approval real.
 
 ## 6. Handoff
 
-Follow `.claude/standards/gate-handoff.md`.
+Follow `.claude/standards/gate-handoff.md`, starting with its §0 mode table.
 
 On approval, offer to continue into `/gate-implement <adr>` in this session, or
 to stop so they run it themselves. Recommend stopping when the ADR is High or
@@ -117,3 +117,16 @@ Critical risk.
 
 On rejection there is no next gate. Say what would have to change for a new ADR
 to supersede this one, and stop.
+
+### This gate is not part of a `/work-item` run
+
+A live pipeline records its own approval inline at Stage 2, from an
+`ExitPlanMode` decision — see `.claude/skills/work-item/SKILL.md`. It does not
+route through this command, and it must not ask a second time after the user has
+already approved: that is one decision, presented twice.
+
+This skill is for an ADR that needs deciding **outside** that flow — designed in
+an earlier session, resumed after compaction, or written by `/gate-design`
+standalone. The security property is unchanged either way and lives in the
+frontmatter, not the routing: `disable-model-invocation: true` means Claude
+cannot invoke this skill, and no inline path lets a design approve itself.
