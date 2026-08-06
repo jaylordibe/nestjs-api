@@ -111,6 +111,8 @@ Unless the user explicitly requests the exact operation, Claude must not:
 
 Claude may prepare the diff, ADR, tests, evidence, migration files, release checklist, and handoff. The human owns approval, Git writes, risk acceptance, migration application, deployment, and production access.
 
+This list is enforced, not merely stated: `.claude/settings.json` denies the named command forms (Bash **and** PowerShell), and `.claude/hooks/guard-dangerous-commands.sh` catches the forms a prefix rule structurally cannot see — `git -C <path> commit`, `dotenv -e .env -- prisma migrate deploy`, `sudo npm publish`, `cat .env`. Neither layer is a sandbox; see `.claude/README.md` for what each one does and does not guarantee. Treat a refusal from either as the rule working, never as an obstacle to route around: if an operation genuinely needs to happen, say so and let the human run it.
+
 ## Project
 
 

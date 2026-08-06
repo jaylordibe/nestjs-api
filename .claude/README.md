@@ -213,6 +213,8 @@ slash-command menu:
 
 ### Hooks and validation
 
+- `hooks/guard-dangerous-commands.sh` — resolves the effective verb of every
+  subcommand and blocks human-owned operations a prefix rule cannot see.
 - `hooks/guard-protected-paths.sh` — path-specific `ask` with the precondition
   that path requires.
 - `hooks/format-changed-file.sh` — formats the single file just edited.
@@ -281,47 +283,85 @@ job:
 
 **1. `permissions.deny` — the hard floor.** Declarative, evaluated before every
 hook, and impossible to fail open. This is where `CLAUDE.md`'s *Human-owned
-operations* list is made real:
+operations* list is made real, **for the exact command forms it names**:
 
 - git history and publication writes (`commit`, `push`, `merge`, `rebase`,
-  `tag`, `reset`, `clean`, `stash`, `checkout`, `cherry-pick`, `revert`);
-- `gh pr create|merge|close|edit`, `gh release`, `gh workflow run`, `gh api`;
+  `tag`, `reset`, `clean`, `stash`, `checkout`, `cherry-pick`, `revert`, …);
+- `gh pr create|merge|close|edit|ready|review`, `gh release`, `gh workflow run`;
 - every migration application and database reset (`prisma migrate`, `prisma db
   push`, `yarn prisma:migrate|deploy|reset|seed`);
 - volume destruction (`docker compose down`, `docker volume rm|prune`) — use
   `yarn stack:down`, which is allowed and never passes `-v`;
 - package publication and image push;
-- reading or editing real environment files and private keys. `.env.test` and
-  `.env.example` stay readable — `/gate-validate` legitimately needs them;
-- Jira transition, field edit, update, delete, and assignment tools.
+- **the Read and Edit tools** against real environment files and private keys.
+  `.env.test` and `.env.example` stay readable — `/gate-validate` needs them.
+  A `Read(.env)` rule governs the Read *tool*; it says nothing about `cat .env`,
+  which is layer 3's job;
+- issue-tracker transition, field-edit, update, delete, and assignment tools.
+
+Every Bash rule is mirrored as a `PowerShell(...)` rule. The PowerShell tool is
+enabled by default on Windows without Git Bash, and `Bash(...)` rules do not
+govern it — an unmirrored floor simply disappears on those machines, with no
+warning anywhere. `yarn claude:validate` fails when the two lists diverge.
+
+MCP rules use a **glob server segment** — `mcp__*__transitionJiraIssue`, never
+`mcp__atlassian__…`. A tool is named `mcp__<server>__<tool>`, and `<server>` is
+whatever the adopting project called it in `.mcp.json`; a hardcoded name matches
+nothing in a project that named its server differently, so the tracker floor is
+absent while this document still promises it. Deny and ask rules accept a glob
+there (only *allow* rules require a literal server). The validator enforces it.
+Tool *names* still need one check per tracker: run `/mcp`, list the server's
+tools, and confirm the write verbs are covered.
 
 **2. `permissions.ask` — dual-use commands needing human judgment.** `psql`,
-`pg_dump`, `redis-cli`, `docker exec`, and Jira issue creation.
+`pg_dump`, `redis-cli`, `docker exec`, `gh api` (read or write depending on its
+method), `git branch|worktree` (list or delete), and issue creation.
 
-**3. Hooks — only where a *custom explanation* changes behavior.** A deny rule
-gives an anonymous refusal; a hook can teach the rule. Both live in
-`.claude/hooks/` as real scripts (syntax-checked in CI, `set -euo pipefail`,
-**fail closed** — an unavailable `jq` degrades to a prompt, never to silent
-approval):
+**3. Hooks — the layer that sees what a prefix rule cannot.** A `permissions`
+rule matches a command *prefix*, so it is structurally blind to the same
+operation written any other way:
 
+```text
+git -C /elsewhere commit -m x            flag before the verb
+dotenv -e .env -- prisma migrate deploy  environment runner (docs: not stripped)
+sudo npm publish                         privilege wrapper
+cat .env                                 the shell, not the Read tool
+```
+
+Hooks also teach: a deny rule gives an anonymous refusal, a hook explains the
+precondition. All three live in `.claude/hooks/` as real scripts — `set -euo
+pipefail`, syntax-checked and behaviour-tested in CI, and **fail closed**: an
+unavailable `jq` degrades to a prompt, never to silent approval.
+
+- `guard-dangerous-commands.sh` — parses every subcommand of a Bash or
+  PowerShell call, resolves the effective verb behind wrappers and runners, and
+  denies human-owned operations, credential reads, and unrecoverable removals.
+  Its git verb table is kept in lockstep with the deny rules by the validator;
 - `guard-protected-paths.sh` — `ask` before editing `prisma/migrations/**`,
   `prisma/schema.prisma`, auth/authorization surfaces, or the error contract,
   each with the specific precondition that path requires;
 - `format-changed-file.sh` — formats and auto-fixes the single `.ts` file just
   edited, so lint stays green continuously.
 
+**None of this is a sandbox, and it must not be described as one.** A shell can
+always express an operation the parser does not model — a verb built from a
+variable, an operation inside a script file, a here-doc. Layer 1 cannot fail
+open but only sees the forms it names; layer 3 sees far more forms but is
+executable code that can fail. They are complementary, and neither is a
+boundary. For a real boundary use OS sandboxing or a container.
+
 Precedence is `deny` → `ask` → `allow`, first match wins, and a deny rule cannot
 carry an exception. Deny rules in this file override any allow rule a developer
-adds in their own `settings.local.json`.
+adds in their own `settings.local.json`. A `PreToolUse` hook cannot loosen them
+either: Claude Code evaluates deny and ask rules regardless of what a hook
+returns.
 
 > **Note on file rules:** Claude Code checks file permissions against `Edit()`
-> and `Read()` only. A `Write(...)` rule is accepted, never consulted, and warns
-> at startup. Always write `Edit(...)`.
-
-`yarn claude:validate` checks the hook scripts exist, parse, and are executable.
-Re-verify the MCP matcher names whenever the tracker server changes: the Jira
-deny patterns are written as case-tolerant globs, but a server that renames its
-tools to a different shape would slip through.
+> and `Read()` only. A `Write(...)`, `NotebookEdit(...)`, `MultiEdit(...)` or
+> `Glob(...)` path rule is accepted, never consulted, and warns at startup —
+> the worst failure shape available, because the file reads as protected. Use
+> `Edit(...)` and `Read(...)`. The validator rejects the inert forms in all
+> three tiers.
 
 ## Issue tracker setup
 
@@ -356,9 +396,35 @@ ship with a guardrail; this is the tooling's own.
 
 `scripts/validate-claude-config.ts` checks frontmatter against the documented
 schema, skill/agent name agreement, collisions with built-in commands, the
-1,536-character skill-listing cap, cross-reference resolution, doc-vs-code symbol
-drift, dead `Write()` permission rules, and hook scripts that are missing,
-unparseable, or not executable. It runs in CI beside `yarn lint`.
+1,536-character skill-listing cap, cross-reference resolution, and doc-vs-code
+symbol drift.
+
+It also enforces the guardrails above, each of which was a real defect here
+before it was a check:
+
+- every agent is read-only, judged by its **effective tool pool** rather than by
+  a phrase in its prose. The earlier probe searched for the sentence "Never edit
+  files", so it passed the three agents that had neither the sentence nor the
+  restriction — silence read as compliance. A check that cannot catch an
+  omission is not a check;
+- the required deny floor is present, so deleting one line cannot quietly
+  retract a promise that `CLAUDE.md` still makes;
+- `Bash` and `PowerShell` deny/ask rules stay mirrored;
+- MCP rules use a glob server segment, so the tracker floor survives being
+  copied into a project that named its server differently;
+- the guard hook's git verb table matches the deny rules;
+- dead `Write()`/`Glob()`/`NotebookEdit()`/`MultiEdit()` path rules in any tier;
+- hook scripts exist, parse, are executable, and are actually referenced by
+  `settings.json` — an unwired script still reads as an active guard;
+- **the guard hook decides correctly**, against a fixture table of about forty
+  commands. `bash -n` and `chmod +x` prove a hook runs, not that it is right,
+  and a hook that crashes exits non-zero, which Claude Code treats as a
+  non-blocking error — so a broken guard fails *open*. The table covers the
+  wrapper and flag-bearing forms, the parser regressions found while writing it,
+  and ordinary commands such as `yarn build` that must never prompt: a guard
+  that nags gets switched off within a day, and then it protects nothing.
+
+It runs in CI beside `yarn lint`.
 
 Restart Claude Code after adding or replacing skills and agents.
 

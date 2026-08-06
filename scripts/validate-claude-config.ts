@@ -24,6 +24,7 @@ const SUPPORTED_SKILL_KEYS = new Set([
   'description',
   'when_to_use',
   'argument-hint',
+  'arguments',
   'allowed-tools',
   'disallowed-tools',
   'disable-model-invocation',
@@ -31,10 +32,19 @@ const SUPPORTED_SKILL_KEYS = new Set([
   'model',
   'effort',
   'context',
+  'agent',
+  'background',
+  'hooks',
+  'paths',
+  'shell',
+  'compatibility',
   'license',
   'version',
   'metadata',
 ]);
+
+/** Tools that can modify a file. An agent holding any of these is not read-only. */
+const FILE_MUTATING_TOOL_NAMES = ['Edit', 'Write', 'NotebookEdit', 'MultiEdit'];
 
 /** Frontmatter keys Claude Code recognises on a `.claude/agents/*.md` subagent. */
 const SUPPORTED_AGENT_KEYS = new Set([
@@ -173,7 +183,10 @@ function parseFrontmatter(
 ): Record<string, string> | null {
   const lines = fileContent.split('\n');
   if (lines[0]?.trim() !== '---') {
-    reportViolation(filePath, 'missing YAML frontmatter (file must start with `---`)');
+    reportViolation(
+      filePath,
+      'missing YAML frontmatter (file must start with `---`)',
+    );
     return null;
   }
 
@@ -190,7 +203,10 @@ function parseFrontmatter(
     }
     const separatorIndex = line.indexOf(':');
     if (separatorIndex === -1) {
-      reportViolation(filePath, `frontmatter line is not \`key: value\`: "${line.trim()}"`);
+      reportViolation(
+        filePath,
+        `frontmatter line is not \`key: value\`: "${line.trim()}"`,
+      );
       continue;
     }
     const key = line.slice(0, separatorIndex).trim();
@@ -203,7 +219,10 @@ function parseFrontmatter(
 
 function validateSkill(skillFilePath: string): void {
   const skillDirectoryName = basename(dirname(skillFilePath));
-  const frontmatter = parseFrontmatter(skillFilePath, readFileSync(skillFilePath, 'utf8'));
+  const frontmatter = parseFrontmatter(
+    skillFilePath,
+    readFileSync(skillFilePath, 'utf8'),
+  );
   if (frontmatter === null) {
     return;
   }
@@ -251,11 +270,15 @@ function validateSkill(skillFilePath: string): void {
   }
 
   if (!frontmatter.description) {
-    reportViolation(skillFilePath, 'missing `description` — Claude uses it to decide when to load the skill');
+    reportViolation(
+      skillFilePath,
+      'missing `description` — Claude uses it to decide when to load the skill',
+    );
   }
 
   const listingLength =
-    (frontmatter.description?.length ?? 0) + (frontmatter.when_to_use?.length ?? 0);
+    (frontmatter.description?.length ?? 0) +
+    (frontmatter.when_to_use?.length ?? 0);
   if (listingLength > SKILL_LISTING_CHARACTER_CAP) {
     reportViolation(
       skillFilePath,
@@ -279,7 +302,10 @@ function validateSkill(skillFilePath: string): void {
 
 function validateAgent(agentFilePath: string): void {
   const agentFileStem = basename(agentFilePath, '.md');
-  const frontmatter = parseFrontmatter(agentFilePath, readFileSync(agentFilePath, 'utf8'));
+  const frontmatter = parseFrontmatter(
+    agentFilePath,
+    readFileSync(agentFilePath, 'utf8'),
+  );
   if (frontmatter === null) {
     return;
   }
@@ -303,7 +329,10 @@ function validateAgent(agentFilePath: string): void {
   }
 
   if (frontmatter.name?.includes(':')) {
-    reportViolation(agentFilePath, '`name` contains `:`, which is reserved for plugin-scoped identifiers — Claude Code refuses to load the file');
+    reportViolation(
+      agentFilePath,
+      '`name` contains `:`, which is reserved for plugin-scoped identifiers — Claude Code refuses to load the file',
+    );
   }
 
   if (!frontmatter.description) {
@@ -318,18 +347,68 @@ function validateAgent(agentFilePath: string): void {
     reportViolation(agentFilePath, `invalid \`color: ${frontmatter.color}\``);
   }
 
-  const declaresReadOnlyIntent = readFileSync(agentFilePath, 'utf8').includes('Never edit files');
-  const deniesWriteTools = (frontmatter.disallowedTools ?? '').includes('Edit');
-  if (declaresReadOnlyIntent && !deniesWriteTools) {
+  validateAgentIsReadOnly(agentFilePath, frontmatter);
+}
+
+/**
+ * `.claude/README.md` states the invariant plainly: "Agents are read-only. The
+ * main conversation verifies findings and owns any approved remediation." Every
+ * review lens in this repository depends on it — an agent that can edit could
+ * silently fix what it was asked to judge, and its finding would then describe
+ * code that no longer exists.
+ *
+ * This deliberately checks the *tool pool* rather than searching the prose for a
+ * phrase like "Never edit files". A prose probe only fires on agents that
+ * happen to use the exact wording, so it passes an agent that forgot both the
+ * sentence and the restriction — silence reads as compliance. Three of the
+ * eight agents here were in exactly that state. A guardrail that cannot catch
+ * an omission is not a guardrail.
+ */
+function validateAgentIsReadOnly(
+  agentFilePath: string,
+  frontmatter: Record<string, string>,
+): void {
+  const splitToolList = (rawValue: string | undefined): string[] =>
+    (rawValue ?? '')
+      .split(/[,\s]+/)
+      .map((toolName) => toolName.trim())
+      .filter((toolName) => toolName.length > 0);
+
+  const grantedTools = splitToolList(frontmatter.tools);
+  const deniedTools = splitToolList(frontmatter.disallowedTools);
+
+  if (grantedTools.length === 0) {
     reportViolation(
       agentFilePath,
-      'agent states "Never edit files" but does not set `disallowedTools: Edit, Write, NotebookEdit`. `permissionMode: plan` alone is overridden when the parent session runs acceptEdits/bypassPermissions',
+      'no `tools` allowlist — the agent inherits every tool available to subagents, including Edit and Write. Declare the read-only set explicitly',
+    );
+    return;
+  }
+
+  const grantedMutatingTools = grantedTools.filter((toolName) =>
+    FILE_MUTATING_TOOL_NAMES.includes(toolName),
+  );
+  if (grantedMutatingTools.length > 0) {
+    reportViolation(
+      agentFilePath,
+      `grants file-mutating tool(s) ${grantedMutatingTools.join(', ')} — .claude/README.md states every agent here is read-only, and a reviewer that can edit the code it judges invalidates its own finding`,
+    );
+  }
+
+  const missingDenials = FILE_MUTATING_TOOL_NAMES.filter(
+    (toolName) => toolName !== 'MultiEdit' && !deniedTools.includes(toolName),
+  );
+  if (missingDenials.length > 0) {
+    reportViolation(
+      agentFilePath,
+      `\`disallowedTools\` omits ${missingDenials.join(', ')}. The \`tools\` allowlist already excludes them today, so this is belt-and-braces — but it is what keeps the agent read-only if someone later widens \`tools\`, and \`permissionMode: plan\` does not help: it is overridden when the parent session runs acceptEdits or bypassPermissions`,
     );
   }
 }
 
 /** Backticked path references, e.g. `src/common/errors/README.md` or `references/harness.md`. */
-const PATH_REFERENCE_PATTERN = /`([A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:md|ts|json|prisma|ya?ml|sh))`/g;
+const PATH_REFERENCE_PATTERN =
+  /`([A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:md|ts|json|prisma|ya?ml|sh))`/g;
 
 /** Backticked NestJS-shaped symbols whose disappearance would leave a skill quoting dead code. */
 const SYMBOL_REFERENCE_PATTERN =
@@ -347,7 +426,8 @@ const PLACEHOLDER_PATTERN = /NNNN|<[^>]+>|\*|\{|\[/;
  * Treating a prohibition as drift would train the next contributor to delete
  * the very rule that prevents it.
  */
-const COUNTER_EXAMPLE_PATTERN = /\bnever\b|\bnot\b|\bno\b|instead|→|->|banned|avoid|prohibit|wrong|deprecat/i;
+const COUNTER_EXAMPLE_PATTERN =
+  /\bnever\b|\bnot\b|\bno\b|instead|→|->|banned|avoid|prohibit|wrong|deprecat/i;
 
 function findEnclosingLine(fileContent: string, matchIndex: number): string {
   const lineStart = fileContent.lastIndexOf('\n', matchIndex) + 1;
@@ -360,10 +440,15 @@ function validateCrossReferences(markdownFilePath: string): void {
 
   for (const match of fileContent.matchAll(PATH_REFERENCE_PATTERN)) {
     const referencedPath = match[1];
-    if (PLACEHOLDER_PATTERN.test(referencedPath) || !referencedPath.includes('/')) {
+    if (
+      PLACEHOLDER_PATTERN.test(referencedPath) ||
+      !referencedPath.includes('/')
+    ) {
       continue;
     }
-    if (COUNTER_EXAMPLE_PATTERN.test(findEnclosingLine(fileContent, match.index))) {
+    if (
+      COUNTER_EXAMPLE_PATTERN.test(findEnclosingLine(fileContent, match.index))
+    ) {
       continue;
     }
 
@@ -380,13 +465,18 @@ function validateCrossReferences(markdownFilePath: string): void {
     );
 
     if (!resolvesSomewhere) {
-      reportViolation(markdownFilePath, `references a path that does not exist: \`${referencedPath}\``);
+      reportViolation(
+        markdownFilePath,
+        `references a path that does not exist: \`${referencedPath}\``,
+      );
     }
   }
 
   for (const match of fileContent.matchAll(SYMBOL_REFERENCE_PATTERN)) {
     const referencedSymbol = match[1];
-    if (COUNTER_EXAMPLE_PATTERN.test(findEnclosingLine(fileContent, match.index))) {
+    if (
+      COUNTER_EXAMPLE_PATTERN.test(findEnclosingLine(fileContent, match.index))
+    ) {
       continue;
     }
     if (!symbolExistsInSource(referencedSymbol)) {
@@ -422,7 +512,8 @@ function symbolExistsInSource(symbolName: string): boolean {
 }
 
 /** Lifecycle states an ADR's `Status:` line may hold. See `docs/adr/README.md`. */
-const TERMINAL_ADR_STATUS_PATTERN = /^(DRAFT|PROPOSED|ACCEPTED|REJECTED|SUPERSEDED by \d{4})$/;
+const TERMINAL_ADR_STATUS_PATTERN =
+  /^(DRAFT|PROPOSED|ACCEPTED|REJECTED|SUPERSEDED by \d{4})$/;
 
 const ADR_FILENAME_PATTERN = /^\d{4}-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/;
 
@@ -471,7 +562,10 @@ function validateArchitecturalDecisionRecord(adrFilePath: string): void {
   const declaredStatus = readLabelledValue(headerSection, 'Status');
 
   if (!declaredStatus) {
-    reportViolation(adrFilePath, 'missing a `- **Status:**` line — the gates resume by reading it');
+    reportViolation(
+      adrFilePath,
+      'missing a `- **Status:**` line — the gates resume by reading it',
+    );
     return;
   }
 
@@ -485,7 +579,10 @@ function validateArchitecturalDecisionRecord(adrFilePath: string): void {
 
   const approvalSection = extractSection(fileContent, /^## 15\. Approval\s*$/m);
   if (!approvalSection) {
-    reportViolation(adrFilePath, 'missing `## 15. Approval` — approval has nowhere to be recorded');
+    reportViolation(
+      adrFilePath,
+      'missing `## 15. Approval` — approval has nowhere to be recorded',
+    );
     return;
   }
 
@@ -501,10 +598,16 @@ function validateArchitecturalDecisionRecord(adrFilePath: string): void {
       );
     }
     if (!recordedApprover) {
-      reportViolation(adrFilePath, '`Status: ACCEPTED` but §15 `Approved by:` is empty — an approval with no approver is not an audit trail');
+      reportViolation(
+        adrFilePath,
+        '`Status: ACCEPTED` but §15 `Approved by:` is empty — an approval with no approver is not an audit trail',
+      );
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(recordedApprovalDate)) {
-      reportViolation(adrFilePath, '`Status: ACCEPTED` but §15 `Date:` is empty or not YYYY-MM-DD');
+      reportViolation(
+        adrFilePath,
+        '`Status: ACCEPTED` but §15 `Date:` is empty or not YYYY-MM-DD',
+      );
     }
     return;
   }
@@ -516,7 +619,11 @@ function validateArchitecturalDecisionRecord(adrFilePath: string): void {
     );
   }
 
-  if (declaredStatus === 'DRAFT' && recordedDecision && recordedDecision !== 'Pending') {
+  if (
+    declaredStatus === 'DRAFT' &&
+    recordedDecision &&
+    recordedDecision !== 'Pending'
+  ) {
     reportViolation(
       adrFilePath,
       `\`Status: DRAFT\` means the design is unfinished, so §15 must stay \`Pending\` (found \`${recordedDecision}\`)`,
@@ -524,33 +631,248 @@ function validateArchitecturalDecisionRecord(adrFilePath: string): void {
   }
 }
 
+interface ClaudeCodeSettings {
+  readonly hooks?: Record<string, { hooks?: { command?: string }[] }[]>;
+  readonly permissions?: { deny?: string[]; ask?: string[]; allow?: string[] };
+}
+
 function validateSettingsAndHooks(): void {
   const settingsPath = join(claudeDirectory, 'settings.json');
   if (!existsSync(settingsPath)) {
-    reportViolation(settingsPath, 'missing — the shared permission floor and hooks live here');
+    reportViolation(
+      settingsPath,
+      'missing — the shared permission floor and hooks live here',
+    );
     return;
   }
 
-  let settings: {
-    hooks?: Record<string, { hooks?: { command?: string }[] }[]>;
-    permissions?: { deny?: string[]; ask?: string[]; allow?: string[] };
+  let settings: ClaudeCodeSettings;
+  try {
+    settings = JSON.parse(
+      readFileSync(settingsPath, 'utf8'),
+    ) as ClaudeCodeSettings;
+  } catch (parseError) {
+    reportViolation(
+      settingsPath,
+      `is not valid JSON: ${(parseError as Error).message}`,
+    );
+    return;
+  }
+
+  validateFilePermissionRuleShapes(settingsPath, settings);
+  validateRequiredDenyFloor(settingsPath, settings);
+  validateShellRuleParity(settingsPath, settings);
+  validateIssueTrackerRulePortability(settingsPath, settings);
+  validateGitDenyMatchesGuardHook(settingsPath, settings);
+  validateHookScripts(settingsPath, settings);
+}
+
+/**
+ * Claude Code checks file permissions against `Edit(path)` and `Read(path)`
+ * only. A `Write(...)`, `NotebookEdit(...)`, `MultiEdit(...)` or `Glob(...)`
+ * path rule is accepted, warned about at startup, and then never consulted —
+ * the most dangerous failure shape there is, because the file reads as
+ * protected. Checked across all three arrays, not just `deny`: a `Write()`
+ * entry in `allow` is equally inert and equally misleading.
+ */
+function validateFilePermissionRuleShapes(
+  settingsPath: string,
+  settings: ClaudeCodeSettings,
+): void {
+  const inertPathRuleTools: Record<string, string> = {
+    Write: 'Edit',
+    NotebookEdit: 'Edit',
+    MultiEdit: 'Edit',
+    Glob: 'Read',
   };
 
-  try {
-    settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
-  } catch (parseError) {
-    reportViolation(settingsPath, `is not valid JSON: ${(parseError as Error).message}`);
-    return;
+  for (const [tier, permissionRules] of Object.entries(
+    settings.permissions ?? {},
+  )) {
+    for (const permissionRule of permissionRules) {
+      const ruleToolName = /^([A-Za-z]+)\(/.exec(permissionRule)?.[1];
+      const replacementToolName = ruleToolName
+        ? inertPathRuleTools[ruleToolName]
+        : undefined;
+      if (replacementToolName) {
+        reportViolation(
+          settingsPath,
+          `${tier} rule \`${permissionRule}\` is never consulted — Claude Code checks file permissions against Edit() and Read() only. Use ${replacementToolName}(...)`,
+        );
+      }
+    }
   }
+}
 
-  for (const permissionRule of settings.permissions?.deny ?? []) {
-    if (/^Write\(/.test(permissionRule)) {
+/**
+ * `CLAUDE.md`'s *Human-owned operations* list is a promise to the developer.
+ * Without this check, deleting one line from `settings.json` quietly retracts
+ * the promise while every document still asserts it.
+ */
+const REQUIRED_DENY_RULES = [
+  'Bash(git commit *)',
+  'Bash(git push *)',
+  'Bash(yarn prisma:deploy *)',
+  'Bash(yarn prisma:reset *)',
+  'Bash(prisma migrate *)',
+  'Bash(docker volume rm *)',
+  'Read(.env)',
+  'Edit(.env)',
+];
+
+function validateRequiredDenyFloor(
+  settingsPath: string,
+  settings: ClaudeCodeSettings,
+): void {
+  const denyRules = new Set(settings.permissions?.deny ?? []);
+  for (const requiredRule of REQUIRED_DENY_RULES) {
+    if (!denyRules.has(requiredRule)) {
       reportViolation(
         settingsPath,
-        `deny rule \`${permissionRule}\` is never consulted — Claude Code checks file permissions against Edit() and Read() only. Use Edit(...)`,
+        `missing required deny rule \`${requiredRule}\` — CLAUDE.md reserves this operation for the human, and prose alone does not stop it`,
       );
     }
   }
+}
+
+/**
+ * `Bash(...)` rules do not apply to the PowerShell tool, which is enabled by
+ * default on Windows without Git Bash. A floor that exists only for Bash simply
+ * vanishes on those machines, silently, with no warning anywhere.
+ *
+ * Only `deny` and `ask` are mirrored. A missing `allow` costs an extra prompt;
+ * a missing `deny` costs the guarantee.
+ */
+function validateShellRuleParity(
+  settingsPath: string,
+  settings: ClaudeCodeSettings,
+): void {
+  for (const tier of ['deny', 'ask'] as const) {
+    const permissionRules = settings.permissions?.[tier] ?? [];
+    const patternsFor = (toolName: string): Set<string> =>
+      new Set(
+        permissionRules
+          .filter((rule) => rule.startsWith(`${toolName}(`))
+          .map((rule) => rule.slice(toolName.length + 1, -1)),
+      );
+
+    const bashPatterns = patternsFor('Bash');
+    const powerShellPatterns = patternsFor('PowerShell');
+
+    for (const pattern of bashPatterns) {
+      if (!powerShellPatterns.has(pattern)) {
+        reportViolation(
+          settingsPath,
+          `${tier} rule \`Bash(${pattern})\` has no \`PowerShell(${pattern})\` counterpart — Bash rules do not govern the PowerShell tool, which is on by default on Windows without Git Bash`,
+        );
+      }
+    }
+    for (const pattern of powerShellPatterns) {
+      if (!bashPatterns.has(pattern)) {
+        reportViolation(
+          settingsPath,
+          `${tier} rule \`PowerShell(${pattern})\` has no \`Bash(${pattern})\` counterpart — the two shells must carry the same floor`,
+        );
+      }
+    }
+  }
+}
+
+/**
+ * The portability bug this repository exists to avoid shipping.
+ *
+ * An MCP tool is named `mcp__<server>__<tool>`, and `<server>` is whatever the
+ * adopting project called it in `.mcp.json`. A rule hardcoding `mcp__atlassian__`
+ * matches nothing in a project whose server is `atlassian-acme` — the tracker
+ * floor is simply absent, while `.claude/README.md` still promises it. Deny and
+ * ask rules accept a glob in the server segment (only *allow* rules require it
+ * to be literal), so `mcp__*__` is both correct and portable.
+ */
+function validateIssueTrackerRulePortability(
+  settingsPath: string,
+  settings: ClaudeCodeSettings,
+): void {
+  for (const tier of ['deny', 'ask'] as const) {
+    for (const permissionRule of settings.permissions?.[tier] ?? []) {
+      if (!permissionRule.startsWith('mcp__')) {
+        continue;
+      }
+      const serverSegment = permissionRule.split('__')[1];
+      if (serverSegment !== '*') {
+        reportViolation(
+          settingsPath,
+          `${tier} rule \`${permissionRule}\` hardcodes the MCP server name \`${serverSegment}\`. This is a starter template: a project that names its server differently gets no rule at all, silently. Use \`mcp__*__<tool>\``,
+        );
+      }
+    }
+  }
+}
+
+/**
+ * The guard hook and the deny floor cover the same Git verbs by two different
+ * mechanisms, and each catches forms the other cannot. Letting them drift means
+ * one list quietly becomes the real policy while the other is read as if it
+ * still applied.
+ */
+function validateGitDenyMatchesGuardHook(
+  settingsPath: string,
+  settings: ClaudeCodeSettings,
+): void {
+  const guardHookPath = join(
+    claudeDirectory,
+    'hooks',
+    'guard-dangerous-commands.sh',
+  );
+  if (!existsSync(guardHookPath)) {
+    reportViolation(
+      guardHookPath,
+      'missing — it is the only layer that sees `git -C <path> commit` and other non-prefix forms',
+    );
+    return;
+  }
+
+  const hookSource = readFileSync(guardHookPath, 'utf8');
+  const declaredTable = /GIT_HUMAN_OWNED_SUBCOMMANDS='([^']*)'/.exec(
+    hookSource,
+  )?.[1];
+  if (declaredTable === undefined) {
+    reportViolation(
+      guardHookPath,
+      'GIT_HUMAN_OWNED_SUBCOMMANDS is no longer a single-quoted literal, so its parity with settings.json can no longer be checked',
+    );
+    return;
+  }
+
+  const hookSubcommands = new Set(declaredTable.split(/\s+/).filter(Boolean));
+  const deniedSubcommands = new Set(
+    (settings.permissions?.deny ?? [])
+      .map((rule) => /^Bash\(git ([a-z-]+) \*\)$/.exec(rule)?.[1])
+      .filter((subcommand): subcommand is string => subcommand !== undefined),
+  );
+
+  for (const subcommand of hookSubcommands) {
+    if (!deniedSubcommands.has(subcommand)) {
+      reportViolation(
+        settingsPath,
+        `the guard hook denies \`git ${subcommand}\` but there is no \`Bash(git ${subcommand} *)\` deny rule. The hook can fail; the deny rule cannot — keep both`,
+      );
+    }
+  }
+  for (const subcommand of deniedSubcommands) {
+    if (!hookSubcommands.has(subcommand)) {
+      reportViolation(
+        guardHookPath,
+        `settings.json denies \`git ${subcommand}\` but GIT_HUMAN_OWNED_SUBCOMMANDS omits it, so \`git -C <path> ${subcommand}\` is not covered`,
+      );
+    }
+  }
+}
+
+function validateHookScripts(
+  settingsPath: string,
+  settings: ClaudeCodeSettings,
+): void {
+  const referencedScriptPaths = new Set<string>();
 
   for (const hookEventGroups of Object.values(settings.hooks ?? {})) {
     for (const hookGroup of hookEventGroups) {
@@ -560,36 +882,203 @@ function validateSettingsAndHooks(): void {
           continue;
         }
 
-        const hookScriptPath = hookCommand.replace('${CLAUDE_PROJECT_DIR}', repositoryRoot).trim();
+        const hookScriptPath = hookCommand
+          .replace('${CLAUDE_PROJECT_DIR}', repositoryRoot)
+          .trim();
+        referencedScriptPaths.add(hookScriptPath);
+
         if (!existsSync(hookScriptPath)) {
-          reportViolation(settingsPath, `hook script does not exist: ${hookCommand}`);
+          reportViolation(
+            settingsPath,
+            `hook script does not exist: ${hookCommand}`,
+          );
           continue;
         }
 
         try {
           execFileSync('bash', ['-n', hookScriptPath], { stdio: 'ignore' });
         } catch {
-          reportViolation(hookScriptPath, 'hook script has a bash syntax error — it would fail open at runtime');
+          reportViolation(
+            hookScriptPath,
+            'hook script has a bash syntax error — it would fail open at runtime',
+          );
         }
 
         try {
           execFileSync('test', ['-x', hookScriptPath], { stdio: 'ignore' });
         } catch {
-          reportViolation(hookScriptPath, 'hook script is not executable (chmod +x)');
+          reportViolation(
+            hookScriptPath,
+            'hook script is not executable (chmod +x)',
+          );
         }
       }
+    }
+  }
+
+  // An unreferenced script reads as an active guard to anyone browsing the
+  // directory, which is exactly how a protection is believed to exist after it
+  // was unwired.
+  const hooksDirectory = join(claudeDirectory, 'hooks');
+  if (!existsSync(hooksDirectory)) {
+    return;
+  }
+  for (const entryName of readdirSync(hooksDirectory)) {
+    if (!entryName.endsWith('.sh')) {
+      continue;
+    }
+    const scriptPath = join(hooksDirectory, entryName);
+    if (!referencedScriptPaths.has(scriptPath)) {
+      reportViolation(
+        scriptPath,
+        'exists but no hook in settings.json invokes it — an unwired guard still reads as an active one. Register it or delete it',
+      );
+    }
+  }
+}
+
+/**
+ * Fixture table for `guard-dangerous-commands.sh`.
+ *
+ * A hook is the one piece of this directory that is real executable logic
+ * rather than declarative configuration, so `bash -n` and `chmod +x` prove
+ * nothing about whether it *decides* correctly. Every row here is a form that a
+ * prefix-anchored `permissions.deny` rule cannot see, a regression from a
+ * parser bug found while writing the guard, or an ordinary command that must
+ * stay unprompted — a guard that blocks `yarn build` gets switched off within a
+ * day, and then it protects nothing.
+ */
+const GUARD_HOOK_DECISION_FIXTURES: readonly {
+  command: string;
+  expected: string;
+}[] = [
+  // Human-owned Git writes hidden behind flags, wrappers, and separators.
+  { command: 'git commit -m "x"', expected: 'deny' },
+  { command: 'git -C /elsewhere commit -m x', expected: 'deny' },
+  { command: 'yarn lint && git push origin main', expected: 'deny' },
+  { command: 'timeout 30 git reset --hard origin/main', expected: 'deny' },
+  { command: 'echo $(git stash)', expected: 'deny' },
+  // Migration application behind environment runners the docs do not strip.
+  { command: 'dotenv -e .env -- prisma migrate deploy', expected: 'deny' },
+  { command: 'npx -y prisma migrate reset', expected: 'deny' },
+  { command: 'yarn prisma:deploy', expected: 'deny' },
+  { command: 'yarn prisma migrate dev', expected: 'deny' },
+  // Publication and volume destruction.
+  { command: 'sudo npm publish', expected: 'deny' },
+  { command: 'docker volume rm app_pgdata', expected: 'deny' },
+  { command: 'docker compose down -v', expected: 'deny' },
+  { command: 'gh pr create --fill', expected: 'deny' },
+  { command: 'dropdb app_local', expected: 'deny' },
+  // Credential exposure through the shell, which Read() rules never see.
+  { command: 'cat .env', expected: 'deny' },
+  { command: 'grep DATABASE_URL .env', expected: 'deny' },
+  { command: 'cat < .env', expected: 'deny' },
+  { command: 'cat ~/.ssh/id_rsa', expected: 'deny' },
+  { command: 'source .env', expected: 'deny' },
+  // Unrecoverable removals.
+  { command: 'rm -rf /', expected: 'deny' },
+  { command: 'rm -rf ~', expected: 'deny' },
+  // Dual-use: a human decides.
+  { command: 'gh api /repos/o/r/pulls', expected: 'ask' },
+  { command: 'psql -h localhost -c "select 1"', expected: 'ask' },
+  { command: 'docker exec -it api sh', expected: 'ask' },
+  { command: 'git branch -D feature/x', expected: 'ask' },
+  { command: 'ls -la .env', expected: 'ask' },
+  { command: 'rm -rf /usr', expected: 'ask' },
+  // Ordinary work must never prompt.
+  { command: 'yarn build', expected: 'allow' },
+  { command: 'yarn test:e2e --testPathPattern users', expected: 'allow' },
+  { command: 'yarn prisma:generate', expected: 'allow' },
+  { command: 'git status --short', expected: 'allow' },
+  { command: 'git log --oneline -20', expected: 'allow' },
+  { command: 'git diff HEAD', expected: 'allow' },
+  { command: 'cat .env.example', expected: 'allow' },
+  { command: 'grep -n SERVICE_NAME .env.test', expected: 'allow' },
+  { command: 'echo "remember to run git push yourself"', expected: 'allow' },
+  { command: 'rm -rf node_modules', expected: 'allow' },
+  { command: 'docker compose up -d', expected: 'allow' },
+  { command: 'npx prisma generate', expected: 'allow' },
+];
+
+function validateGuardHookBehaviour(): void {
+  const guardHookPath = join(
+    claudeDirectory,
+    'hooks',
+    'guard-dangerous-commands.sh',
+  );
+  if (!existsSync(guardHookPath)) {
+    return; // Absence is already reported by validateGitDenyMatchesGuardHook.
+  }
+
+  // Without jq the hook fails closed to `ask` on every input — correct at
+  // runtime, but it would turn this table into forty identical failures that
+  // say nothing about the guard. Report the missing prerequisite once instead.
+  try {
+    execFileSync('jq', ['--version'], { stdio: 'ignore' });
+  } catch {
+    reportViolation(
+      guardHookPath,
+      'cannot be behaviour-tested because jq is not installed. The hook itself fails closed to a prompt without it, but its decisions are unverified here — install jq (brew install jq / apt-get install jq)',
+    );
+    return;
+  }
+
+  for (const fixture of GUARD_HOOK_DECISION_FIXTURES) {
+    let hookOutput: string;
+    try {
+      hookOutput = execFileSync('bash', [guardHookPath], {
+        input: JSON.stringify({ tool_input: { command: fixture.command } }),
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch (executionError) {
+      reportViolation(
+        guardHookPath,
+        `crashed on \`${fixture.command}\` — a non-zero exit is treated as a non-blocking error, so the call would be ALLOWED: ${(executionError as Error).message.split('\n')[0]}`,
+      );
+      continue;
+    }
+
+    let actualDecision = 'allow';
+    if (hookOutput.trim() !== '') {
+      try {
+        actualDecision =
+          (
+            JSON.parse(hookOutput) as {
+              hookSpecificOutput?: { permissionDecision?: string };
+            }
+          ).hookSpecificOutput?.permissionDecision ?? 'allow';
+      } catch {
+        reportViolation(
+          guardHookPath,
+          `emitted output that is not a single JSON object for \`${fixture.command}\` — Claude Code cannot parse a decision from it, so the call would be ALLOWED: ${hookOutput.trim().slice(0, 120)}`,
+        );
+        continue;
+      }
+    }
+
+    if (actualDecision !== fixture.expected) {
+      reportViolation(
+        guardHookPath,
+        `decided \`${actualDecision}\` for \`${fixture.command}\`, expected \`${fixture.expected}\``,
+      );
     }
   }
 }
 
 function main(): void {
-  const skillFiles = listMarkdownFilesRecursively(join(claudeDirectory, 'skills')).filter(
-    (filePath) => basename(filePath) === 'SKILL.md',
+  const skillFiles = listMarkdownFilesRecursively(
+    join(claudeDirectory, 'skills'),
+  ).filter((filePath) => basename(filePath) === 'SKILL.md');
+  const agentFiles = listMarkdownFilesRecursively(
+    join(claudeDirectory, 'agents'),
   );
-  const agentFiles = listMarkdownFilesRecursively(join(claudeDirectory, 'agents'));
 
   if (skillFiles.length === 0) {
-    reportViolation(claudeDirectory, 'no skills found — expected .claude/skills/*/SKILL.md');
+    reportViolation(
+      claudeDirectory,
+      'no skills found — expected .claude/skills/*/SKILL.md',
+    );
   }
 
   skillFiles.forEach(validateSkill);
@@ -602,14 +1091,18 @@ function main(): void {
   crossReferencedFiles.forEach(validateCrossReferences);
 
   validateSettingsAndHooks();
+  validateGuardHookBehaviour();
 
-  const adrFiles = listMarkdownFilesRecursively(join(repositoryRoot, 'docs', 'adr')).filter(
-    (filePath) => basename(filePath) !== 'README.md',
-  );
+  const adrFiles = listMarkdownFilesRecursively(
+    join(repositoryRoot, 'docs', 'adr'),
+  ).filter((filePath) => basename(filePath) !== 'README.md');
   adrFiles.forEach(validateArchitecturalDecisionRecord);
 
   const checkedCount =
-    skillFiles.length + agentFiles.length + crossReferencedFiles.length + adrFiles.length;
+    skillFiles.length +
+    agentFiles.length +
+    crossReferencedFiles.length +
+    adrFiles.length;
 
   if (violations.length === 0) {
     const adrLabel = adrFiles.length === 1 ? 'ADR' : 'ADRs';
@@ -620,11 +1113,15 @@ function main(): void {
     return;
   }
 
-  console.error(`\n✘ Claude Code config has ${violations.length} problem(s):\n`);
+  console.error(
+    `\n✘ Claude Code config has ${violations.length} problem(s):\n`,
+  );
   for (const violation of violations) {
     console.error(`  ${violation.file}\n    ${violation.message}\n`);
   }
-  console.error(`Checked ${checkedCount} files. Fix the above, then re-run \`yarn claude:validate\`.\n`);
+  console.error(
+    `Checked ${checkedCount} files. Fix the above, then re-run \`yarn claude:validate\`.\n`,
+  );
   process.exit(1);
 }
 
