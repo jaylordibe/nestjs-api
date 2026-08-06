@@ -1,7 +1,7 @@
 ---
 name: gate-validate
 description: Performs read-only evidence validation for a reviewed change in this NestJS, Prisma, PostgreSQL, Redis, and BullMQ API using its actual Yarn build, lint, isolated e2e, database, security, runtime, and operational contracts; returns PASS, FAIL, or BLOCKED.
-argument-hint: "[ADR path | scope | risk focus]"
+argument-hint: "[scope | risk focus]"
 disable-model-invocation: true
 disallowed-tools: Edit, Write, NotebookEdit
 model: inherit
@@ -25,7 +25,7 @@ manufacture a pass.
 Read:
 
 - `CLAUDE.md`;
-- accepted ADR;
+- the approved plan;
 - review report/outcome;
 - current diff;
 - `package.json` scripts;
@@ -76,7 +76,7 @@ Check for:
 - unintended lockfile or generated changes;
 - direct Nest exception construction;
 - direct `process.env` access;
-- prohibited `@casl/prisma` imports;
+- handlers missing both `@Roles(...)` and `@Public()`;
 - raw Prisma row returns;
 - missing response/route decorators where detectable.
 
@@ -95,7 +95,7 @@ requests it.
 
 Label every filtered or partial run.
 
-Ask `tester` whether the executed evidence covers the ADR, review fixes, and
+Ask `tester` whether the executed evidence covers the plan, review fixes, and
 risk.
 
 ## 5. Database and migration gates
@@ -125,8 +125,8 @@ Ask `database` to assess evidence.
 Validate relevant:
 
 - route authorization metadata;
-- permission catalog integrity checks if the change affects permissions;
-- object and tenant negative tests;
+- role decorators on every changed handler;
+- negative tests for wrong role and another actor's record;
 - 404/403 behavior;
 - stable error envelope and `errorCode`;
 - response DTO serialization and secret exclusion;
@@ -178,7 +178,7 @@ Use:
 State:
 
 - overall verdict;
-- ADR and acceptance-criteria coverage;
+- plan and acceptance-criteria coverage;
 - failures and likely ownership;
 - blockers and prerequisites;
 - security evidence;
@@ -187,33 +187,19 @@ State:
 - residual risk;
 - release recommendation.
 
-## 10. File the evidence into the ADR
+## 10. Where the evidence goes
 
-**Skip this section entirely when the change is Low risk and has no ADR** — say
-so in one line. Filing evidence into a document that does not exist is the kind
-of step people learn to ignore, and a step people ignore is worse than no step,
-because a reader cannot tell it from a completed one.
+**Not into a document in the repository.** There is no validation-record section
+to fill in: that section existed under the committed-ADR model and was the single
+biggest source of post-approval churn, because it could not be written until
+after validation had run.
 
-Otherwise: an evidence table that lives only in a chat transcript proves nothing
-a week later. Close the loop: emit a **paste-ready block** for the accepted ADR's
-**§16 Validation record** (`.claude/templates/adr.md`), filled in with the
-verdict, the exact worktree or commit, today's date, and the gate table exactly
-as run.
+The evidence table from §9 belongs in the Stage 6 presentation and the pull
+request — read once, by the person deciding whether to merge, which is the only
+moment it changes anyone's behaviour.
 
-Emit it fenced, then tell the user to paste it into `docs/adr/NNNN-*.md`.
-
-You are read-only and `disallowed-tools` removes Edit and Write — do **not**
-attempt to write the ADR yourself, and do not treat the inability to write as a
-reason to skip this step. Emitting the block is the whole of your obligation
-here; someone else files it.
-
-Who that someone is depends on the mode. Standalone, it is the user. Under
-`/work-item`, the conductor files §16 as part of Stage 5 — it is not running
-under this skill's `disallowed-tools`, and see that skill for the limits that
-apply to it. Either way the record earns trust from where it lands, not from who
-typed it: §16 sits in a file the human reads in the Stage 6 diff and commits by
-hand, and the verdict is filed exactly as produced, `FAIL` and `BLOCKED`
-included.
+Report the verdict exactly as produced. `FAIL` and `BLOCKED` are results, not
+omissions to tidy away, and a run that only ever reports `PASS` records nothing.
 
 Human approval, Git writes, migration application, deployment, and final risk
 acceptance remain outside validation.
@@ -222,14 +208,13 @@ acceptance remain outside validation.
 
 Follow `.claude/standards/gate-handoff.md`, starting with its §0 mode table.
 
-There is no next gate. Close with the verdict, the evidence table, the §16
-record, and the residual risk. In conductor mode, continue into `/work-item`
-Stage 6 — the presentation the human actually acts on — rather than closing
-here.
+There is no next gate. Close with the verdict, the evidence table, and the
+residual risk. In conductor mode, continue into `/work-item` Stage 6 — the
+presentation the human actually acts on — rather than closing here.
 
 On `PASS`, state plainly that the work exists only in the working tree and that
 the commit, PR, migration application, and deployment are the user's — never
 offer to perform them.
 
 On `FAIL` or `BLOCKED`, name what failed or could not run, and point back to
-`/gate-review <adr>` or the missing prerequisite.
+`/gate-review` or the missing prerequisite.

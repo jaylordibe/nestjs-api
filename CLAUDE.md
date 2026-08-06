@@ -2,7 +2,7 @@
 
 Guidance for Claude Code working in this repo. **This file is the always-on core** — it's loaded into context on every request, so it holds only what applies to *almost every* change. Situational, deep playbooks live in **skills** (`.claude/skills/`) and **docs** (`docs/`); load them when the task calls for them rather than duplicating their content here. General engineering standards live in `.claude/standards/`; this file's repository-specific rules take precedence if a generic standard conflicts with an established project contract. See **Deep references** at the bottom.
 
-**Precedence.** This file supersedes any parent-workspace `CLAUDE.md` for work in this repository. Where a parent file prescribes a different workflow, the mapping is: plans are **ADRs** under `docs/adr/`, not `tasks/todo.md`; the gate sequence below replaces any generic plan/verify loop; and this repository has no `tasks/` directory — do not create one. Corrections worth keeping become an ADR amendment or an edit to this file, not a lessons log.
+**Precedence.** This file supersedes any parent-workspace `CLAUDE.md` for work in this repository. Where a parent file prescribes a different workflow, the mapping is: plans are presented through Claude Code's plan flow, not written to `tasks/todo.md`; the gate sequence below replaces any generic plan/verify loop; and this repository has no `tasks/` directory — do not create one. Corrections worth keeping become an edit to this file, not a lessons log.
 
 ## Engineering bar
 
@@ -18,7 +18,7 @@ You are **always** working as a **senior software architect / senior software en
 - **Separate data, behavior, and pure helpers — no clutter.** Each file has one clear responsibility. A service/controller holds **behavior**, never large static lookup tables, registries, or config arrays dangling above the class — those move to a co-located config module (e.g. `*-registry.ts`) and are imported. Pure, reusable functions (string/date/enum/number transforms) live in `src/common/util/*.util.ts` with a `*.util.spec.ts`, never inline at the top of a service. Rule of thumb: if a reader must scroll past static data or a helper to reach the class, it's misfiled — extract it.
 - **Security is non-negotiable.** Every endpoint and DTO needs a thought about attack surface (enumeration leaks, timing attacks, replay, FK escalation, role abuse, log redaction). See the `auth-security` skill for the hardening floor.
 - **Delete what you replace.** Old filters, old throws, old code paths — gone. No `// removed` comments, no `// legacy` directories, no parallel implementations.
-- **Plans are ADRs — and they recommend, they don't transcribe.** Plan-mode output should read like an Architectural Decision Record: Context → Approach (with rationale + rejected alternatives) → File-by-file changes → Tests → Verification → What this deliberately does NOT do. Not a checklist. The plan proposes the approach *you* judge best; when it departs from a method the instruction prescribed (a ticket's approach, a "do it like X" aside), lead with the recommendation and put the prescribed approach under rejected alternatives with the trade-off.
+- **Plans recommend, they don't transcribe.** Plan-mode output should read like a decision record: Context → Approach (with rationale + rejected alternatives) → File-by-file changes → Tests → Verification → What this deliberately does NOT do. Not a checklist. The plan proposes the approach *you* judge best; when it departs from a method the instruction prescribed (a ticket's approach, a "do it like X" aside), lead with the recommendation and put the prescribed approach under rejected alternatives with the trade-off.
 - **"What do you think / what do you recommend" means PLAN, not execute.** When the user asks for your thoughts, opinion, or a recommendation, respond with senior-level planning — the analysis, the options with trade-offs, and your recommended approach — then **stop and wait**. Do NOT start editing files, writing migrations, or otherwise implementing. Implementation begins only when the user explicitly says to go ahead (e.g. "implement it", "do it", "go"). A plan or recommendation is never itself a green light.
 - **Tests are part of the change.** A feature without e2e coverage on the contract isn't done. Update the existing assertions when the contract changes — don't add a duplicate test alongside the stale one.
 - **Verify before declaring done.** `yarn build` + `yarn lint` + the **affected** e2e spec(s) must pass on every change; run the **full** `yarn test:e2e` only when a module is complete or the user asks. The e2e suite runs **in parallel** (`maxWorkers: 50%`): `globalSetup` migrates one template database and clones it per worker, and each worker gets its own Redis logical database (`test/setup/worker-isolation.ts`) — so specs must never assume exclusive access to anything outside their own database. Type-check and a passing suite verify correctness, but don't claim a UI/feature works without actually exercising it.
@@ -35,21 +35,21 @@ Use the engineering workflow for any material feature, bug, refactor, contract c
 1. **`/gate-design <requirement>` — understand and decide.**
    - Start with the `context-mapper` agent when impact is unclear or cross-cutting.
    - Reconcile the ticket's WHAT/HOW against repository reality.
-   - Classify risk first — **the tier decides the artifact.** Low risk gets no ADR at all (say so and hand back; the later gates still run); Medium and above get an ADR whose depth matches the tier. The table below is the contract, and `gate-design` §4 expands it.
+   - Classify risk first — **the tier decides the artifact.** Low risk gets no plan document at all (say so and hand back; the later gates still run); Medium and above get a plan whose depth matches the tier. The table below is the contract, and `gate-design` §4 expands it.
    - Evaluate alternatives and threat-model relevant surfaces in proportion to that tier.
    - Stop at the approval gate. `PROPOSED` is not permission to implement.
 
-2. **`/gate-approve <ADR>` — record the human's decision.**
+2. **`/gate-approve` — take the human's decision.**
    - The design must be `PROPOSED`; a `DRAFT` is unfinished and goes back to `/gate-design`.
    - Read the decision, rejected alternatives, residual risk, non-goals, and **every unresolved §14 row** back to the user first. An approval nobody re-read is a rubber stamp.
    - Take an explicit decision — never infer one from praise — then write the `Status:` line and §15 together.
    - Claude cannot invoke this gate. That, not the typing, is what stops a design from approving itself.
 
-3. **`/gate-implement <accepted ADR>` — build only the approved design.**
-   - The ADR must explicitly be `ACCEPTED`.
+3. **`/gate-implement` — build only the approved design.**
+   - There must be a plan the human explicitly approved in this session.
    - Preserve unrelated worktree changes.
    - Implement the approved behavior, security controls, tests, documentation, and observability.
-   - A material divergence in behavior, architecture, contract, migration, or risk requires an ADR amendment and renewed approval.
+   - A material divergence in behavior, architecture, contract, migration, or risk requires renewed approval.
 
 4. **`/gate-review` — independently challenge the diff.**
    - Review architecture, correctness, security, tests, API contracts, database behavior, concurrency, performance, and reliability as relevant.
@@ -64,7 +64,7 @@ Use the engineering workflow for any material feature, bug, refactor, contract c
 
 Manual/ad-hoc work does not bypass the final gates. After implementation, **stop and tell the user to run `/gate-review`, then `/gate-validate`** — summarise what changed, name the affected contracts and risk tier, and wait. An ad-hoc self-check is not a substitute for either gate and must never be reported as one.
 
-**A `/work-item` run is the exception, and runs to completion on its own.** Invoking it authorises the whole pipeline, so it interrupts the human exactly twice: at **ADR approval** (presented via `ExitPlanMode`, so the decision is a click) and at **Stage 6**, where they review the diff and push. It does not ask permission to move between implement, review, and validate — that would turn one authorisation into four confirmations of a decision already made. Every panel, check, and stop condition still runs at full strength; only the prompting is removed, and on High/Critical work the review's independent subagent fan-out becomes mandatory to preserve the independence a human checkpoint used to supply. The exhaustive list of what still stops a run mid-pipeline is in `.claude/standards/gate-handoff.md` §5.
+**A `/work-item` run is the exception, and runs to completion on its own.** Invoking it authorises the whole pipeline, so it interrupts the human exactly twice: at **plan approval** (presented via `ExitPlanMode`, so the decision is a click) and at **Stage 6**, where they review the diff and push. It does not ask permission to move between implement, review, and validate — that would turn one authorisation into four confirmations of a decision already made. Every panel, check, and stop condition still runs at full strength; only the prompting is removed, and on High/Critical work the review's independent subagent fan-out becomes mandatory to preserve the independence a human checkpoint used to supply. The exhaustive list of what still stops a run mid-pipeline is in `.claude/standards/gate-handoff.md` §5.
 
 ### Ending a gate
 
@@ -76,31 +76,37 @@ How a gate closes depends on how it was entered — `.claude/standards/gate-hand
 
 In standalone mode, answering "yes" authorises the **next gate only** — never a skip, never the rest of the pipeline, never a Git or deployment write. Recommend a fresh session instead when the change is High/Critical and the next gate is `/gate-review`: a review is worth more from a context that did not just write the code. In conductor mode that independence comes from the review's read-only subagents, which is why their fan-out is mandatory rather than optional on High/Critical work.
 
-**For the whole sequence in one pass, use `/work-item <requirement>` — it needs no issue key**, and falls back to treating its argument as the requirement itself. It stops only at the ADR approval gate and the human Git/release gate.
+**For the whole sequence in one pass, use `/work-item <requirement>` — it needs no issue key**, and falls back to treating its argument as the requirement itself. It stops only at the plan approval gate and the human Git/release gate.
 
 ### Skill naming
 
 Every **user-invocable** project skill is namespaced `gate-*`. A project skill sharing a name with a Claude Code built-in does not win — it appears *beside* it in the `/` menu, and the user picks by row. This has already bitten twice (`review`, `design`), and a reserved-name denylist cannot prevent it because a new built-in can ship at any time. `yarn claude:validate` enforces the prefix. The domain playbook skills need none: they set `user-invocable: false` and never reach the menu. `/work-item` is the one reviewed exemption — it is the conductor, not a gate.
 
-### ADR location
+### Where the design lives
 
-Accepted ADRs are the durable record of every material change and are **committed**: `docs/adr/NNNN-kebab-slug.md`, sequential, zero-padded to four digits, from `.claude/templates/adr.md`. `/gate-implement`, `/gate-review`, and `/gate-validate` all take that path as their argument, and a resumed session finds the work by reading the ADR's `Status:` line. See `docs/adr/README.md`.
+**The design is a plan, not a committed file.** `/gate-design` writes it through Claude Code's native plan flow and presents it with `ExitPlanMode`; the plan persists in Claude Code's own plans directory. Nothing is written to the repository, and approval is the plan-mode decision rather than a `Status:` line someone has to maintain.
 
-Lifecycle: `DRAFT` (design in progress — resume with `/gate-design <path>`, never restart it) → `PROPOSED` (complete, awaiting approval) → **`/gate-approve <path>`** → `ACCEPTED` → `/gate-implement <path>`. The *decision* is the user's and Claude never infers it; recording it is `/gate-approve`'s job, and because that skill sets `disable-model-invocation: true`, **Claude cannot invoke it** — only a human can. Git writes stay denied, so the user's commit remains the act of record. Leaving work unfinished means `Status: DRAFT` plus the remainder written into §14 with an owner — §14 is the handoff contract. Never park an incomplete ADR at `PROPOSED`. `yarn claude:validate` fails if the `Status:` line and §15 disagree.
+Structure the plan on `.claude/templates/plan.md` — depth scales with the risk tier below.
+
+This replaced committed ADRs on 2026-08-06. The reason was cost, not principle: a committed ADR had to be kept in sync at every stage, and a single `/work-item` run rewrote one roughly fifteen times — more effort than the change it described. A plan is written once, approved, and then read; nothing downstream edits it.
+
+The *decision* is the user's and Claude never infers it. `/gate-approve` sets `disable-model-invocation: true`, so **Claude cannot invoke it** — only a human can. That control lives in the frontmatter and is unaffected by there being no file. Git writes stay denied, so the user's commit remains the act of record.
+
+What this trades away, stated plainly so nobody rediscovers it as a surprise: the plan is local and unshared, its filename is generated rather than descriptive, CI cannot enforce anything about it, and a commit no longer links to the reasoning behind it. When a decision genuinely needs to outlive the session — a non-obvious invariant, a line that looks deletable but is not — put that explanation in a **code comment next to the thing it protects**, which is where it will actually be found.
 
 ### Risk classification
 
 | Risk | Typical examples | Minimum expectation |
 |---|---|---|
-| **Low** | Copy/docs, isolated internal rename, test-only cleanup with no contract effect | **No ADR.** Focused design reasoning, affected tests, self-review + `/code-review`, validation |
-| **Medium** | Ordinary business logic, endpoint behavior, module-level job or refactor | ADR (brief threat model), correctness review + the one domain lens touched, integration coverage |
-| **High** | Authentication, authorization, tenant isolation, PII, money/pricing, uploads, webhooks, external integrations, migrations, public contracts, concurrency | Full ADR, explicit threat model, negative + authorization tests, migration/rollback analysis, multi-lens review with adversarial verification of Critical/High findings |
+| **Low** | Copy/docs, isolated internal rename, test-only cleanup with no contract effect | **No plan document.** Focused design reasoning, affected tests, self-review + `/code-review`, validation |
+| **Medium** | Ordinary business logic, endpoint behavior, module-level job or refactor | Plan (brief threat model), correctness review + the one domain lens touched, integration coverage |
+| **High** | Authentication, authorization, tenant isolation, PII, money/pricing, uploads, webhooks, external integrations, migrations, public contracts, concurrency | Full plan, explicit threat model, negative + authorization tests, migration/rollback analysis, multi-lens review with adversarial verification of Critical/High findings |
 | **Critical** | Identity infrastructure, cryptography, broad privileged access, destructive data work, production repair, release infrastructure | All High gates plus qualified human security and operational review; never give unconditional automated approval |
 
 **Take the higher tier whenever the change sits on a boundary.** The tiering is
 what keeps the process honest in both directions: a uniform ceremony gets skipped,
 and a skipped step reads exactly like a completed one — so refusing to write an
-ADR for a copy fix is what keeps the ADR meaningful for a schema change.
+plan for a copy fix is what keeps the plan meaningful for a schema change.
 
 ### Evidence language
 
@@ -121,7 +127,7 @@ Unless the user explicitly requests the exact operation, Claude must not:
 - apply migrations to local/shared/production databases, reset/drop/re-seed data, or perform production data repair;
 - accept product, security, privacy, migration, operational, or residual risk on the human's behalf.
 
-Claude may prepare the diff, ADR, tests, evidence, migration files, release checklist, and handoff. The human owns approval, Git writes, risk acceptance, migration application, deployment, and production access.
+Claude may prepare the diff, plan, tests, evidence, migration files, release checklist, and handoff. The human owns approval, Git writes, risk acceptance, migration application, deployment, and production access.
 
 This list is enforced, not merely stated: `.claude/settings.json` denies the named command forms (Bash **and** PowerShell), and `.claude/hooks/guard-dangerous-commands.sh` catches the forms a prefix rule structurally cannot see — `git -C <path> commit`, `dotenv -e .env -- prisma migrate deploy`, `sudo npm publish`, `cat .env`. Neither layer is a sandbox; see `.claude/README.md` for what each one does and does not guarantee. Treat a refusal from either as the rule working, never as an obstacle to route around: if an operation genuinely needs to happen, say so and let the human run it.
 
@@ -249,9 +255,9 @@ Load these on demand — they hold the long-form playbooks so this core stays le
 
 | Task | Where |
 |---|---|
-| Design a material change, reconcile ticket vs code, classify risk, compare alternatives, and produce an approval-gated ADR | `gate-design` skill + `.claude/templates/adr.md` |
-| Implement an explicitly accepted ADR without unrelated scope or Git/deployment writes | `gate-implement` skill |
-| Drive a ticket end-to-end: map → ADR → implement → review → validate → present → report | `work-item` skill (`/work-item <key | URL | requirement>`) |
+| Design a material change, reconcile ticket vs code, classify risk, compare alternatives, and produce an approval-gated plan | `gate-design` skill + `.claude/templates/plan.md` |
+| Implement an approved plan without unrelated scope or Git/deployment writes | `gate-implement` skill |
+| Drive a ticket end-to-end: map → plan → implement → review → validate → present → report | `work-item` skill (`/work-item <key | URL | requirement>`) |
 | Independently review the current diff across architecture, correctness, AppSec, tests, API, DB, and performance | `gate-review` skill + `.claude/agents/` |
 | Run read-only evidence gates and return `PASS` / `FAIL` / `BLOCKED` | `gate-validate` skill + `.claude/templates/release-checklist.md` |
 | General architecture, coding, security, and testing rules | `.claude/standards/architecture.md`, `coding.md`, `security.md`, `testing.md` |

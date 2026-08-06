@@ -1,6 +1,6 @@
 ---
 name: work-item
-description: Drives a tracked work item or pasted requirement through repository mapping, an approval-gated ADR, implementation, independent project-specific review, read-only validation, presentation, and at most one issue-tracker comment.
+description: Drives a tracked work item or pasted requirement through repository mapping, an approval-gated plan, implementation, independent project-specific review, read-only validation, presentation, and at most one issue-tracker comment.
 argument-hint: "<issue key | issue URL | pasted requirement>"
 disable-model-invocation: true
 model: inherit
@@ -23,8 +23,8 @@ edit only after approval, and resume after discussion or compaction.
 
 ## Non-negotiable boundaries
 
-- Never edit product source before explicit approval of the ADR.
-- Never silently diverge from the accepted ADR.
+- Never edit product source before explicit approval of the plan.
+- Never silently diverge from the approved plan.
 - Never commit, amend, push, force-push, merge, rebase, tag, publish, deploy,
   apply migrations, reset databases, or modify production data.
 - Never transition an issue or edit its fields.
@@ -45,7 +45,7 @@ authorisation for the whole sequence; the human is interrupted exactly twice:
 
 | Stop | Stage | Why it cannot be automated |
 |---|---|---|
-| **ADR approval** | 2 | `gate-approve` sets `disable-model-invocation: true`. A design must not approve itself. |
+| **Plan approval** | 2 | `gate-approve` sets `disable-model-invocation: true`. A design must not approve itself. |
 | **Present, then human review and push** | 6 | Git writes are denied. The commit is the human's act of record. |
 
 Everything between those two runs without asking. You are operating the gate
@@ -65,12 +65,11 @@ by itself has skipped the gate, not accelerated it.
 
 Stop mid-pipeline **only** for:
 
-- a material divergence from the accepted ADR — propose an amendment and return
-  to the approval gate;
+- a material divergence from the approved plan — return to the approval gate;
 - an unresolved product decision that reading the repository cannot settle;
 - two complete remediation cycles exhausted with findings still unresolved;
-- a Stage 5 `FAIL` or `BLOCKED` that Stage 3 or 4 cannot fix within the accepted
-  ADR;
+- a Stage 5 `FAIL` or `BLOCKED` that Stage 3 or 4 cannot fix within the approved
+  plan;
 - a missing prerequisite — an unavailable service, absent credential, or a check
   that cannot run.
 
@@ -114,17 +113,18 @@ Rules:
 
 - Keep exactly one stage `in_progress`.
 - Mark a stage complete only when its exit criteria are satisfied.
-- Keep Stage 2 in progress throughout all ADR discussion.
+- Keep Stage 2 in progress throughout all design discussion.
 - Approval messages such as “approved,” “looks good,” or “go ahead” resume the
   pending pipeline; do not treat them as an unrelated request.
-- Re-read the task list and accepted ADR after approval and after context
+- Re-read the task list and the approved plan after approval and after context
   compaction.
 - Never skip Review, Validate, Present, or Report because approval arrived after
   a long discussion.
 
-If this is a resumed session, search for an existing ADR associated with the
-ticket, inspect its status and the current diff, and resume from the earliest
-incomplete safe stage. Never restart blindly or post a duplicate issue comment.
+If this is a resumed session, inspect the current diff and the task checklist and
+resume from the earliest incomplete safe stage. The design itself is not
+recoverable from disk — if approval had not yet happened, re-design. Never
+restart blindly or post a duplicate issue comment.
 
 ## Input resolution
 
@@ -215,19 +215,16 @@ Read `.claude/skills/gate-design/SKILL.md` now, and follow it.
 Enter Plan mode when available. Remain read-only even if Plan mode is
 unavailable.
 
-**Classify the risk tier first — it decides whether this stage produces an ADR
-at all.** `gate-design` §4 holds the table. A **Low** risk change gets no ADR:
-state the tier and the evidence, present the approach in the normal Plan/approval
-interface, and on approval go straight to Stage 3. Stages 4–7 still run in full.
-Everything Medium and above gets an ADR whose depth matches the tier.
+**Classify the risk tier first — it decides how much design this stage
+produces.** `gate-design` §4 holds the table. A **Low** risk change gets no plan
+document: state the tier and the evidence, present the approach, and on approval
+go straight to Stage 3. Stages 4–7 still run in full. Everything Medium and above
+gets a plan whose depth matches the tier.
 
-For an ADR, use `.claude/templates/adr.md` with:
+Structure the plan on `.claude/templates/plan.md`. **Nothing is written to the
+repository** — see *Where the design lives* in `CLAUDE.md`.
 
-```text
-Status: PROPOSED
-```
-
-The ADR must:
+The plan must:
 
 - recommend rather than transcribe;
 - lead with the evidence-supported approach;
@@ -249,19 +246,19 @@ action**, not a typed command.
 Call `ExitPlanMode` with the read-back below as the plan. The user gets an
 approve/reject control, and an affirmative click **is** the explicit decision
 this gate requires — record it and continue in the same turn. Do not tell them
-to run `/gate-approve`: that command exists for an ADR designed in an earlier
+to run `/gate-approve`: that command exists for a design presented in an earlier
 session, and routing a live pipeline through it turns one click into a typed
 command plus a second reading of a document they just read.
 
-The read-back is not the ADR pasted back. It is, concisely and in your own
+The read-back is not the plan pasted back. It is, concisely and in your own
 words: the recommendation; the trade-off accepted by rejecting the alternatives;
 contract and data impact; residual security and privacy risk; the
 rollback path; **what this deliberately does NOT do**; and **every unresolved
-§14 row, individually**. Scope disappointment surfaces at the non-goals more
-often than any technical objection does, which is why they are read back rather
-than left in the file.
+blocker, individually**. Scope disappointment surfaces at the non-goals more
+often than any technical objection does, which is why they are read back
+explicitly.
 
-If §14 has an unresolved row, the user must resolve it or accept it as a stated
+If anything is unresolved, the user must resolve it or accept it as a stated
 condition. Put that question in the plan, and record verbatim what they accept.
 
 Approval must be unambiguous. A click approves. Ambiguous praise in passing —
@@ -272,27 +269,31 @@ decision from prose that was not a decision.
 On approval:
 
 1. re-read the checklist;
-2. re-read the ADR;
-3. write **both** the `Status: ACCEPTED` line and §15 — `Decision: Approved`,
-   `Approved by:` from `git config user.name`, `Date:` from the system, and any
-   conditions the user stated verbatim. `/gate-implement` branches on `Status:`
-   alone, so a header-only edit records an approval with no approver;
-   `yarn claude:validate` fails the build when the two disagree;
+2. restate the approved scope and any conditions the user attached, verbatim —
+   those conditions bind the implementation exactly as the plan does;
+3. **write that record into the Stage 3 task** (`TaskUpdate`, appended to its
+   description): what was approved, the risk tier, and each condition in the
+   user's own words. This is the approval trace. The plan is not a file, so
+   without it a compacted session has no way to tell *approved* from merely
+   *presented* — and a summary asserting "the user approved" is not evidence,
+   it is the failure mode this step exists to prevent. Tasks survive
+   compaction; the conversation does not;
 4. mark Stage 2 complete;
 5. mark Stage 3 in progress;
 6. continue the pipeline in the same session.
 
-If the user requests changes, revise the ADR and remain at Stage 2.
+Nothing is written to disk at this point. The approval is the plan-mode decision,
+and it holds for this session.
 
-If the session ends mid-design, set `Status: DRAFT` and write what remains into
-§14 with an owner, so the work resumes with `/gate-design <ADR path>` rather than
-restarting. Never leave an unfinished ADR at `PROPOSED` — that reads as "ready
-for your approval".
+If the user requests changes, revise the plan and remain at Stage 2.
+
+If the session ends mid-design, say so plainly. There is no partial artifact to
+hand over and no resume-by-path — the next session re-designs.
 
 # Stage 3 — Implement
 
 Read `.claude/skills/gate-implement/SKILL.md` now, and follow it together with
-the accepted ADR — except for its closing handoff, which is written for a human
+the approved plan — except for its closing handoff, which is written for a human
 who typed `/gate-implement`. Its fresh-session recommendation does not apply
 here; see the autonomy contract above.
 
@@ -300,7 +301,7 @@ Before editing:
 
 - inspect Git status/diff;
 - preserve unrelated changes;
-- confirm repository reality still matches the ADR.
+- confirm repository reality still matches the approved plan.
 
 Implement coherent slices with tests.
 
@@ -312,8 +313,8 @@ detect that it has. Work from the source, never from a summary.
 
 Run focused checks after coherent slices.
 
-If a material ADR divergence becomes necessary, stop Stage 3, propose an ADR
-amendment, and return to the approval gate.
+If a material divergence becomes necessary, stop Stage 3 and return to the
+approval gate. Never edit the plan to match what you built.
 
 When the accepted implementation and focused tests are complete, mark Stage 3
 complete, emit the stage marker, and **begin Stage 4 immediately**. Do not ask
@@ -361,10 +362,8 @@ Mark Stage 4 complete, emit the stage marker, and **begin Stage 5 immediately**.
 
 Read `.claude/skills/gate-validate/SKILL.md` now, and follow it.
 
-Validation is read-only. That constraint is about *evidence*: never edit source,
-tests, snapshots, or configuration to manufacture a pass. It is not a reason to
-stop and hand the user a block of text to copy — see the §16 filing rule at the
-end of Stage 5.
+Validation is read-only: never edit source, tests, snapshots, or configuration to
+manufacture a pass.
 
 At minimum, when applicable:
 
@@ -390,33 +389,19 @@ A partial/filtered suite must be labeled partial. Skipped, unavailable, or flaky
 is not PASS.
 
 If the verdict is FAIL because of an implementation defect, return to Stage 3 or
-4 as appropriate, fix within the ADR, then re-review and re-validate.
+4 as appropriate, fix within the approved plan, then re-review and re-validate.
 
 If BLOCKED, do not invent evidence.
 
-## Filing the validation record
+## Where the evidence goes
 
-`gate-validate` §10 emits the §16 evidence block and tells the user to paste it,
-because that skill runs with Edit and Write removed. **In conductor mode, write
-it into the ADR yourself** — you are not running under those restrictions, and
-handing the human a copy-paste chore at the end of an autonomous pipeline is the
-manual step this design exists to remove.
+Into the Stage 6 presentation and the pull request — **not** into any document in
+the repository. There is no validation-record section to fill in; that existed
+under the committed-ADR model and was the single largest source of post-approval
+churn, because it could not be written until after validation had run.
 
-The record stays trustworthy because of where it lands, not who typed it: §16
-goes into a file the human reads in the Stage 6 diff and commits by hand. A
-verdict they never see is the problem; a verdict they read before pushing is the
-control.
-
-Two limits still bind:
-
-- write **only** §16 of the ADR — nothing else in it, and no source, test,
-  snapshot, or configuration file. The read-only rule is about not manufacturing
-  a pass, and it is absolute.
-- file the verdict **exactly as it came out**, including `FAIL` or `BLOCKED`
-  with the gate that produced it. A validation record that only ever says `PASS`
-  records nothing.
-
-Skip this when the change is Low risk and has no ADR. Say so in one line.
+Report the verdict exactly as produced. `FAIL` and `BLOCKED` are results, not
+omissions to tidy away.
 
 Mark Stage 5 complete only when the evidence report is complete, even if the
 verdict is FAIL or BLOCKED, then continue to Stage 6.
@@ -435,6 +420,21 @@ Present:
 - recommended human next steps.
 
 Be explicit that the work exists only in the working tree.
+
+**Emit the report as a paste-ready pull-request description**, fenced, after the
+conversational summary. Nothing in this repository records why a change was made
+any more, so the PR body is the durable rationale: it is versioned by the host,
+linked to the commit, visible to the consumer developers, and read at the one
+moment it changes a decision. Include the behaviour, the approach and the
+alternatives rejected, the risk tier, review findings and how they were resolved,
+the validation verdict, and what this deliberately does not do.
+
+Keep it to what a reviewer needs. Command transcripts and per-file narration
+belong in the conversation, not the PR.
+
+When an invariant is non-obvious enough that someone might delete the line that
+enforces it, a PR body is still the wrong home — put that explanation in a **code
+comment beside the line**, where the person about to remove it is looking.
 
 Do not perform Git writes, PR publication, migration application, deployment,
 release, or risk acceptance.

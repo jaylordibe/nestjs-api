@@ -1,15 +1,15 @@
 ---
 name: gate-approve
-description: Records a human's approval or rejection of a PROPOSED ADR in this repository after reading the decision, residual risk, non-goals, and unresolved blockers back to them, then writes the Status line and the approval section together and stops without implementing.
-argument-hint: "<ADR path>"
+description: Reads a presented design back to the human — recommendation, rejected alternatives, contract and data impact, residual risk, non-goals, and every unresolved blocker — then takes an explicit approve or reject decision and stops without implementing.
+argument-hint: "[design under discussion]"
 disable-model-invocation: true
 model: inherit
 effort: high
 ---
 
-# Approve or reject an ADR
+# Approve or reject a design
 
-ADR:
+Input:
 
 ```text
 $ARGUMENTS
@@ -21,86 +21,65 @@ $ARGUMENTS
 safe: **Claude can never invoke it.** Only a human typing `/gate-approve` starts
 it, so Claude cannot approve its own design no matter what it concludes.
 
-Within that boundary, writing the decision down is mechanical work and belongs
-to the agent. The human decides; this skill transcribes, and transcribes *both*
-fields together so they can never disagree. The human still owns the commit —
-Git writes are denied — so the commit remains the act of record.
+That control lives in the frontmatter, not in any file the approval gets written
+to. It survived the removal of committed ADRs unchanged.
 
 **Never infer approval.** "Looks good", "nice", "ok" while discussing something
 else is not an approval. If this skill was invoked, the user intends to decide
 now; if their instruction is ambiguous about *which* decision, ask.
 
-## 1. Read the ADR
+## 1. Establish what is being decided
 
-Read it completely. Then check `Status:`:
+There must be a design on the table — a plan `/gate-design` presented in this
+session, or one the user has just described. If there is not, say so and stop;
+there is nothing to approve.
 
-| Status | Action |
-|---|---|
-| `PROPOSED` | Proceed. |
-| `DRAFT` | **Stop.** The design is unfinished and is not ready to be judged. Direct the user to `/gate-design <path>` to complete it first. |
-| `ACCEPTED` | **Stop.** Already approved. Changing an accepted design needs an ADR amendment and renewed approval, not a re-approval. |
-| `REJECTED` / `SUPERSEDED by NNNN` | **Stop.** Say so; a new ADR supersedes it. |
+If the design is more than a few days old or the worktree has moved under it,
+**re-verify it against the repository before reading it back.** Approving a
+design whose evidence has gone stale is approving a decision about a codebase
+that no longer exists. Say plainly if anything no longer holds, and recommend
+`/gate-design` instead.
 
 ## 2. Read it back before they decide
 
 An approval nobody re-read is a rubber stamp, and the whole value of this gate is
-that it is the last moment before source changes. Present, concisely:
+that it is the last moment before source changes. Present, concisely and in your
+own words rather than quoted:
 
-- **§1/§5** — the recommendation and the decision, in your own words, not quoted;
-- **§4** — what was rejected and the trade-off accepted by choosing this;
-- **§6/§7** — contract and data impact, if any;
-- **§8** — residual security and privacy risk;
-- **§12** — rollback/roll-forward path;
-- **§13** — what this deliberately does NOT do, since scope disappointment
-  surfaces here more often than technical objection;
-- **§14** — **every unresolved row, individually.**
-
-Re-verify the ADR against the repository first if it is more than a few days old
-or the worktree has moved. Approving a design whose §2 evidence has gone stale is
-approving a decision about a codebase that no longer exists. Say plainly if
-anything no longer holds, and recommend `/gate-design <path>` instead.
+- the **recommendation**, and the trade-off accepted by rejecting the
+  alternatives;
+- **contract and data impact**, if any, naming affected consumers;
+- **residual security and privacy risk**;
+- the **rollback or roll-forward path**;
+- **what this deliberately does NOT do** — scope disappointment surfaces here far
+  more often than technical objection;
+- **every unresolved blocker, individually.**
 
 ## 3. Unresolved blockers
 
-If §14 has any unresolved row, the user must either resolve it or **explicitly
-accept it as a condition**. Name each one and ask which. Do not let an open
-blocker pass silently into `Conditions/accepted risks` — write down exactly what
-they said they were accepting.
+If anything is unresolved, the user must either resolve it or **explicitly accept
+it as a condition**. Name each one and ask which. Do not let an open blocker pass
+silently into an approval — record exactly what they said they were accepting,
+verbatim, never paraphrased.
 
-If a §14 row questions whether the ADR should exist at all, say so directly and
-offer rejection as the live option it is.
+If a blocker questions whether the change should happen at all, say so directly
+and offer rejection as the live option it is.
 
-## 4. Record the decision
+## 4. Take the decision
 
 Only after an explicit, unambiguous decision this turn.
 
-Resolve the approver from `git config user.name` and the date from the system —
-never invent either, and never ask the user to retype what Git already knows. If
-`user.name` is unset, ask rather than guessing.
+**On approval**, state back in one line: what was approved, and any conditions in
+the user's own words. Those conditions bind the implementation exactly as the
+design does — if one adds scope, the implementation covers it; if one removes
+scope, the implementation stops there.
 
-**On approval**, write both places in one pass:
+**On rejection**, say what would have to change for a new design to supersede
+this one, and stop.
 
-```text
-- **Status:** ACCEPTED
-```
-
-```text
-## 15. Approval
-
-- **Decision:** Approved
-- **Approved by:** <git config user.name>
-- **Date:** <YYYY-MM-DD>
-- **Conditions/accepted risks:** <verbatim conditions, or "none">
-```
-
-**On rejection**, `Status: REJECTED` and `Decision: Rejected`, with the reason in
-`Conditions/accepted risks`. Keep the file — a rejected ADR is the record of what
-was considered and why it lost.
-
-Change nothing else. Not §1–§14, not source, not tests, not configuration. If the
-user wants the design altered, that is `/gate-design`, not an approval.
-
-Run `yarn claude:validate` to confirm the two fields agree.
+There is no `Status:` line and no file to write. The approval is the decision
+itself, and it authorises `/gate-implement` in this session only — it does not
+carry to a later one, where the design would have to be presented again.
 
 ## 5. Stop
 
@@ -111,22 +90,19 @@ that makes this approval real.
 
 Follow `.claude/standards/gate-handoff.md`, starting with its §0 mode table.
 
-On approval, offer to continue into `/gate-implement <adr>` in this session, or
-to stop so they run it themselves. Recommend stopping when the ADR is High or
-Critical risk.
+On approval, offer to continue into `/gate-implement` in this session, or to stop
+so they run it themselves. Recommend stopping when the change is High or Critical
+risk.
 
-On rejection there is no next gate. Say what would have to change for a new ADR
-to supersede this one, and stop.
+On rejection there is no next gate.
 
 ### This gate is not part of a `/work-item` run
 
-A live pipeline records its own approval inline at Stage 2, from an
-`ExitPlanMode` decision — see `.claude/skills/work-item/SKILL.md`. It does not
-route through this command, and it must not ask a second time after the user has
-already approved: that is one decision, presented twice.
+A live pipeline takes its own approval inline at Stage 2, from an `ExitPlanMode`
+decision — see `.claude/skills/work-item/SKILL.md`. It does not route through
+this command, and it must not ask a second time after the user has already
+approved: that is one decision, presented twice.
 
-This skill is for an ADR that needs deciding **outside** that flow — designed in
-an earlier session, resumed after compaction, or written by `/gate-design`
-standalone. The security property is unchanged either way and lives in the
-frontmatter, not the routing: `disable-model-invocation: true` means Claude
-cannot invoke this skill, and no inline path lets a design approve itself.
+This skill is for a design decided **outside** that flow — presented in an
+earlier session, resumed after compaction, or produced by `/gate-design`
+standalone.

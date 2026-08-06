@@ -1,7 +1,7 @@
 ---
 name: gate-review
-description: Independently reviews the current NestJS and Prisma change for accepted-design conformance, correctness, application security, RBAC/CASL tenant isolation, API/error contracts, database and migration safety, BullMQ reliability, tests, and performance; fixes verified findings and re-reviews.
-argument-hint: "[ADR path | base ref | review focus]"
+description: Independently reviews the current NestJS and Prisma change for approved-plan conformance, correctness, application security, RBAC/CASL tenant isolation, API/error contracts, database and migration safety, BullMQ reliability, tests, and performance; fixes verified findings and re-reviews.
+argument-hint: "[base ref | review focus]"
 disable-model-invocation: true
 model: inherit
 effort: high
@@ -22,7 +22,7 @@ read-only and independent.
 
 State the exact target:
 
-- accepted ADR;
+- the approved plan;
 - staged/unstaged worktree diff;
 - explicit base reference;
 - changed files and contracts.
@@ -53,14 +53,14 @@ Domain lenses: `api` (DTO, error, Swagger, consumer contracts) · `database`
 (Prisma, constraints, queries, migrations) · `performance` (queues, retries,
 resource bounds) · `security` · `tester` · `architect`.
 
-Launch the selected agents **in parallel**, and give each: the ADR, the exact
+Launch the selected agents **in parallel**, and give each: the approved plan, the exact
 diff, the changed-file scope, and the standards or source-owned README for its
 lens. Do not paste contract text into the prompt — name the file and let the
 agent read it.
 
 Bundled skills supplement the panel; they never replace it. Run `/simplify` only
 after correctness and security findings are resolved, and verify each of its
-proposals against the ADR before accepting it.
+proposals against the approved plan before accepting it.
 
 ## 3. What to review against
 
@@ -74,7 +74,7 @@ Each lens reviews against its authoritative source:
 | Lens | Reviews against |
 |---|---|
 | `reviewer` | `CLAUDE.md`; `.claude/standards/coding.md` — correctness, state transitions, naming, responsibility placement, dead code, half-migrated call sites |
-| `architect` | `.claude/standards/architecture.md`; the accepted ADR — boundaries, `src/common` leaf rule, deliberate non-goals, no parallel implementations |
+| `architect` | `.claude/standards/architecture.md`; the approved plan — boundaries, `src/common` leaf rule, deliberate non-goals, no parallel implementations |
 | `security` | `.claude/standards/security.md`; `src/common/authorization/README.md`; `auth-security` and `authorization` skills |
 | `api` | `CLAUDE.md`; `src/common/errors/README.md`; `.claude/standards/architecture.md` — *Contracts* |
 | `database` | `CLAUDE.md`; `resource-pattern` skill — soft delete, partial uniqueness, transactions, one consolidated migration, no local application |
@@ -84,7 +84,7 @@ Each lens reviews against its authoritative source:
 Three checks belong to the conductor rather than to any lens, because they are
 about the change as a whole:
 
-- the diff does what the **accepted ADR** says, and nothing it excluded;
+- the diff does what the **approved plan** says, and nothing it excluded;
 - no unrelated scope, speculative abstraction, or opportunistic refactor;
 - every in-scope call site of a changed pattern was migrated, not just the
   first one.
@@ -131,7 +131,7 @@ changes; the cycle costs more than the precision it buys there.
 - Fix Medium findings unless they require product/architecture approval.
 - Fix Low findings only when safe and local.
 - Add regression tests.
-- Request an ADR amendment for material divergence.
+- Return to the approval gate for material divergence; never edit the plan to match the diff.
 - Run affected tests, `yarn build`, and `yarn lint` after fixes.
 
 Perform at most two full remediation/re-review cycles.
@@ -160,7 +160,7 @@ Follow `.claude/standards/gate-handoff.md`, starting with its §0 mode table.
 Close with findings by severity, what was fixed, what was rejected and why, and
 the commands that actually ran.
 
-**Standalone** — then offer to continue into `/gate-validate <adr>`.
+**Standalone** — then offer to continue into `/gate-validate`.
 
 **Conductor** (`/work-item` Stage 4) — emit the stage marker and go straight into
 validation.

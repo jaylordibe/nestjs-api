@@ -379,8 +379,6 @@ jobs:
       # during module init, before onModuleInit reads anything — so asset
       # loading is covered by check 1 only. Saying otherwise would be the kind
       # of overclaim that lets a second failure hide behind the first.
-      #
-      # See docs/adr/0003-build-entrypoint-path-contract.md.
       - name: Verify the built image can resolve what it runs
         run: |
           set -euo pipefail

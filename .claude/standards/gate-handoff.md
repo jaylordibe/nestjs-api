@@ -20,7 +20,7 @@ writing anything:
 
 **In conductor mode you must not ask whether to continue.** `/work-item` already
 carries the human's authorisation for the whole pipeline, and its two real stops
-— ADR approval and the Stage 6 present/push boundary — are gates in their own
+— plan approval and the Stage 6 present/push boundary — are gates in their own
 right, enforced elsewhere. Re-asking at every stage boundary does not add a
 safety property; it converts one authorisation into four confirmations of a
 decision already made.
@@ -34,11 +34,11 @@ The only thing conductor mode removes is the prompt.
 State, in this order and nothing more:
 
 1. **Outcome** — one line. What this gate concluded.
-2. **What changed on disk** — the ADR and its new `Status:`, the files touched,
-   or explicitly "nothing changed" for a read-only gate.
+2. **What changed on disk** — the files touched, or explicitly "nothing changed"
+   for a read-only gate. The design itself is a plan, not a file.
 3. **Evidence** — only checks that actually ran, with their real result. A gate
    that could not run something says `BLOCKED`, never silence.
-4. **Anything that blocks the next gate** — unresolved §14 rows, failing checks,
+4. **Anything that blocks the next gate** — unresolved blockers, failing checks,
    Critical/High findings, missing prerequisites.
 
 ## 2. Name the next step concretely — standalone only
@@ -47,20 +47,20 @@ Print the next command **with its argument already filled in**, so it can be run
 without the developer looking anything up:
 
 ```text
-/gate-implement docs/adr/0007-rate-limit-otp-endpoint.md
+/gate-review
 ```
 
-Never write `/gate-implement <ADR path>` in a handoff. The placeholder is for
+Never write `/gate-review <placeholder>` in a handoff. The placeholder is for
 documentation; the handoff is for doing.
 
 The sequence:
 
 | Just finished | Next | Skip only when |
 |---|---|---|
-| `/gate-design` | `/gate-approve <adr>` | the design is still `DRAFT` — say so and stop; or the change is **Low risk and has no ADR**, in which case the next step is implementation and there is nothing to approve |
-| `/gate-approve` | `/gate-implement <adr>` | decision was Rejected |
-| `/gate-implement` | `/gate-review <adr>` | never |
-| `/gate-review` | `/gate-validate <adr>` | a Critical/High finding is unresolved |
+| `/gate-design` | `/gate-approve` | the design is incomplete — say so and stop; or the change is **Low risk and has no plan document**, in which case the next step is implementation and there is nothing to approve |
+| `/gate-approve` | `/gate-implement` | decision was Rejected |
+| `/gate-implement` | `/gate-review` | never |
+| `/gate-review` | `/gate-validate` | a Critical/High finding is unresolved |
 | `/gate-validate` | human commit / PR | verdict is `FAIL` or `BLOCKED` |
 
 ## 3. Offer to continue — standalone only
@@ -74,7 +74,7 @@ question, and make the options honest about what actually happens:
   Claude deciding to run a gate on its own.
 - **Stop here** — the user runs the next gate themselves, in a fresh session.
 - A third option only when the state warrants one: *Revise the design*,
-  *Reject the ADR*, *Fix findings first*.
+  *Reject the design*, *Fix findings first*.
 
 If the user declines, stop cleanly. Do not re-ask, and do not drift into the next
 gate's work anyway.
@@ -103,7 +103,7 @@ authorises:
 - skipping a gate in the sequence;
 - committing, pushing, opening a PR, tagging, or deploying;
 - applying a migration or touching a database;
-- approving an ADR the user has not explicitly decided on;
+- approving a design the user has not explicitly decided on;
 - reporting a check as passed when it did not run.
 
 In standalone mode each gate re-asks at its own end: answering "yes" once does
@@ -112,7 +112,7 @@ pass, that is `/work-item <requirement>`, which needs no issue key.
 
 This list binds **both** modes. Conductor mode removes the prompt between
 stages; it removes nothing from this section. A `/work-item` run still may not
-commit, push, apply a migration, or approve its own ADR.
+commit, push, apply a migration, or approve its own design.
 
 ## 5. Closing a gate in conductor mode
 
@@ -144,7 +144,7 @@ accelerated it.
 
 Two are planned, and both are boundaries the pipeline cannot cross on its own:
 
-1. **ADR approval.** Present via Plan mode (`ExitPlanMode`) so the decision is a
+1. **Plan approval.** Present via Plan mode (`ExitPlanMode`) so the decision is a
    button, not typed prose. `gate-approve` sets `disable-model-invocation: true`
    precisely so a design cannot approve itself; an affirmative click is the human
    decision that control exists to require. Ambiguous praise still is not one.
@@ -153,13 +153,12 @@ Two are planned, and both are boundaries the pipeline cannot cross on its own:
 
 Everything else runs through. Stop mid-pipeline **only** for:
 
-- a material divergence from the accepted ADR — needs an amendment and renewed
-  approval;
+- a material divergence from the approved plan — needs renewed approval;
 - an unresolved product decision that no amount of reading the repository can
   settle;
 - two complete remediation cycles exhausted with findings still unresolved;
 - a Stage 5 verdict of `FAIL` or `BLOCKED` that Stage 3/4 cannot fix within the
-  accepted ADR;
+  approved plan;
 - a missing prerequisite — an unavailable service, absent credential, or check
   that cannot run.
 

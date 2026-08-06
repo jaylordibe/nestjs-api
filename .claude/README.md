@@ -4,7 +4,7 @@ Team-shared Claude Code assets for this NestJS + Prisma starter, versioned and
 adopted as a unit.
 
 **The framework** is `.claude/`, `CLAUDE.md`, `scripts/validate-claude-config.ts`,
-and `docs/adr/`. **The starter repository** is the whole NestJS API that ships
+and `scripts/validate-claude-config.ts`. **The starter repository** is the whole NestJS API that ships
 it. The two move at different speeds and are upgraded differently, which is why
 they have different names — see `.claude/ADOPTING.md`.
 
@@ -211,7 +211,7 @@ slash-command menu:
 
 ### Templates
 
-- `templates/adr.md`
+- `templates/plan.md`
 - `templates/threat-model.md`
 - `templates/api-contract.md`
 - `templates/database-design.md`
@@ -235,15 +235,18 @@ slash-command menu:
 - `../scripts/validate-claude-config.ts` — the guardrail for this directory,
   run by `yarn claude:validate` and in CI.
 
-### Where ADRs live
+### Where the design lives
 
-`docs/adr/NNNN-kebab-slug.md`, committed, from `templates/adr.md`. See
-`docs/adr/README.md` for the lifecycle. Every gate after design takes an ADR path,
-and a resumed session finds its place by reading the `Status:` line — which only
-works because the location is fixed rather than chosen per session.
+Nowhere in the repository. `/gate-design` presents a plan through Claude Code's
+plan flow, structured on `templates/plan.md`; approval is the plan-mode decision.
+Committed ADRs were removed on 2026-08-06 — a single `/work-item` run rewrote one
+about fifteen times, which cost more than the change it described.
+
+When a decision must outlive the session, put it in a **code comment beside the
+thing it protects**, where it will actually be found.
 
 `CLAUDE.md` is the always-on project constitution. Repository-specific rules in
-`CLAUDE.md`, source-owned contract READMEs, and accepted ADRs take precedence
+`CLAUDE.md` and source-owned contract READMEs take precedence
 over generic guidance.
 
 ## Review engines

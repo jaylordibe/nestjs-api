@@ -1,13 +1,13 @@
 ---
 name: gate-implement
-description: Implements an explicitly accepted ADR in this NestJS, Prisma, PostgreSQL, Redis, and BullMQ API while enforcing its error, DTO, authorization, tenant-isolation, audit, Swagger, soft-delete, migration, testing, and operational contracts.
-argument-hint: "<accepted ADR path>"
+description: Implements an explicitly approved plan in this NestJS, Prisma, PostgreSQL, Redis, and BullMQ API while enforcing its error, DTO, authorization, actor-scoping, audit, Swagger, soft-delete, migration, testing, and operational contracts.
+argument-hint: "[scope or focus]"
 disable-model-invocation: true
 model: inherit
 effort: high
 ---
 
-# Implement an accepted ADR
+# Implement an approved plan
 
 Input:
 
@@ -17,13 +17,22 @@ $ARGUMENTS
 
 ## Hard gate
 
-Read the complete ADR. It must explicitly state:
+There must be a plan the human explicitly approved in this session. If there is
+not — no plan was presented, or it was presented and not decided — **stop** and
+say so.
 
-```text
-Status: ACCEPTED
-```
+The plan is not a file, so there is no `Status:` line to read. Two things carry
+the weight instead:
 
-If it does not, stop.
+- `gate-approve` remains **human-invocable only**, so a design still cannot
+  approve itself. That control is in the frontmatter and is unaffected.
+- Under `/work-item`, Stage 2 writes the approved scope, risk tier and every
+  condition into the Stage 3 task. **Read it before editing anything** — it is
+  the approval trace, and it survives compaction where the conversation does not.
+
+If neither is present — no human-invoked approval and no recorded scope — treat
+the design as unapproved and stop, however confident the surrounding context
+sounds. A summary that says the user approved something is not evidence.
 
 ## Protect the worktree
 
@@ -36,7 +45,7 @@ Before edits:
   migrations, reset databases, or modify production data;
 - avoid unrelated cleanup.
 
-If repository reality materially differs from the accepted ADR, stop and propose
+If repository reality materially differs from the approved plan, stop and propose
 an amendment.
 
 ## Implement in coherent slices
@@ -63,7 +72,7 @@ from a summary — including this one.
 
 What this skill owns is the **checklist of lenses**: the areas a change in this
 repository must be examined through before it is complete. For each one that the
-ADR touches, go to the authoritative text and satisfy it.
+plan touches, go to the authoritative text and satisfy it.
 
 | Lens | Authoritative source |
 |---|---|
@@ -110,11 +119,15 @@ Run, as appropriate:
 
 Do not run the full e2e suite unless the module is complete or the user asks.
 
-## ADR reconciliation and handoff
+## Reconciliation and handoff
 
-Compare the diff to the ADR.
+Compare the diff to the approved plan.
 
-A material change requires an accepted amendment.
+A material change requires a fresh approval — return to the approval gate with
+what changed and why. Do not widen scope by narrating it in the final report.
+
+**Do not edit the plan to match what you built.** Divergences are reported, not
+retrofitted; a plan rewritten to agree with the diff records nothing.
 
 Report:
 
@@ -126,7 +139,7 @@ Report:
 - migration files prepared but not applied;
 - deviations/blockers;
 - frontend/mobile handoff, per the *Consumers* table in `CLAUDE.md`;
-- ADR path.
+- how the diff differs from the approved plan, if at all.
 
 ## Handoff
 
@@ -135,7 +148,7 @@ Follow `.claude/standards/gate-handoff.md`, starting with its §0 mode table.
 Close with the files changed, the contracts touched, the focused checks that
 actually ran, and any migration prepared but **not** applied.
 
-**Standalone** — then offer to continue into `/gate-review <adr>`, and
+**Standalone** — then offer to continue into `/gate-review`, and
 **recommend a fresh session when the change is High or Critical risk**. A review
 carries more weight from a context that did not just write the code; the
 reviewer should be re-reading the diff, not recalling its own intentions.

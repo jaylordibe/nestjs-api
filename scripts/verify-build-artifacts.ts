@@ -25,7 +25,9 @@
  * see `verify-build-artifacts.spec.ts`. Only the CLI wrapper at the bottom
  * touches the real `dist/` or exits the process.
  *
- * See docs/adr/0003-build-entrypoint-path-contract.md.
+ * If this check ever fires, the two most likely causes are a .ts file outside
+ * src/ entering the build scope, and a stale incremental cache at the project
+ * root. Both are explained in the failure output.
  */
 
 import { readdirSync, statSync } from 'node:fs';
@@ -279,7 +281,7 @@ function runCommandLineCheck(): void {
     );
     console.error(
       `\n${describeLikelyCause(repositoryRoot, distributionDirectory)}\n` +
-        '\nSee docs/adr/0003-build-entrypoint-path-contract.md.\n',
+        '\n',
     );
     process.exitCode = 1;
     return;

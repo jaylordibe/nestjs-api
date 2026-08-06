@@ -1,6 +1,6 @@
 # Architecture standard — project edition
 
-`CLAUDE.md` and accepted ADRs are authoritative. This file provides deeper
+`CLAUDE.md` is authoritative. This file provides deeper
 interpretive guidance and must not weaken repository-specific rules.
 
 ## Priorities

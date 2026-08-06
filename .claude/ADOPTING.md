@@ -4,7 +4,7 @@ For someone who has just cloned this starter repository, or who wants to pull
 later improvements into a project that already did.
 
 **The Claude Engineering Framework** is the Claude Code tooling: `.claude/`,
-`CLAUDE.md`, `scripts/validate-claude-config.ts`, and `docs/adr/`. It is a
+`CLAUDE.md`, and `scripts/validate-claude-config.ts`. It is a
 distinct, versioned thing from the **starter repository** that ships it — the
 starter is the whole NestJS API, and you adopt that once by cloning. The
 framework you keep adopting, every time you upgrade.
@@ -75,7 +75,7 @@ against someone else's contracts.
    merging.
 4. **Merge, never replace,** the files that carry your project: `CLAUDE.md`,
    `.claude/settings.json` (your allow list and MCP server), `.mcp.json`, the
-   domain skills you rewrote in adoption step 4, and `docs/adr/`.
+   domain skills you rewrote in adoption step 4.
 5. Copy the new `.claude/VERSION`.
 6. Run `yarn claude:validate`, `yarn lint`, and `yarn build`.
 

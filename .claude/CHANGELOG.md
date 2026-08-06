@@ -1,8 +1,7 @@
 # Claude Engineering Framework — changelog
 
 The **Claude Engineering Framework** is this repository's Claude Code tooling:
-`.claude/`, `CLAUDE.md`, `scripts/validate-claude-config.ts`, and `docs/adr/`.
-It is versioned and copied into projects, separately from the starter repository
+`.claude/`, `CLAUDE.md`, and `scripts/validate-claude-config.ts`. It is versioned and copied into projects, separately from the starter repository
 that ships it.
 
 The version in `.claude/VERSION` identifies the framework a project adopted.
@@ -24,6 +23,76 @@ starter repository as a whole.
 | **PATCH** | Fixes and wording; no new obligations | Copy the named files |
 
 Upgrade procedure and adoption checklist: `.claude/ADOPTING.md`.
+
+## 2.1.0 — 2026-08-06
+
+Closes two gaps 2.0.0 opened. Removing committed ADRs solved the churn but took
+the approval trace and the commit-to-rationale link with it; neither needed a
+document to come back.
+
+- **The Stage 6 report is now emitted as a paste-ready PR description.** The
+  pull request becomes the durable rationale — versioned by the host, linked to
+  the commit, visible to consumer developers, and read at review time rather
+  than filed away. Zero files in the tree.
+- **Stage 2 writes the approved scope, risk tier and every condition into the
+  Stage 3 task.** Tasks survive compaction; the conversation does not. Without
+  it a resumed session could not tell *approved* from *presented*, and a summary
+  claiming the user approved something is not evidence. `gate-implement`'s hard
+  gate now reads that record, and stops when neither it nor a human-invoked
+  `/gate-approve` is present.
+
+Files: `.claude/skills/work-item/SKILL.md`,
+`.claude/skills/gate-implement/SKILL.md`.
+
+## 2.0.0 — 2026-08-06
+
+**MAJOR — the design artifact changed. Adopters must change their process.**
+
+Committed ADRs are gone. The `docs/adr/` directory and the old ADR template are
+deleted, `templates/plan.md` takes their place, and the design is now a **plan**
+presented through Claude Code's native plan flow. Approval is the plan-mode
+decision; there is no `Status:` line, no §15, no §16, and nothing written to the
+repository.
+
+### Why
+
+Cost, not principle. A committed ADR had to be kept in sync at every stage of a
+run: implementation divergences rewrote the file plan, review findings rewrote
+the options and the rationale, validation appended an evidence table. One real
+`/work-item` run edited its ADR about **fifteen times**, including a full rewrite
+of a 400-line document — more effort than the six-file change it described. The
+ADR had become a running log of the pipeline rather than a record of a decision.
+
+Two sections structurally guaranteed post-approval edits:
+
+- **§16 Validation record** could not be written until validation had run.
+- **§9 File-by-file plan** predicted the diff and went stale the moment
+  implementation reality differed. The diff *is* the file-by-file.
+
+### What adopters must do
+
+1. Delete your `docs/adr/` directory and the old ADR template; copy
+   `templates/plan.md`.
+2. Copy the six workflow skills, `standards/gate-handoff.md`,
+   `standards/architecture.md`, `.claude/README.md`, `.claude/ADOPTING.md`, and
+   `scripts/validate-claude-config.ts` (its ADR validation is removed).
+3. In your `CLAUDE.md`, replace the *ADR location* section with *Where the design
+   lives*, and change "ADR" to "plan" in the gate list and risk table.
+
+Prior ADRs remain in Git history. Nothing is lost that a `git log` cannot reach.
+
+### What this costs, stated plainly
+
+The plan is local, its filename is generated rather than descriptive, CI can
+enforce nothing about it, and a commit no longer links to the reasoning behind
+it. **When a decision must outlive the session, put it in a code comment beside
+the thing it protects** — that is now the durable mechanism, and it is a better
+one for the case that actually matters: someone about to delete a line they do
+not understand.
+
+Resume-by-path is also gone. That was a deliberate trade: resuming happened on
+roughly one run in ten, and did not justify a document every other run had to
+maintain.
 
 ## 1.2.0 — 2026-08-06
 
@@ -78,8 +147,8 @@ yields assets with no code.
 Do **not** add your tooling directory to `.dockerignore`: `postbuild` runs inside
 the Docker build stage, so the check script must be in the build context.
 
-Rationale, alternatives, and the two self-inflicted defects found while fixing it:
-`docs/adr/0003-build-entrypoint-path-contract.md`.
+Rationale, alternatives, and the two self-inflicted defects found while fixing it
+were recorded in an ADR that 2.0.0 removed; see Git history if you need it.
 
 ### Why the framework carries a project-build fix
 

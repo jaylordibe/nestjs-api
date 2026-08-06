@@ -456,7 +456,7 @@ const ARCHITECTURAL_IDIOMS = [
 
 /**
  * Placeholder tokens mark a naming *pattern* rather than a real file, e.g.
- * `docs/adr/NNNN-kebab-slug.md`. Resolving them would always fail.
+ * placeholder paths such as `<file>` or `NNNN-slug.md`. Resolving them would always fail.
  */
 const PLACEHOLDER_PATTERN = /NNNN|<[^>]+>|\*|\{|\[/;
 
@@ -594,126 +594,6 @@ function wholeWordExistsInSource(symbolName: string): boolean {
 /** Literal match for dotted idioms — `-w` treats `.` as a boundary, so `prisma.scoped` would match `prisma` alone. */
 function literalExistsInSource(idiom: string): boolean {
   return existsInSource(`literal:${idiom}`, ['-rqF', idiom]);
-}
-
-/** Lifecycle states an ADR's `Status:` line may hold. See `docs/adr/README.md`. */
-const TERMINAL_ADR_STATUS_PATTERN =
-  /^(DRAFT|PROPOSED|ACCEPTED|REJECTED|SUPERSEDED by \d{4})$/;
-
-const ADR_FILENAME_PATTERN = /^\d{4}-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/;
-
-function extractSection(fileContent: string, headingPattern: RegExp): string {
-  const headingMatch = headingPattern.exec(fileContent);
-  if (!headingMatch) {
-    return '';
-  }
-  const sectionStart = headingMatch.index + headingMatch[0].length;
-  const nextHeadingOffset = fileContent.slice(sectionStart).search(/^## /m);
-  return nextHeadingOffset === -1
-    ? fileContent.slice(sectionStart)
-    : fileContent.slice(sectionStart, sectionStart + nextHeadingOffset);
-}
-
-function readLabelledValue(sectionContent: string, label: string): string {
-  const valuePattern = new RegExp(`^-\\s*\\*\\*${label}:\\*\\*\\s*(.*)$`, 'm');
-  return valuePattern.exec(sectionContent)?.[1]?.trim() ?? '';
-}
-
-/**
- * An ADR records its approval in two places: the machine-readable `Status:`
- * line that the gates branch on, and §15, which carries the attribution. Only
- * `Status:` is read by `/gate-implement`, so without this check an ADR could be
- * flipped to ACCEPTED while §15 still says `Pending` — a fully anonymous
- * approval that passes the hard gate with no approver, date, or accepted risk
- * on record. Approval stays a human edit; this only makes a half-finished one
- * impossible to miss.
- */
-function validateArchitecturalDecisionRecord(adrFilePath: string): void {
-  const adrFileName = basename(adrFilePath);
-  if (adrFileName === 'README.md') {
-    return;
-  }
-
-  if (!ADR_FILENAME_PATTERN.test(adrFileName)) {
-    reportViolation(
-      adrFilePath,
-      `filename must be \`NNNN-kebab-slug.md\` (sequential, zero-padded to four digits) — see docs/adr/README.md`,
-    );
-    return;
-  }
-
-  const fileContent = readFileSync(adrFilePath, 'utf8');
-  const headerSection = fileContent.slice(0, fileContent.search(/^## /m));
-  const declaredStatus = readLabelledValue(headerSection, 'Status');
-
-  if (!declaredStatus) {
-    reportViolation(
-      adrFilePath,
-      'missing a `- **Status:**` line — the gates resume by reading it',
-    );
-    return;
-  }
-
-  if (!TERMINAL_ADR_STATUS_PATTERN.test(declaredStatus)) {
-    reportViolation(
-      adrFilePath,
-      `\`Status: ${declaredStatus}\` is not a lifecycle state. Use DRAFT, PROPOSED, ACCEPTED, REJECTED, or "SUPERSEDED by NNNN"`,
-    );
-    return;
-  }
-
-  const approvalSection = extractSection(fileContent, /^## 15\. Approval\s*$/m);
-  if (!approvalSection) {
-    reportViolation(
-      adrFilePath,
-      'missing `## 15. Approval` — approval has nowhere to be recorded',
-    );
-    return;
-  }
-
-  const recordedDecision = readLabelledValue(approvalSection, 'Decision');
-  const recordedApprover = readLabelledValue(approvalSection, 'Approved by');
-  const recordedApprovalDate = readLabelledValue(approvalSection, 'Date');
-
-  if (declaredStatus === 'ACCEPTED') {
-    if (recordedDecision !== 'Approved') {
-      reportViolation(
-        adrFilePath,
-        `\`Status: ACCEPTED\` but §15 records \`Decision: ${recordedDecision || '(empty)'}\`. /gate-implement reads only the Status line, so this would let an unattributed approval through — set §15 to \`Approved\``,
-      );
-    }
-    if (!recordedApprover) {
-      reportViolation(
-        adrFilePath,
-        '`Status: ACCEPTED` but §15 `Approved by:` is empty — an approval with no approver is not an audit trail',
-      );
-    }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(recordedApprovalDate)) {
-      reportViolation(
-        adrFilePath,
-        '`Status: ACCEPTED` but §15 `Date:` is empty or not YYYY-MM-DD',
-      );
-    }
-    return;
-  }
-
-  if (recordedDecision === 'Approved') {
-    reportViolation(
-      adrFilePath,
-      `§15 records \`Decision: Approved\` but \`Status: ${declaredStatus}\`. The two disagree; the gates trust Status, so implementation would be blocked despite a recorded approval`,
-    );
-  }
-
-  if (
-    declaredStatus === 'DRAFT' &&
-    recordedDecision &&
-    recordedDecision !== 'Pending'
-  ) {
-    reportViolation(
-      adrFilePath,
-      `\`Status: DRAFT\` means the design is unfinished, so §15 must stay \`Pending\` (found \`${recordedDecision}\`)`,
-    );
-  }
 }
 
 interface ClaudeCodeSettings {
@@ -1420,22 +1300,13 @@ function main(): void {
   validateHandoffModeContract();
   validateFrameworkVersion();
 
-  const adrFiles = listMarkdownFilesRecursively(
-    join(repositoryRoot, 'docs', 'adr'),
-  ).filter((filePath) => basename(filePath) !== 'README.md');
-  adrFiles.forEach(validateArchitecturalDecisionRecord);
-
   const checkedCount =
-    skillFiles.length +
-    agentFiles.length +
-    crossReferencedFiles.length +
-    adrFiles.length;
+    skillFiles.length + agentFiles.length + crossReferencedFiles.length;
 
   if (violations.length === 0) {
-    const adrLabel = adrFiles.length === 1 ? 'ADR' : 'ADRs';
     console.log(
       `✔ Claude Code config valid — ${skillFiles.length} skills, ${agentFiles.length} agents, ` +
-        `${adrFiles.length} ${adrLabel}, ${crossReferencedFiles.length} markdown files cross-checked.`,
+        `${crossReferencedFiles.length} markdown files cross-checked.`,
     );
     return;
   }
