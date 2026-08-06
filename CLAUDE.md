@@ -88,8 +88,6 @@ Every **user-invocable** project skill is namespaced `gate-*`. A project skill s
 
 Structure the plan on `.claude/templates/plan.md` — depth scales with the risk tier below.
 
-This replaced committed ADRs on 2026-08-06. The reason was cost, not principle: a committed ADR had to be kept in sync at every stage, and a single `/work-item` run rewrote one roughly fifteen times — more effort than the change it described. A plan is written once, approved, and then read; nothing downstream edits it.
-
 The *decision* is the user's and Claude never infers it. `/gate-approve` sets `disable-model-invocation: true`, so **Claude cannot invoke it** — only a human can. That control lives in the frontmatter and is unaffected by there being no file. Git writes stay denied, so the user's commit remains the act of record.
 
 What this trades away, stated plainly so nobody rediscovers it as a surprise: the plan is local and unshared, its filename is generated rather than descriptive, CI cannot enforce anything about it, and a commit no longer links to the reasoning behind it. When a decision genuinely needs to outlive the session — a non-obvious invariant, a line that looks deletable but is not — put that explanation in a **code comment next to the thing it protects**, which is where it will actually be found.

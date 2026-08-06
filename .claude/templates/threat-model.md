@@ -1,6 +1,6 @@
 # Threat model: [Change/system]
 
-- **Related ADR/ticket:**
+- **Related plan/ticket:**
 - **Risk:** High | Critical
 - **Owner:**
 - **Status:** Draft | Reviewed | Accepted

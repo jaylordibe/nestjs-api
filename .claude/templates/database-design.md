@@ -1,6 +1,6 @@
 # Database design: [Change]
 
-- **Related ADR/ticket:**
+- **Related plan/ticket:**
 - **Owner:**
 - **Prisma version:** 7
 - **Database:** PostgreSQL

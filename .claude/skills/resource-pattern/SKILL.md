@@ -103,7 +103,7 @@ Rules:
 - non-paginated handlers declare an explicit response DTO;
 - use a shared acknowledgement DTO for side-effect endpoints.
 
-A resource may need fewer or additional domain-specific operations, but the ADR
+A resource may need fewer or additional domain-specific operations, but the plan
 must explain why it departs from the canonical contract.
 
 ## 5. Scope every query correctly

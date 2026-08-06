@@ -97,7 +97,7 @@ You must not:
 
 - select the final architecture;
 - prescribe exact implementation details when alternatives remain;
-- write an ADR;
+- write the plan;
 - turn assumptions into decisions;
 - silently expand product scope.
 

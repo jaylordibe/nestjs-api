@@ -1,14 +1,14 @@
 # Release readiness: [Change]
 
-- **ADR:**
+- **Plan:**
 - **Risk:**
 - **Release owner:**
 - **Verdict:** PASS | FAIL | BLOCKED
 
 ## Approval and scope
 
-- [ ] ADR is ACCEPTED.
-- [ ] Implementation matches ADR or accepted amendment.
+- [ ] Plan is approved.
+- [ ] Implementation matches the approved plan or an approved amendment.
 - [ ] No unresolved Critical/High review finding.
 - [ ] Product/security/operations residual risks have named human owners.
 - [ ] Cross-repository web/mobile/provider blockers are resolved.

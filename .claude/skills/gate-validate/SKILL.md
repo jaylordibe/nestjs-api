@@ -190,9 +190,8 @@ State:
 ## 10. Where the evidence goes
 
 **Not into a document in the repository.** There is no validation-record section
-to fill in: that section existed under the committed-ADR model and was the single
-biggest source of post-approval churn, because it could not be written until
-after validation had run.
+to fill in. It could not be written until after validation had run, which made
+it a guaranteed source of post-approval churn.
 
 The evidence table from §9 belongs in the Stage 6 presentation and the pull
 request — read once, by the person deciding whether to merge, which is the only

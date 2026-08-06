@@ -49,7 +49,7 @@ than being mistaken for the requirement text.
 
 `/work-item` is the top-level conductor. It maintains pipeline state in the main
 conversation, delegates read-only research/review agents, stops for design
-approval, implements only the accepted ADR, reviews and validates the diff,
+approval, implements only the approved plan, reviews and validates the diff,
 presents the result, and optionally posts one issue comment.
 
 ### Individual engineering gates
@@ -58,11 +58,11 @@ Use these for non-ticket work, focused operation, recovery in a new session, or
 when you deliberately want to control each stage yourself:
 
 ```text
-/gate-design <requirement | ADR path to resume>
-/gate-approve <ADR path>
-/gate-implement <accepted ADR path>
-/gate-review [ADR path or base ref]
-/gate-validate [ADR path or scope]
+/gate-design <requirement>
+/gate-approve
+/gate-implement
+/gate-review [base ref]
+/gate-validate [scope]
 ```
 
 The phase skills are human-invoked. `/work-item` does not recursively invoke them
@@ -84,8 +84,8 @@ a fresh session whenever independence matters more than momentum.
 | Stage | What runs | Human boundary |
 |---|---|---|
 | 1. Understand | `context-mapper`; additional architect, security, API, database, performance, or test agents when relevant | |
-| 2. Design | The `gate-design` skill contract, ticket-vs-code reconciliation, alternatives, threat model, and `PROPOSED` ADR | **GATE 1:** no source edit until explicit approval |
-| 3. Implement | The `gate-implement` skill contract and the accepted ADR | |
+| 2. Design | The `gate-design` skill contract, ticket-vs-code reconciliation, alternatives, threat model, and the plan | **GATE 1:** no source edit until explicit approval |
+| 3. Implement | The `gate-implement` skill contract and the approved plan | |
 | 4. Review | Project-aware architecture, correctness, security, test, API, database, and performance agents; bundled `/security-review` or `/simplify` when useful and available | No unresolved Critical/High finding |
 | 5. Validate | The `gate-validate` skill contract, `yarn build`, `yarn lint`, affected tests, database/security evidence, and `/run` for a runnable surface | `PASS`, `FAIL`, or `BLOCKED` only |
 | 6. Present | Diff summary, review findings, evidence, risks, and consumer handoff | **GATE 2:** human owns commit, push, PR, migration application, and deployment |
@@ -95,16 +95,9 @@ The conductor creates a seven-stage task checklist before Stage 1 and keeps
 exactly one stage in progress. The checklist is the session's durable workflow
 memory across long design discussion and context compaction.
 
-The accepted ADR is the durable repository artifact. If a session is lost,
-resume with the individual skills according to ADR state:
-
-```text
-DRAFT     → /gate-design <ADR>      (resume; never restart)
-PROPOSED  → /gate-approve <ADR>
-ACCEPTED  → /gate-implement <ADR>
-implemented diff → /gate-review <ADR>
-reviewed diff    → /gate-validate <ADR>
-```
+The plan is not a repository artifact, so there is nothing to resume by path. A
+session lost mid-design is re-designed in the next one; a session lost after the
+diff exists resumes from that diff with `/gate-review`, then `/gate-validate`.
 
 ## Work-item interpretation
 
@@ -128,11 +121,10 @@ Genuine product choices go back to the human.
 
 - `skills/work-item/SKILL.md` — full conductor.
 - `skills/gate-design/SKILL.md` — repository mapping, risk, alternatives, threat
-  model, and the ADR. Pass an ADR path instead of a requirement to resume a
-  `DRAFT` left by an earlier session or another developer.
-- `skills/gate-approve/SKILL.md` — reads a `PROPOSED` ADR back to the human,
-  takes an explicit decision, and records it.
-- `skills/gate-implement/SKILL.md` — accepted-ADR implementation.
+  model, and the plan.
+- `skills/gate-approve/SKILL.md` — reads the plan back to the human, takes an
+  explicit decision, and records it.
+- `skills/gate-implement/SKILL.md` — approved-plan implementation.
 - `skills/gate-review/SKILL.md` — independent project-specific review and
   remediation.
 - `skills/gate-validate/SKILL.md` — read-only evidence gate.
@@ -179,7 +171,7 @@ reviewed exemption rather than letting it pass unnoticed.
 ### Agents
 
 - `context-mapper` — blast-radius and ticket-vs-code map.
-- `architect` — boundaries, ADR conformance, compatibility, and rollout.
+- `architect` — boundaries, plan conformance, compatibility, and rollout.
 - `security` — JWT, RBAC/CASL, tenant scope, abuse, audit, and data exposure.
 - `reviewer` — correctness and maintainability.
 - `tester` — risk-based unit/e2e and evidence quality.
@@ -238,9 +230,6 @@ slash-command menu:
 
 Nowhere in the repository. `/gate-design` presents a plan through Claude Code's
 plan flow, structured on `templates/plan.md`; approval is the plan-mode decision.
-Committed ADRs were removed on 2026-08-06 — a single `/work-item` run rewrote one
-about fifteen times, which cost more than the change it described.
-
 When a decision must outlive the session, put it in a **code comment beside the
 thing it protects**, where it will actually be found.
 
@@ -257,7 +246,7 @@ Bundled Claude Code skills may supplement them:
 
 - `/security-review` for an additional read-only security pass;
 - `/simplify` after correctness/security findings are resolved, with every
-  proposed change verified against the ADR and project standards;
+  proposed change verified against the plan and project standards;
 - `/run` for actual runtime exercise (`/verify` is a bundled skill on some
   installations only — check `/skills` before relying on it).
 

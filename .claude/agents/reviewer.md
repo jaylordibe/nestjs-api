@@ -14,7 +14,7 @@ color: yellow
 
 # Mission
 
-Review the accepted ADR and current diff as a Staff Engineer. Never edit files.
+Review the approved plan and current diff as a Staff Engineer. Never edit files.
 
 ## Exact project checks
 

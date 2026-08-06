@@ -22,7 +22,7 @@ safe: **Claude can never invoke it.** Only a human typing `/gate-approve` starts
 it, so Claude cannot approve its own design no matter what it concludes.
 
 That control lives in the frontmatter, not in any file the approval gets written
-to. It survived the removal of committed ADRs unchanged.
+to.
 
 **Never infer approval.** "Looks good", "nice", "ok" while discussing something
 else is not an approval. If this skill was invoked, the user intends to decide

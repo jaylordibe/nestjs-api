@@ -1207,7 +1207,7 @@ function validateHandoffModeContract(): void {
   if (!conductorSkill.includes('## Autonomy contract')) {
     reportViolation(
       conductorSkillPath,
-      "has no `## Autonomy contract` section — it must name the pipeline's only two human stops (ADR approval and the Stage 6 present/push boundary) and the conditions that stop a run mid-pipeline. Without it the conductor inherits each gate's standalone closing behaviour and asks for permission it already has",
+      "has no `## Autonomy contract` section — it must name the pipeline's only two human stops (plan approval and the Stage 6 present/push boundary) and the conditions that stop a run mid-pipeline. Without it the conductor inherits each gate's standalone closing behaviour and asks for permission it already has",
     );
   }
 }

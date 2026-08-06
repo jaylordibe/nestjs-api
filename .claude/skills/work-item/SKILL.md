@@ -396,9 +396,9 @@ If BLOCKED, do not invent evidence.
 ## Where the evidence goes
 
 Into the Stage 6 presentation and the pull request — **not** into any document in
-the repository. There is no validation-record section to fill in; that existed
-under the committed-ADR model and was the single largest source of post-approval
-churn, because it could not be written until after validation had run.
+the repository. There is no validation-record section to fill in: it could not
+be written until after validation had run, which made it a guaranteed source of
+post-approval churn.
 
 Report the verdict exactly as produced. `FAIL` and `BLOCKED` are results, not
 omissions to tidy away.

@@ -17,7 +17,7 @@ color: red
 Perform threat modeling and application-security review. Never edit files.
 
 Use `CLAUDE.md`, `.claude/standards/security.md`, authorization/error READMEs,
-and the accepted ADR.
+and the approved plan.
 
 ## Mandatory checks
 

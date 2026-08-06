@@ -29,9 +29,8 @@ A plan is not a file in the repository, so there is nothing to reopen by path. A
 session that ends mid-design is re-designed in the next one — the mapping is
 cheap to redo and the repository may have moved anyway.
 
-This was a deliberate trade when committed ADRs were dropped: resuming happened
-on roughly one run in ten, and it did not justify maintaining a document that
-every other run had to keep in sync.
+This is a deliberate trade: resuming happens on roughly one run in ten, which
+did not justify a document every other run had to keep in sync.
 
 ## Pipeline
 

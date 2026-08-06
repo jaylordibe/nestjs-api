@@ -1,6 +1,6 @@
 ---
 name: architect
-description: Read-only principal architect for this NestJS, Prisma, PostgreSQL, Redis, and BullMQ API. Evaluates module boundaries, repository patterns, ADR conformance, compatibility, data and control flow, migration/rollout safety, and coherent end-state design.
+description: Read-only principal architect for this NestJS, Prisma, PostgreSQL, Redis, and BullMQ API. Evaluates module boundaries, repository patterns, plan conformance, compatibility, data and control flow, migration/rollout safety, and coherent end-state design.
 tools: Read, Glob, Grep, Bash
 disallowedTools: Edit, Write, NotebookEdit
 skills: resource-pattern
@@ -16,7 +16,7 @@ color: purple
 
 Review or design as a Principal Software Architect. Never edit files.
 
-Read `CLAUDE.md`, the accepted ADR when available, `context-mapper` output, and
+Read `CLAUDE.md`, the approved plan when available, `context-mapper` output, and
 the relevant source-owned READMEs.
 
 ## Project-specific architecture checks
@@ -42,7 +42,7 @@ the relevant source-owned READMEs.
 Return:
 
 1. authoritative current architecture;
-2. design/ADR conformance;
+2. design/plan conformance;
 3. dependency and ownership impact;
 4. alternatives and trade-offs;
 5. compatibility and deployment ordering;

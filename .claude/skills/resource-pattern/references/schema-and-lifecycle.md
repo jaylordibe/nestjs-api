@@ -50,7 +50,7 @@ Use:
 - lowercase_snake values;
 - explicit cast at the DB-to-application boundary where required.
 
-Do not introduce a PostgreSQL enum without an accepted ADR changing policy.
+Do not introduce a PostgreSQL enum without an approved plan changing policy.
 
 ## Lifecycle decisions
 

@@ -1,6 +1,6 @@
 # API/event contract: [Operation]
 
-- **Related ADR/ticket:**
+- **Related plan/ticket:**
 - **Owner:**
 - **Consumers:** web | mobile | external | worker
 - **Status:** Proposed | Active | Deprecated

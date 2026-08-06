@@ -79,7 +79,7 @@ contract.
 Address existing data, indexes, locks, backfills, mixed versions, abort
 thresholds, and recovery.
 
-## ADRs
+## Design records
 
 A material decision records context, ticket-vs-code reconciliation, alternatives,
 security, file plan, tests, verification, migration, rollout, non-goals, and
