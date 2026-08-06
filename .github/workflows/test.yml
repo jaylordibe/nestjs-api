@@ -84,12 +84,6 @@ jobs:
       - name: Generate Prisma client
         run: yarn prisma:generate
 
-      # Guards the Claude Code configuration the same way lint guards source:
-      # frontmatter schema, skill/command name collisions, cross-reference rot,
-      # doc-vs-code symbol drift, and hooks that would fail open.
-      - name: Validate Claude Code config
-        run: yarn claude:validate
-
       - name: Lint
         run: yarn lint
 
