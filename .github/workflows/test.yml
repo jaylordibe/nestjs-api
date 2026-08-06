@@ -313,6 +313,184 @@ jobs:
           yarn rbac:check
 
 
+  # Migrations meeting data that already exists — the one failure class every
+  # other gate in this file is structurally blind to.
+  #
+  # `test/setup/global-setup.ts` issues DROP DATABASE / CREATE DATABASE on every
+  # e2e run, so the suite only ever proves migrations apply to an EMPTY schema.
+  # Production applies them to a populated one, and applies them BEFORE the new
+  # container starts (deploy-production.yml runs `migrate` then `up -d`), so the
+  # OLD build serves traffic against the NEW schema for the length of the swap.
+  # Nothing tested that until this job. A DROP COLUMN, a SET NOT NULL, a RENAME,
+  # or a unique index that collides with existing duplicates passes lint, build,
+  # the e2e shards, Trivy and the entrypoint check, then fails in production with
+  # the schema already changed and the old container already stopped.
+  #
+  # Runs in parallel with the other jobs (like `docker`) so it never lengthens
+  # the deploy gate, and skips itself entirely when a change touches no
+  # migration — which is most changes.
+  migration-safety:
+    name: Migrations against existing data
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Compose derives its project name from the working directory, and this job
+    # deliberately works out of two (`base/` and `head/`). Without pinning it,
+    # containers started from `head/` belong to project "head" and every later
+    # `docker compose exec`/`logs` run from `base/` would look for a project
+    # "base" that has no services — reporting a missing container rather than
+    # the migration result this job exists to produce.
+    #
+    # This is NOT test configuration and appears nowhere in `.env.test`, so it
+    # shadows nothing; the steps below still source that file for everything the
+    # application reads.
+    env:
+      COMPOSE_PROJECT_NAME: migration-safety
+
+    steps:
+      - name: Check out the proposed commit
+        uses: actions/checkout@v4
+        with:
+          path: head
+
+      # `main` is what production is actually running. Diffing against the PR's
+      # base branch instead would miss anything already merged to develop but
+      # not yet released — and it is the released schema these migrations will
+      # really land on.
+      - name: Check out the released commit
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: base
+
+      - name: Decide whether this change touches migrations
+        id: scope
+        run: |
+          if diff -rq base/prisma/migrations head/prisma/migrations >/dev/null 2>&1; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'No migration changes against the released commit — nothing for this job to prove.'
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            echo 'Migration changes against the released commit:'
+            diff -rq base/prisma/migrations head/prisma/migrations || true
+          fi
+
+      # The same compose file and the same .env.test everything else uses, so
+      # this job cannot drift onto its own database configuration.
+      - name: Start Postgres + Redis
+        if: steps.scope.outputs.changed == 'true'
+        working-directory: head
+        run: docker compose --env-file .env.test up -d --wait postgres redis
+
+      - name: Set up Node
+        if: steps.scope.outputs.changed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: yarn
+          cache-dependency-path: head/yarn.lock
+
+      - name: Install dependencies (released commit)
+        if: steps.scope.outputs.changed == 'true'
+        working-directory: base
+        run: yarn install --frozen-lockfile --silent
+        env:
+          NODE_OPTIONS: --no-deprecation
+
+      # Recreates production's starting point: the released schema, carrying
+      # rows. `.env.test` is sourced rather than restated in an `env:` block — a
+      # workflow-level block would silently shadow the file. Any SEED_* value the
+      # file does not define falls back below WITHOUT overriding one that it
+      # does. `prisma/seed.ts` reads the ADMIN and USER prefixes and throws when
+      # either pair is absent, so both are supplied.
+      - name: Apply released migrations and seed data
+        if: steps.scope.outputs.changed == 'true'
+        working-directory: base
+        run: |
+          set -euo pipefail
+          set -a
+          . ./.env.test
+          : "${SEED_ADMIN_EMAIL:=migration-safety-admin@example.com}"
+          : "${SEED_ADMIN_PASSWORD:=MigrationSafety123!}"
+          : "${SEED_USER_EMAIL:=migration-safety-user@example.com}"
+          : "${SEED_USER_PASSWORD:=MigrationSafety123!}"
+          set +a
+          yarn prisma:generate
+          yarn prisma:deploy
+          yarn prisma:seed
+
+      # Without this the job could pass against an empty database and prove
+      # nothing at all — the exact vacuous-green failure it exists to prevent.
+      - name: Assert the database is actually populated
+        if: steps.scope.outputs.changed == 'true'
+        working-directory: base
+        run: |
+          set -euo pipefail
+          set -a; . ./.env.test; set +a
+          row_count=$(docker compose --env-file .env.test exec -T postgres \
+            psql -U "$DB_USER" -d "$DB_NAME" -tAc 'SELECT count(*) FROM users;')
+          echo "users table holds ${row_count} row(s)"
+          if [ "${row_count:-0}" -lt 1 ]; then
+            echo '::error::seeding produced no rows, so applying migrations to a populated database was never actually tested'
+            exit 1
+          fi
+
+      - name: Install dependencies (proposed commit)
+        if: steps.scope.outputs.changed == 'true'
+        working-directory: head
+        run: yarn install --frozen-lockfile --silent
+        env:
+          NODE_OPTIONS: --no-deprecation
+
+      # The primary assertion: the NEW migrations applied on top of the released
+      # schema, with real rows underneath them.
+      - name: Apply the proposed migrations to the populated database
+        if: steps.scope.outputs.changed == 'true'
+        working-directory: head
+        run: |
+          set -euo pipefail
+          set -a; . ./.env.test; set +a
+          yarn prisma:generate
+          if ! yarn prisma:deploy; then
+            echo '::error::the proposed migrations do not apply to a database that already holds data — this would fail mid-deploy in production, after the old container has already been stopped'
+            exit 1
+          fi
+
+      # The expand/contract assertion. Production runs the OLD image against the
+      # NEW schema for the whole build-and-swap window, so a migration that
+      # removes or tightens something the released code still reads takes the
+      # site down before the new container ever starts.
+      - name: Prove the released build still serves traffic on the new schema
+        if: steps.scope.outputs.changed == 'true'
+        working-directory: base
+        run: |
+          set -euo pipefail
+          set -a; . ./.env.test; set +a
+          yarn build
+          node dist/main.js &
+          application_pid=$!
+          trap 'kill "$application_pid" 2>/dev/null || true' EXIT
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS "http://localhost:${PORT:-3000}/api/health/liveness" >/dev/null 2>&1; then
+              echo "released build is healthy against the migrated schema (attempt ${attempt})"
+              exit 0
+            fi
+            if ! kill -0 "$application_pid" 2>/dev/null; then
+              echo '::error::the released build exited against the new schema — this migration is not backwards-compatible and will break production during the deploy window'
+              exit 1
+            fi
+            sleep 2
+          done
+
+          echo '::error::the released build never became healthy against the new schema within 60s — treat this migration as not backwards-compatible'
+          exit 1
+
+      - name: Dump container logs on failure
+        if: failure() && steps.scope.outputs.changed == 'true'
+        working-directory: head
+        run: docker compose --env-file .env.test logs --no-color --tail=200
+
   docker:
     name: Build & scan container image
     runs-on: ubuntu-latest
