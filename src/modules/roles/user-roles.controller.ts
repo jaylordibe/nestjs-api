@@ -21,7 +21,7 @@ import { UserRolesService } from './user-roles.service';
 // Granting a platform role is the most privileged action in the system, so it
 // gets its own tight throttle on top of the global one.
 //
-// BUSINESS roles are never assigned here — they are a `business_members` row,
+// BUSINESS roles are never assigned here — they are a `business_memberships` row,
 // and the database rejects a business role in `user_roles` outright.
 @ApiTags('Roles')
 @Controller('users/:userId/roles')

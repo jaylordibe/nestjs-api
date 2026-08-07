@@ -5,7 +5,7 @@ describe('toSnakeCase', () => {
     ['all', 'all'],
     ['User', 'user'],
     ['Business', 'business'],
-    ['BusinessMember', 'business_member'],
+    ['BusinessMembership', 'business_membership'],
     ['AppVersion', 'app_version'],
     ['DeviceToken', 'device_token'],
     ['AuditLog', 'audit_log'],
@@ -21,6 +21,6 @@ describe('toSnakeCase', () => {
   });
 
   it('is idempotent on already-snake input', () => {
-    expect(toSnakeCase('business_member')).toBe('business_member');
+    expect(toSnakeCase('business_membership')).toBe('business_membership');
   });
 });

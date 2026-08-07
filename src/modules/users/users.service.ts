@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Prisma, User } from '@prisma/client';
@@ -11,14 +11,15 @@ import { AuditService } from '../../common/audit/audit.service';
 import { Errors } from '../../common/errors/errors';
 import { EmailService } from '../../common/email/email.service';
 import { SmsService } from '../../common/sms/sms.service';
+import { BusinessMembershipStatus } from '../../common/enums/business-membership-status.enum';
 import { OtpPurpose } from '../../common/enums/otp-purpose.enum';
-import { SeededRoleName } from '../../common/enums/seeded-role-name.enum';
 import {
   BCRYPT_ROUNDS,
   hashPassword,
 } from '../../common/util/password-hashing.util';
 import { RedisService } from '../../common/redis/redis.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { RefreshTokenService } from '../auth/refresh-token.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { UpdateAuthUserEmailDto } from './dto/update-auth-user-email.dto';
@@ -63,6 +64,11 @@ export class UsersService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly redis: RedisService,
+    // `forwardRef` on both sides: AuthModule imports UsersModule for the login
+    // path, and UsersModule needs session revocation back. Per CLAUDE.md, the
+    // ref goes in the module imports AND on the injection.
+    @Inject(forwardRef(() => RefreshTokenService))
+    private readonly refreshTokenService: RefreshTokenService,
   ) {}
 
   // Tells the owner of an existing account that someone tried to sign up with
@@ -200,43 +206,32 @@ export class UsersService {
 
   async create(dto: CreateUserDto, actorId: string | null): Promise<User> {
     const passwordHash = await hashPassword(dto.password);
-    // The user row and its PLATFORM_USER assignment are one atomic unit. A
-    // user without that role holds no permissions at all — they could not even
-    // read their own profile — so a partial write here would produce a broken
-    // account. Covers both self-signup and admin-initiated creates.
-    const user = await this.prisma.$transaction(async (transaction) => {
-      const created = await transaction.user.create({
-        data: {
-          email: dto.email.toLowerCase(),
-          username: dto.username?.toLowerCase(),
-          password: passwordHash,
-          passwordChangedAt: new Date(),
-          firstName: dto.firstName,
-          middleName: dto.middleName,
-          lastName: dto.lastName,
-          phoneNumber: dto.phoneNumber,
-          gender: dto.gender,
-          birthday: dto.birthday,
-          timezone: dto.timezone,
-          profileImageUrl: dto.profileImageUrl,
-          createdBy: actorId,
-          updatedBy: actorId,
-        },
-      });
-
-      const platformUserRole = await transaction.role.findUniqueOrThrow({
-        where: { name: SeededRoleName.PLATFORM_USER },
-        select: { id: true },
-      });
-      await transaction.userRole.create({
-        data: {
-          userId: created.id,
-          roleId: platformUserRole.id,
-          createdBy: actorId,
-        },
-      });
-
-      return created;
+    // A single INSERT. No role is assigned, and no transaction is needed to
+    // make one atomic with the user row.
+    //
+    // Self-service capability comes from AUTHENTICATED_USER_PERMISSIONS, which
+    // `AbilityFactory` grants to every authenticated caller, so an account with
+    // no roles is complete and working. Attaching a default role here instead
+    // would make the user row and that row a single unit that must not be
+    // half-written — a class of bug this design does not have rather than
+    // guards against.
+    const user = await this.prisma.user.create({
+      data: {
+        email: dto.email.toLowerCase(),
+        username: dto.username?.toLowerCase(),
+        password: passwordHash,
+        passwordChangedAt: new Date(),
+        firstName: dto.firstName,
+        middleName: dto.middleName,
+        lastName: dto.lastName,
+        phoneNumber: dto.phoneNumber,
+        gender: dto.gender,
+        birthday: dto.birthday,
+        timezone: dto.timezone,
+        profileImageUrl: dto.profileImageUrl,
+        createdBy: actorId,
+        updatedBy: actorId,
+      },
     });
 
     // Only audit admin-initiated creates; self-signup has no actor.
@@ -264,8 +259,18 @@ export class UsersService {
       where: { id: userId },
       select: {
         userRoles: { select: { role: { select: { name: true } } } },
-        businessMembers: {
-          select: { businessId: true, role: { select: { name: true } } },
+        // Every status, not only ACTIVE. A client showing "your businesses"
+        // needs to render a suspended or pending membership differently rather
+        // than have it silently vanish — and `rules` above already reflects the
+        // truth about authority, since only ACTIVE memberships compile into
+        // grants. This list is context, not permission.
+        memberships: {
+          select: {
+            id: true,
+            businessId: true,
+            status: true,
+            role: { select: { name: true } },
+          },
         },
       },
     });
@@ -277,9 +282,11 @@ export class UsersService {
       platformRoles: (user?.userRoles ?? []).map(
         (userRole) => userRole.role.name,
       ),
-      businessMemberships: (user?.businessMembers ?? []).map((membership) => ({
+      businessMemberships: (user?.memberships ?? []).map((membership) => ({
+        membershipId: membership.id,
         businessId: membership.businessId,
         roleName: membership.role.name,
+        status: membership.status as BusinessMembershipStatus,
       })),
     });
   }
@@ -800,5 +807,78 @@ export class UsersService {
       targetUserId: user.id,
     });
     await this.notifyPasswordChanged(updated);
+  }
+
+  // ── Support operations ─────────────────────────────────────────────────
+  //
+  // Three narrow capabilities held by PLATFORM_APP_SUPPORT, deliberately NOT
+  // expressed as slices of `update User`. The difference is the whole design:
+  // unlocking an account or re-sending its verification link HELPS its owner,
+  // whereas changing its email TAKES it from them. Granting support the ability
+  // to edit an arbitrary user is account takeover wearing a helpful hat, so
+  // each of these is its own permission and none of them can write a field.
+
+  /**
+   * Clears a failed-login lockout.
+   *
+   * Deliberately does NOT touch the password, the email, or any session — an
+   * account is unlocked exactly as its owner left it. `findByIdOrThrow` keeps
+   * the 404 behaviour consistent with every other admin route.
+   */
+  async unlock(userId: string, actorId: string): Promise<User> {
+    const user = await this.findById(userId);
+    const unlocked = await this.prisma.user.update({
+      where: { id: user.id },
+      data: { failedLoginCount: 0, lockedUntil: null, updatedBy: actorId },
+    });
+    await this.auditService.record({
+      action: 'user.unlocked_by_support',
+      actorId,
+      targetUserId: user.id,
+      metadata: { previousFailedLoginCount: user.failedLoginCount },
+    });
+    return unlocked;
+  }
+
+  /**
+   * Ends every session the account holds, on every device.
+   *
+   * The access token is a stateless JWT and cannot be withdrawn before it
+   * expires, so this revokes the refresh chains: the account survives until its
+   * current access token lapses and cannot mint another. That residual window
+   * is inherent to stateless tokens and is why they are short-lived.
+   */
+  async revokeAllSessions(userId: string, actorId: string): Promise<void> {
+    const user = await this.findById(userId);
+    await this.refreshTokenService.revokeAllForUser(user.id);
+    await this.auditService.record({
+      action: 'user.sessions_revoked_by_support',
+      actorId,
+      targetUserId: user.id,
+    });
+  }
+
+  /**
+   * Re-sends the email-verification link on a user's behalf.
+   *
+   * Distinct from the public `POST /auth/resend-verification`, which must stay
+   * silent about whether an address is registered. This one is called by
+   * authenticated staff who can already see the account, so it can 404 honestly
+   * and report whether there was anything to send.
+   */
+  async resendVerificationForUser(
+    userId: string,
+    actorId: string,
+  ): Promise<void> {
+    const user = await this.findById(userId);
+    if (user.emailVerifiedAt) {
+      throw Errors.resourceConflict('That account is already verified');
+    }
+    await this.sendEmailVerificationLink(user);
+    await this.auditService.record({
+      action: 'user.verification_resent_by_support',
+      actorId,
+      targetUserId: user.id,
+    });
   }
 }

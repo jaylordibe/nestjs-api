@@ -28,14 +28,14 @@ export interface RequirePermissionOptions {
   //
   // Why this is needed: a guard runs before any record is loaded, so it can
   // only ask CASL "does ANY rule grant this action on this subject?" — and
-  // that question ignores conditions. Without this flag, PLATFORM_USER's
-  // `update User (own)` would pass the guard on `PATCH /users/:id`, because a
-  // rule does exist. Setting `administrative: true` makes the guard demand a
-  // rule that is not owner-conditioned, so self-service grants don't unlock
-  // admin routes.
+  // that question ignores conditions. Without this flag, the intrinsic
+  // `update User (own)` that EVERY authenticated caller holds would pass the
+  // guard on `PATCH /users/:id`, because a rule does exist. Setting
+  // `administrative: true` makes the guard demand a rule that is not
+  // owner-conditioned, so self-service grants cannot unlock admin routes.
   //
   // Tenant-conditioned rules still qualify: a BUSINESS_ADMIN's
-  // `update BusinessMember { businessId }` is administrative *within* its
+  // `update BusinessMembership { businessId }` is administrative *within* its
   // business, and the tenant boundary is enforced by the query.
   administrative?: boolean;
 

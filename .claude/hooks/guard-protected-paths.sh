@@ -29,18 +29,32 @@ if [ -z "$file_path" ]; then
   exit 0 # No file path to classify (not an Edit/Write shape); defer to normal permission flow.
 fi
 
+# ── What belongs here, and what deliberately does not ─────────────────────
+#
+# Only ONE category remains: an edit under prisma/migrations/. It earns a
+# prompt because the failure it prevents is silent, remote, and unrecoverable —
+# editing an applied migration changes a checksum recorded in
+# `_prisma_migrations`, and the damage surfaces mid-deploy in an environment
+# nobody is watching. No amount of instruction in CLAUDE.md prevents that,
+# because the agent cannot know from the repository alone whether a given
+# migration has been applied somewhere. Only a human knows.
+#
+# Three categories were removed (prisma/schema.prisma, the auth/authorization
+# trees, and src/common/errors/). Each was already gated twice over: CLAUDE.md
+# states every one of those rules and is in the agent's context on every single
+# request, and `/work-item`'s plan gate is where a human consciously approves
+# touching those surfaces. A third check that fires on EVERY file edit adds no
+# information a reader did not already have — a single authorization change
+# legitimately touches thirty files, and thirty identical prompts do not make
+# the reviewer thirty times more informed. They train the reviewer to click
+# through without reading, which is strictly worse than one prompt they
+# actually read. A guard that is always firing is indistinguishable from noise.
+#
+# Hard prohibitions are unaffected: they live in `permissions.deny` in
+# .claude/settings.json, which cannot fail open and never prompts at all.
 case "$file_path" in
   */prisma/migrations/*)
-    emit_ask "Project hook: this edits a file under prisma/migrations/. Never edit an already-applied migration — its checksum is recorded in _prisma_migrations and editing it breaks 'migrate deploy' in every deployed environment. Approve ONLY for a migration that has not been applied anywhere (fresh --create-only). Otherwise add a NEW migration."
-    ;;
-  */prisma/schema.prisma)
-    emit_ask "Project hook: this edits prisma/schema.prisma — HIGH risk per CLAUDE.md (schema, migrations, existing data). Confirm an ACCEPTED ADR covers this change, that the schema change is consolidated into ONE migration file, and that no migration will be applied to the local dev database."
-    ;;
-  */src/modules/auth/*|*/src/modules/authorization/*|*/src/common/authorization/*)
-    emit_ask "Project hook: this edits an authentication/authorization surface — HIGH risk per CLAUDE.md. Confirm an ACCEPTED ADR exists, an explicit threat model was recorded, and negative + cross-tenant authorization tests are part of this change. See the auth-security and authorization skills."
-    ;;
-  */src/common/errors/*)
-    emit_ask "Project hook: this edits the error contract (src/common/errors/). errorCode values are a stable machine-readable contract that web and mobile clients program against. Confirm consumers, mixed-version behavior, and rollback are identified per CLAUDE.md, and see src/common/errors/README.md."
+    emit_ask "Project hook: this edits a file under prisma/migrations/. Never edit an already-applied migration — its checksum is recorded in _prisma_migrations and editing it breaks 'migrate deploy' in every deployed environment. Approve ONLY for a migration that has not been applied anywhere (a fresh --create-only, or a template re-baseline before any deploy). Otherwise add a NEW migration."
     ;;
 esac
 

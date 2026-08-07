@@ -12,6 +12,7 @@ import { QueueJobHandlerRegistry } from './queue-job-handler.registry';
 import { QueueLifecycleLogger } from './queue-lifecycle.logger';
 import { QueueProcessorContext } from './queue-processor-context.service';
 import { QueueProducerService } from './queue-producer.service';
+import { QueueInspectionService } from './queue-inspection.service';
 import { QueueStatusService } from './queue-status.service';
 import {
   DEFAULT_JOB_RETENTION_POLICY,
@@ -88,6 +89,7 @@ import {
     QueueLifecycleLogger,
     QueueProducerService,
     QueueStatusService,
+    QueueInspectionService,
     QueueJobHandlerRegistry,
     QueueProcessorContext,
     // Processors are registered unconditionally and started conditionally —
@@ -111,6 +113,10 @@ import {
     BullModule,
     QueueProducerService,
     QueueStatusService,
+    // Operator inspection and recovery. Safe to export where `QueueAccessor` is
+    // not: it exposes the read/retry/cancel verbs and nothing that can enqueue,
+    // so domain code still cannot route around QueueProducerService.
+    QueueInspectionService,
     QueueWorkerLivenessService,
   ],
 })

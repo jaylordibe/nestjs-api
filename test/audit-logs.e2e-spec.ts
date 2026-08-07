@@ -6,7 +6,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { truncateAll } from './setup/db';
 import {
   createPlatformAdmin,
-  createPlatformUser,
+  createUser,
   createRegularUser,
   seedRbacCatalog,
   SeededUser,
@@ -84,9 +84,9 @@ describe('Audit logs (e2e)', () => {
   });
 
   it('PLATFORM_SUPPORT can read the audit trail (read AuditLog)', async () => {
-    const support = await createPlatformUser(app, {
+    const support = await createUser(app, {
       email: 'support@example.com',
-      roles: [SeededRoleName.PLATFORM_SUPPORT],
+      roles: [SeededRoleName.PLATFORM_APP_SUPPORT],
     });
     await request(app.getHttpServer())
       .get('/api/audit-logs')
@@ -263,7 +263,7 @@ describe('Audit logs (e2e)', () => {
       const user = await createRegularUser(app, 'target@example.com');
       const prisma = app.get(PrismaService);
       const supportRole = await prisma.role.findUniqueOrThrow({
-        where: { name: SeededRoleName.PLATFORM_SUPPORT },
+        where: { name: SeededRoleName.PLATFORM_APP_SUPPORT },
       });
 
       await request(app.getHttpServer())
@@ -292,12 +292,9 @@ describe('Audit logs (e2e)', () => {
       // audit row describes being granted is already in the list. The field
       // answers "who is this person now?", never "what were they allowed to do
       // at the time?" — for that, read `metadata`, which is point-in-time.
-      expect(auditLog.targetUser?.roles).toEqual(
-        expect.arrayContaining([
-          SeededRoleName.PLATFORM_USER,
-          SeededRoleName.PLATFORM_SUPPORT,
-        ]),
-      );
+      expect(auditLog.targetUser?.roles).toEqual([
+        SeededRoleName.PLATFORM_APP_SUPPORT,
+      ]);
       // Narrow by construction — the hydrated ref must never carry the
       // credential columns that live on the same row.
       expect(auditLog.actor).not.toHaveProperty('password');
@@ -366,7 +363,7 @@ describe('Audit logs (e2e)', () => {
     const user = await createRegularUser(app, 'user@example.com');
     const prisma = app.get(PrismaService);
     const supportRole = await prisma.role.findUniqueOrThrow({
-      where: { name: SeededRoleName.PLATFORM_SUPPORT },
+      where: { name: SeededRoleName.PLATFORM_APP_SUPPORT },
     });
 
     await request(app.getHttpServer())

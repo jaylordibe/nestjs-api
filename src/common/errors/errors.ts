@@ -99,6 +99,45 @@ export const Errors = {
       details: subject ? { action, subject } : { action },
     }),
 
+  // ── Business membership + invitations ──────────────────────────────
+  // A business without an active owner is unadministrable: nobody can grow the
+  // roster, and nobody can delete it. This fires for every caller, platform
+  // admins included — `manage all` bypasses AUTHORIZATION, not data integrity.
+  lastOwnerProtected: (): ConflictException =>
+    new ConflictException({
+      errorCode: ErrorCode.LAST_OWNER_PROTECTED,
+      message:
+        'A business must always have at least one active owner. Appoint another owner first.',
+    }),
+  membershipNotActive: (status: string): ConflictException =>
+    new ConflictException({
+      errorCode: ErrorCode.MEMBERSHIP_NOT_ACTIVE,
+      message: 'That membership is not in a state that allows this operation',
+      details: { status },
+    }),
+  // ONE code for both "wrong scope" and "outranks you". Splitting them would
+  // let a caller probing for privilege escalation learn which wall they hit,
+  // and the remedy is the same either way: pick a different role.
+  roleNotAssignable: (): ForbiddenException =>
+    new ForbiddenException({
+      errorCode: ErrorCode.ROLE_NOT_ASSIGNABLE,
+      message: 'You may not assign that role here',
+    }),
+  // Unknown, consumed, or revoked — deliberately indistinguishable, so a token
+  // cannot be probed for existence. Same reasoning as refreshTokenInvalid().
+  invitationInvalid: (): BadRequestException =>
+    new BadRequestException({
+      errorCode: ErrorCode.INVITATION_INVALID,
+      message: 'This invitation is no longer valid',
+    }),
+  // Safe to distinguish: the holder already proved possession of a real token,
+  // so this discloses nothing they did not have, and their remedy is different.
+  invitationExpired: (): BadRequestException =>
+    new BadRequestException({
+      errorCode: ErrorCode.INVITATION_EXPIRED,
+      message: 'This invitation has expired. Ask for a new one.',
+    }),
+
   // ── 400 ────────────────────────────────────────────────────────────
   validationFailed: (
     details: Array<{ field: string; constraints: string[] }>,

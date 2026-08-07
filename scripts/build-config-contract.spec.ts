@@ -131,3 +131,63 @@ describe('build configuration contract', () => {
     });
   });
 });
+
+// `eslint --fix` repairs what it can and THEN exits 0, so a fixing linter can
+// never fail a gate: it rewrites the runner's copy, reports success, and the
+// fixes die with the container. The unsuffixed `lint` is therefore the CHECK
+// and `lint:fix` the opt-in mutation, so that a workflow step or a document
+// written from muscle memory gets the gate rather than a silent pass.
+//
+// Prettier is enforced through the `prettier/prettier` ESLint rule, so a
+// separate `format` script is a second entry point to a formatter `lint`
+// already applies — and one whose glob drifts out of step with the lint glob.
+// It covered `prisma/` while lint did not, which is why the lint glob must
+// keep covering `prisma/` now that `format` is gone.
+//
+// Documentation alone cannot hold any of this: re-adding `--fix` to `lint`, or
+// pointing CI at `lint:fix`, restores the silent pass with no visible symptom.
+// These assertions are that omission case.
+describe('lint gate contract', () => {
+  const repositoryRoot = resolve(__dirname, '..');
+
+  const packageManifest = () =>
+    JSON.parse(
+      readFileSync(join(repositoryRoot, 'package.json'), 'utf8'),
+    ) as PackageManifest;
+
+  const testWorkflow = () =>
+    readFileSync(join(repositoryRoot, '.github/workflows/test.yml'), 'utf8');
+
+  it('keeps the default lint script free of --fix so it can actually fail', () => {
+    const lintScript = packageManifest().scripts?.lint;
+    expect(lintScript).toBeDefined();
+    expect(lintScript).not.toContain('--fix');
+  });
+
+  // One definition of the lint scope. If the fixer stops delegating, the two
+  // scripts drift and a path added to one is silently unlinted by the other.
+  it('derives the fixing script from the checking script', () => {
+    expect(packageManifest().scripts?.['lint:fix']).toContain('yarn lint');
+  });
+
+  // Inherited from the deleted `format` script, whose glob was the only thing
+  // covering these files.
+  it('keeps prisma/ inside the lint glob', () => {
+    expect(packageManifest().scripts?.lint).toContain('prisma');
+  });
+
+  it.each([['format'], ['format:check']])(
+    'has no standalone %s script duplicating the ESLint prettier rule',
+    (scriptName) => {
+      expect(packageManifest().scripts?.[scriptName]).toBeUndefined();
+    },
+  );
+
+  it('runs the checking script in CI', () => {
+    expect(testWorkflow()).toMatch(/run:\s*yarn lint\s*$/m);
+  });
+
+  it('never invokes the fixing script from CI', () => {
+    expect(testWorkflow()).not.toContain('yarn lint:fix');
+  });
+});

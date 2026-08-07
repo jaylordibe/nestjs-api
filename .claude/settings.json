@@ -168,8 +168,10 @@
       "Bash(git check-ignore *)",
       "Bash(yarn install *)",
       "Bash(yarn build *)",
+      "Bash(yarn lint)",
       "Bash(yarn lint *)",
-      "Bash(yarn format *)",
+      "Bash(yarn lint:fix)",
+      "Bash(yarn lint:fix *)",
       "Bash(yarn test *)",
       "Bash(yarn test:e2e *)",
       "Bash(yarn prisma:generate *)",
@@ -207,18 +209,6 @@
             "type": "command",
             "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-protected-paths.sh",
             "statusMessage": "Guard: protected path"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/format-changed-file.sh",
-            "statusMessage": "Formatting changed file"
           }
         ]
       }

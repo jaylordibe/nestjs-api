@@ -110,6 +110,16 @@ export const envValidationSchema = Joi.object({
     .max(3600)
     .default(300),
 
+  // How long a business invitation stays redeemable. The token is a bearer
+  // credential living in somebody's inbox, so this is bounded on purpose: a
+  // long-lived invitation turns any later mailbox compromise into a way into
+  // the business. Capped at 30 days — anything longer should be re-issued.
+  BUSINESS_INVITATION_EXPIRES_IN_DAYS: Joi.number()
+    .integer()
+    .min(1)
+    .max(30)
+    .default(7),
+
   // Email provider selection. `stub` (default) logs to stdout — OTPs are
   // visible in the app log so local flows can be completed manually.
   // `resend` routes through resend.com and requires RESEND_API_KEY and

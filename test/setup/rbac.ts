@@ -7,19 +7,25 @@ import {
   seedPermissions,
   seedRoles,
 } from '../../prisma/rbac-seeder';
+import { BusinessMembershipStatus } from '../../src/common/enums/business-membership-status.enum';
 import { SeededRoleName } from '../../src/common/enums/seeded-role-name.enum';
 import { PrismaService } from '../../src/prisma/prisma.service';
 
 // Shared RBAC fixtures.
 //
-// `truncateAll` wipes `roles` / `permissions` between specs, and nothing works
-// without them: even `POST /auth/register` needs PLATFORM_USER to exist,
-// because a user's own self-service grants come from that role. So every spec
-// calls `seedRbacCatalog(app)` in `beforeEach`, right after truncating.
+// `truncateAll` wipes `roles` / `permissions` between specs and nothing works
+// without them, so every spec calls `seedRbacCatalog(app)` in `beforeEach`,
+// right after truncating.
 //
 // The catalog is projected from `permission-catalog.ts` by the same seeder
 // production uses, so tests exercise the real grant graph rather than a
 // hand-maintained fixture that could drift from it.
+//
+// Note what is NOT here any more: a default role. Every user used to be granted
+// PLATFORM_USER, mirroring `UsersService.create`. Self-service capability now
+// comes from AUTHENTICATED_USER_PERMISSIONS, which the ability factory injects
+// for every authenticated caller — so `createUser` below creates an account
+// with NO roles at all, which is exactly the shape of a real signup.
 
 export const TEST_PASSWORD = 'correct-horse-battery-1';
 
@@ -55,14 +61,13 @@ export interface SeededUser {
 }
 
 /**
- * Creates a verified user holding PLATFORM_USER plus any extra platform roles,
- * then logs in and returns a usable token.
+ * Creates a verified account holding the given platform roles — none, by
+ * default.
  *
  * Rows are inserted directly rather than through `POST /auth/register` so the
- * spec controls `emailVerifiedAt` and the role set. PLATFORM_USER is always
- * granted, mirroring `UsersService.create`.
+ * spec controls `emailVerifiedAt` and the role set.
  */
-export async function createPlatformUser(
+export async function createUser(
   app: INestApplication<App>,
   options: {
     email: string;
@@ -86,11 +91,7 @@ export async function createPlatformUser(
     },
   });
 
-  const roles = new Set<SeededRoleName>([
-    SeededRoleName.PLATFORM_USER,
-    ...(options.roles ?? []),
-  ]);
-  for (const roleName of roles) {
+  for (const roleName of options.roles ?? []) {
     await assignPlatformRole(prisma, user.id, roleName);
   }
 
@@ -102,25 +103,31 @@ export function createPlatformAdmin(
   app: INestApplication<App>,
   email = 'admin@example.com',
 ): Promise<SeededUser> {
-  return createPlatformUser(app, {
+  return createUser(app, {
     email,
     roles: [SeededRoleName.PLATFORM_ADMIN],
     firstName: 'Admin',
   });
 }
 
-// An ordinary registered user: PLATFORM_USER only (self-service grants).
+/**
+ * An ordinary registered user: NO platform role whatsoever.
+ *
+ * This is the single most important fixture in the suite, because it is the
+ * shape of every real account. If a `/users/me/*` route breaks for this user,
+ * it is broken for everybody.
+ */
 export function createRegularUser(
   app: INestApplication<App>,
   email = 'user@example.com',
 ): Promise<SeededUser> {
-  return createPlatformUser(app, { email, firstName: 'Regular' });
+  return createUser(app, { email, firstName: 'Regular' });
 }
 
 /**
- * Registers through the real `POST /auth/register` endpoint, then marks the
- * email verified and logs in. Use where the spec is exercising the register
- * flow itself; `createRegularUser` is cheaper otherwise.
+ * Registers through the real `POST /auth/register`, then marks the email
+ * verified and logs in. Use where the spec is exercising the register flow
+ * itself; `createRegularUser` is cheaper otherwise.
  */
 export async function registerAndLogin(
   app: INestApplication<App>,
@@ -146,4 +153,69 @@ export async function registerAndLogin(
   });
 
   return { id: user.id, email, token: await loginAs(app, email) };
+}
+
+/** The id of a seeded role, by name. */
+export async function roleIdFor(
+  app: INestApplication<App>,
+  name: SeededRoleName,
+): Promise<string> {
+  const prisma = app.get(PrismaService);
+  const role = await prisma.role.findUniqueOrThrow({ where: { name } });
+  return role.id;
+}
+
+export interface SeededBusiness {
+  id: string;
+  slug: string;
+}
+
+/**
+ * Creates a business directly in the database and makes `ownerId` its owner.
+ *
+ * Bypasses `POST /businesses` so a spec can set up a tenant without asserting
+ * anything about the creation endpoint — and so it can create a business owned
+ * by somebody other than the caller.
+ */
+export async function createBusinessWithOwner(
+  app: INestApplication<App>,
+  ownerId: string,
+  slug = 'acme',
+): Promise<SeededBusiness> {
+  const prisma = app.get(PrismaService);
+  const business = await prisma.business.create({
+    data: { name: slug, slug, createdBy: ownerId, updatedBy: ownerId },
+  });
+  await addMembership(app, business.id, ownerId, SeededRoleName.BUSINESS_OWNER);
+  return { id: business.id, slug: business.slug };
+}
+
+/**
+ * Puts a user into a business with a given role and status.
+ *
+ * `joinedAt` is stamped for every status except INVITED because the database
+ * CHECK requires it — a membership that has been active must record when.
+ */
+export async function addMembership(
+  app: INestApplication<App>,
+  businessId: string,
+  userId: string,
+  roleName: SeededRoleName,
+  status: BusinessMembershipStatus = BusinessMembershipStatus.ACTIVE,
+): Promise<string> {
+  const prisma = app.get(PrismaService);
+  const role = await prisma.role.findUniqueOrThrow({
+    where: { name: roleName },
+  });
+  const membership = await prisma.businessMembership.create({
+    data: {
+      businessId,
+      userId,
+      roleId: role.id,
+      status,
+      joinedAt: status === BusinessMembershipStatus.INVITED ? null : new Date(),
+      endedAt: status === BusinessMembershipStatus.LEFT ? new Date() : null,
+    },
+  });
+  return membership.id;
 }

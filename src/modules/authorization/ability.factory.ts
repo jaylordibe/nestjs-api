@@ -2,15 +2,17 @@ import { Injectable } from '@nestjs/common';
 import { AbilityBuilder } from '@casl/ability';
 import { createPrismaAbility } from '@casl/prisma';
 import type { AppAbility } from '../../common/authorization/app-ability';
-import type {
-  AuthorizationAction,
-  AuthorizationSubject,
+import {
+  AUTHENTICATED_USER_PERMISSIONS,
+  type AuthorizationAction,
+  type AuthorizationSubject,
 } from '../../common/authorization/permission-catalog';
 import {
   resolveOwnerKey,
   resolveTenantKey,
 } from '../../common/authorization/subject-key';
 import { PermissionOwnership } from '../../common/enums/permission-ownership.enum';
+import { BusinessMembershipStatus } from '../../common/enums/business-membership-status.enum';
 import { RoleScope } from '../../common/enums/role-scope.enum';
 
 // A permission as it reaches the factory: the identity columns only. The
@@ -23,8 +25,19 @@ export interface PermissionGrant {
   readonly ownership: PermissionOwnership;
 }
 
+// One ACTIVE membership, with enough context to authorize AND to debug.
+//
+// `roleId` / `roleName` / `status` are not read when compiling rules — the
+// permissions alone decide that — but they are what makes a cached grant set
+// answerable to "why can this person do that?" without a second query. An
+// authorization cache you cannot read is one nobody trusts, and one nobody
+// trusts gets bypassed.
 export interface BusinessMembershipGrant {
+  readonly membershipId: string;
   readonly businessId: string;
+  readonly roleId: string;
+  readonly roleName: string;
+  readonly status: BusinessMembershipStatus;
   readonly permissions: readonly PermissionGrant[];
 }
 
@@ -48,6 +61,25 @@ export class AbilityFactory {
   createForUser(userId: string, grants: AuthorizationGrants): AppAbility {
     const { can, build } = new AbilityBuilder<AppAbility>(createPrismaAbility);
 
+    // ── What every authenticated caller can do, with no role at all ──────
+    //
+    // Injected FIRST and unconditionally, so an account with no platform role
+    // and zero business memberships is still a complete, working account.
+    // Modelling this as a role granted at signup would cost a `user_roles` row
+    // per user and a special case in the revoke path to stop anyone breaking an
+    // account by taking it away.
+    // Every entry is ownership-scoped to `userId` or a read of the shared
+    // role/permission vocabulary; nothing here reaches into a tenant.
+    for (const permission of AUTHENTICATED_USER_PERMISSIONS) {
+      if (permission.ownership === PermissionOwnership.OWN) {
+        can(permission.action, permission.subject, {
+          [resolveOwnerKey(permission.subject)]: userId,
+        });
+      } else {
+        can(permission.action, permission.subject);
+      }
+    }
+
     for (const permission of grants.platformPermissions) {
       if (permission.ownership === PermissionOwnership.OWN) {
         // "…but only the rows you own." `User` is keyed by `id`, its children
@@ -64,7 +96,17 @@ export class AbilityFactory {
       }
     }
 
+    // Only ACTIVE memberships confer authority — a suspended owner still holds
+    // rank 100 on paper and must hold nothing in fact.
+    //
+    // `PermissionLoaderService` already filters on status in the query, so this
+    // is defence in depth rather than the primary control. It is worth the two
+    // lines because grants also arrive here deserialized from Redis, and a
+    // cache is untrusted input: this is the last point at which a grant set can
+    // be checked before it becomes a permission.
     for (const membership of grants.businessMemberships) {
+      if (membership.status !== BusinessMembershipStatus.ACTIVE) continue;
+
       for (const permission of membership.permissions) {
         // Business-scoped authority is bounded by the tenant, always. The
         // `Business` record itself is keyed by `id`; everything owned by a

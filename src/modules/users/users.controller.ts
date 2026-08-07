@@ -346,4 +346,49 @@ export class UsersController {
   ): Promise<void> {
     await this.usersService.remove(id, currentUser.id);
   }
+
+  // ── Support operations ─────────────────────────────────────────────────
+  //
+  // Each carries its OWN permission rather than riding on `update User`. That
+  // is what lets PLATFORM_APP_SUPPORT help an account holder without being able
+  // to change the account's email — the difference between support and account
+  // takeover.
+
+  @Post(':id/unlock')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('unlock', 'User', { administrative: true })
+  @ApiOkResponse({ type: UserResponseDto })
+  async unlock(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ): Promise<UserResponseDto> {
+    return new UserResponseDto(
+      await this.usersService.unlock(id, currentUser.id),
+    );
+  }
+
+  @Post(':id/revoke-sessions')
+  @RequirePermission('revokeSession', 'User', { administrative: true })
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async revokeSessions(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ): Promise<void> {
+    await this.usersService.revokeAllSessions(id, currentUser.id);
+  }
+
+  // Unlike the public `POST /auth/resend-verification`, which must answer
+  // identically for a registered and an unregistered address, this one is
+  // called by staff who can already see the account — so it reports honestly.
+  @Post(':id/resend-verification')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('resendVerification', 'User', { administrative: true })
+  @ApiOkResponse({ type: OperationAcknowledgementDto })
+  async resendVerification(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ): Promise<OperationAcknowledgementDto> {
+    await this.usersService.resendVerificationForUser(id, currentUser.id);
+    return { ok: true };
+  }
 }

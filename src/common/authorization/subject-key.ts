@@ -13,14 +13,15 @@ import type { AuthorizationSubject } from './permission-catalog';
 // PLATFORM + OWN permissions (`{ [key]: actingUserId }`).
 //
 // `Business` is deliberately absent: business ownership is a
-// `business_members` row with the BUSINESS_OWNER role, not authorship of the
-// record. Keying it off `createdBy` would let a creator who has since been
-// removed from the roster keep owner powers forever.
+// `business_memberships` row holding the BUSINESS_OWNER role, not authorship
+// of the record. Keying it off `createdBy` would let a creator who has since
+// left the roster keep owner powers forever.
 export const SUBJECT_OWNER_KEY = {
   User: 'id',
   DeviceToken: 'userId',
-  // A customer owns their own relationship to a business.
-  BusinessCustomer: 'userId',
+  // A person owns their own membership row: it is how they see which
+  // businesses they belong to. This grants nothing over the business.
+  BusinessMembership: 'userId',
 } as const satisfies Partial<Record<AuthorizationSubject, string>>;
 
 // Which column ties a subject to the business that owns it. Used for every
@@ -33,12 +34,14 @@ export const SUBJECT_OWNER_KEY = {
 // silently producing an unconditional rule.
 export const SUBJECT_TENANT_KEY = {
   Business: 'id',
-  BusinessMember: 'businessId',
-  // …and the business owns its customer list. `BusinessCustomer` is the first
-  // subject in BOTH maps: a customer reaches their own record via `userId`,
-  // while staff reach every record in their tenant via `businessId`. The two
-  // rules OR-compose, which is exactly right.
-  BusinessCustomer: 'businessId',
+  // `BusinessMembership` appears in BOTH maps, and that duality is the whole
+  // design. A person reaches their OWN membership through a `{ userId }` rule;
+  // staff reach EVERY membership in their tenant through a `{ businessId }`
+  // rule. CASL OR-composes the two, so a business owner who is also a customer
+  // elsewhere gets exactly the union — roster access here, own-row access
+  // there — with no special case anywhere in the code.
+  BusinessMembership: 'businessId',
+  BusinessInvitation: 'businessId',
 } as const satisfies Partial<Record<AuthorizationSubject, string>>;
 
 export type OwnableSubject = keyof typeof SUBJECT_OWNER_KEY;

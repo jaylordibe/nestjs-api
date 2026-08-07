@@ -5,13 +5,18 @@ import type { AppAbility } from '../../common/authorization/app-ability';
 import type { AuthorizationAction } from '../../common/authorization/permission-catalog';
 import { Errors } from '../../common/errors/errors';
 
-// Prisma `WhereInput` for each subject a query can be scoped by. `all` is
-// excluded: it is a CASL wildcard, not a table.
+// Prisma `WhereInput` for each subject a query can be scoped by.
+//
+// Two subjects are absent on purpose. `all` is a CASL wildcard, not a table.
+// `QueueJob` lives in Redis, not Postgres, so there is no `where` to build —
+// its authorization is a subject-type check in the guard plus an explicit
+// `ability.can` in the service, and omitting it here makes reaching for
+// `accessibleBy` on it a compile error rather than a runtime surprise.
 export interface WhereInputBySubject {
   User: Prisma.UserWhereInput;
   Business: Prisma.BusinessWhereInput;
-  BusinessMember: Prisma.BusinessMemberWhereInput;
-  BusinessCustomer: Prisma.BusinessCustomerWhereInput;
+  BusinessMembership: Prisma.BusinessMembershipWhereInput;
+  BusinessInvitation: Prisma.BusinessInvitationWhereInput;
   Role: Prisma.RoleWhereInput;
   Permission: Prisma.PermissionWhereInput;
   AppVersion: Prisma.AppVersionWhereInput;

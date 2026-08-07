@@ -2,6 +2,7 @@ import { PermissionOwnership } from '../enums/permission-ownership.enum';
 import { RoleScope } from '../enums/role-scope.enum';
 import { SeededRoleName } from '../enums/seeded-role-name.enum';
 import {
+  AUTHENTICATED_USER_PERMISSIONS,
   PERMISSION_CATALOG,
   ROLE_DEFINITION_CATALOG,
   permissionName,
@@ -35,11 +36,11 @@ describe('permissionName', () => {
     expect(
       permissionName({
         scope: RoleScope.BUSINESS,
-        subject: 'BusinessMember',
+        subject: 'BusinessMembership',
         action: 'assignRole',
         ownership: PermissionOwnership.ANY,
       }),
-    ).toBe('business.business_member.assign_role');
+    ).toBe('business.business_membership.assign_role');
   });
 });
 
@@ -113,16 +114,101 @@ describe('ROLE_DEFINITION_CATALOG', () => {
     }
   });
 
-  it('gives BUSINESS_ADMIN explicit verbs, never `manage BusinessMember`', () => {
-    // `manage` is CASL's wildcard: it would include `assignRole` with no
-    // ceiling, letting a business admin promote itself to owner. This is a
-    // regression guard, not a style check.
-    const businessAdmin =
-      ROLE_DEFINITION_CATALOG[SeededRoleName.BUSINESS_ADMIN];
-    const wildcardGrants = businessAdmin.permissions.filter(
-      (permission) => permission.action === 'manage',
+  it('never grants `manage` on a BUSINESS-scoped role, owner included', () => {
+    // `manage` is CASL's wildcard. On `BusinessMembership` it silently includes
+    // `assignRole`, `suspend`, and `transferOwnership`; on `Business` it
+    // includes `delete`. The owner legitimately holds all of those TODAY, so
+    // `manage` would be equivalent right now — and would silently grant
+    // whatever verb is added to the vocabulary NEXT, to every business role
+    // holding it, with nobody reviewing that decision.
+    //
+    // That is why this is a guard rather than a style check. The failure mode
+    // is not a bad grant someone writes; it is a good grant that widens later,
+    // when the person adding the verb has no reason to look here.
+    for (const [roleName, definition] of roleEntries) {
+      if (definition.scope !== RoleScope.BUSINESS) continue;
+      const wildcardGrants = definition.permissions
+        .filter((permission) => permission.action === 'manage')
+        .map(permissionName);
+      expect({ roleName, wildcardGrants }).toEqual({
+        roleName,
+        wildcardGrants: [],
+      });
+    }
+  });
+
+  it('never grants a role a permission every authenticated user already has', () => {
+    // AUTHENTICATED_USER_PERMISSIONS are injected by `AbilityFactory` for every
+    // caller. A role that also lists one compiles a SECOND, identical CASL rule
+    // into that user's ability: harmless in outcome, but it bloats every
+    // generated `where` clause and the packed rule set shipped to clients, and
+    // it reads as though the role confers access that others lack.
+    const intrinsic = new Set(
+      AUTHENTICATED_USER_PERMISSIONS.map(permissionName),
     );
-    expect(wildcardGrants).toEqual([]);
+    for (const [roleName, definition] of roleEntries) {
+      const redundant = definition.permissions
+        .map(permissionName)
+        .filter((name) => intrinsic.has(name));
+      expect({ roleName, redundant }).toEqual({ roleName, redundant: [] });
+    }
+  });
+
+  it('keeps every intrinsic permission ownership-scoped or a shared vocabulary read', () => {
+    // The one rule that makes AUTHENTICATED_USER_PERMISSIONS safe: nothing here
+    // may reach into a tenant. An `ANY`-ownership grant on a tenant-scoped
+    // subject would hand every registered account authority inside every
+    // business on the platform.
+    const SHARED_VOCABULARY_SUBJECTS = new Set(['Role', 'Permission']);
+    for (const permission of AUTHENTICATED_USER_PERMISSIONS) {
+      const isSafe =
+        permission.ownership === PermissionOwnership.OWN ||
+        SHARED_VOCABULARY_SUBJECTS.has(permission.subject) ||
+        // Creating a business grants authority over a tenant that does not yet
+        // exist, and the creator becomes its owner. Deliberately open in this
+        // template; see the note in the catalog.
+        (permission.action === 'create' && permission.subject === 'Business');
+      expect({ permission: permissionName(permission), isSafe }).toEqual({
+        permission: permissionName(permission),
+        isSafe: true,
+      });
+    }
+  });
+
+  it('withholds platform role assignment from every role except PLATFORM_ADMIN', () => {
+    // The separation the platform role split exists to create: PLATFORM_ENGINEER
+    // is the highest TECHNICAL authority and must not be able to promote itself
+    // — or anyone — into governance. PLATFORM_ADMIN reaches it through
+    // `manage all`, not through this permission.
+    for (const [roleName, definition] of roleEntries) {
+      const grantsRoleAssignment = definition.permissions.some(
+        (permission) =>
+          permission.action === 'assignRole' && permission.subject === 'User',
+      );
+      expect({ roleName, grantsRoleAssignment }).toEqual({
+        roleName,
+        grantsRoleAssignment: false,
+      });
+    }
+  });
+
+  it('withholds raw queue payloads from every support role', () => {
+    // `readPayload QueueJob` is what makes "sanitized diagnostic visibility"
+    // enforceable. Support roles investigate failures; they do not read the
+    // user data those failures carry.
+    const supportRoles = [
+      SeededRoleName.PLATFORM_TECHNICAL_SUPPORT,
+      SeededRoleName.PLATFORM_APP_SUPPORT,
+    ];
+    for (const roleName of supportRoles) {
+      const readsPayloads = ROLE_DEFINITION_CATALOG[roleName].permissions.some(
+        (permission) => permission.action === 'readPayload',
+      );
+      expect({ roleName, readsPayloads }).toEqual({
+        roleName,
+        readsPayloads: false,
+      });
+    }
   });
 
   it('reserves `manage all` for PLATFORM_ADMIN alone', () => {

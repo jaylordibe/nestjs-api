@@ -1,8 +1,8 @@
 import type { Prisma } from '@prisma/client';
 
 // Columns that must never reach `audit_logs.metadata`, whatever row is being
-// snapshotted. The audit trail is readable by PLATFORM_SUPPORT and
-// PLATFORM_DEVELOPER, not just admins, so a leaked hash is a leaked hash.
+// snapshotted. Every platform staff role reads the audit trail, not just
+// PLATFORM_ADMIN, so a leaked hash is a leaked hash.
 //
 // Denylist rather than allowlist on purpose: a new sensitive column added to a
 // model would otherwise be snapshotted by default until someone remembered to

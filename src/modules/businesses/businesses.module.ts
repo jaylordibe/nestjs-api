@@ -1,26 +1,28 @@
 import { Module } from '@nestjs/common';
 import { BusinessesController } from './businesses.controller';
 import { BusinessesService } from './businesses.service';
-import { BusinessCustomersController } from './customers/business-customers.controller';
-import { BusinessCustomersService } from './customers/business-customers.service';
-import { BusinessMembersController } from './members/business-members.controller';
-import { BusinessMembersService } from './members/business-members.service';
+import { BusinessInvitationsController } from './invitations/business-invitations.controller';
+import { BusinessInvitationAcceptanceController } from './invitations/business-invitation-acceptance.controller';
+import { BusinessInvitationsService } from './invitations/business-invitations.service';
+import { BusinessMembershipsController } from './memberships/business-memberships.controller';
+import { BusinessMembershipsService } from './memberships/business-memberships.service';
 
 @Module({
   controllers: [
     BusinessesController,
-    BusinessMembersController,
-    BusinessCustomersController,
+    BusinessMembershipsController,
+    BusinessInvitationsController,
+    BusinessInvitationAcceptanceController,
   ],
   providers: [
     BusinessesService,
-    BusinessMembersService,
-    BusinessCustomersService,
+    BusinessMembershipsService,
+    BusinessInvitationsService,
   ],
   exports: [
     BusinessesService,
-    BusinessMembersService,
-    BusinessCustomersService,
+    BusinessMembershipsService,
+    BusinessInvitationsService,
   ],
 })
 export class BusinessesModule {}

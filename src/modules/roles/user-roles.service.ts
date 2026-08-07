@@ -2,20 +2,25 @@ import { Injectable } from '@nestjs/common';
 import { AuditService } from '../../common/audit/audit.service';
 import type { AppAbility } from '../../common/authorization/app-ability';
 import { RoleScope } from '../../common/enums/role-scope.enum';
-import { SeededRoleName } from '../../common/enums/seeded-role-name.enum';
 import { Errors } from '../../common/errors/errors';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PermissionLoaderService } from '../authorization/permission-loader.service';
 
-// A principal with no platform role has no authority to delegate. Note this
-// is the OPPOSITE default from `BusinessMembersService`, where an absent
-// membership row means "platform admin, unbounded". Here an absent role means
-// "nothing" — every real user holds PLATFORM_USER.
+// A principal with no platform role has no authority to delegate, so they may
+// grant nothing. Most accounts legitimately sit here: platform roles are staff
+// roles, and self-service capability comes from AUTHENTICATED_USER_PERMISSIONS
+// rather than from any row in `user_roles`.
+//
+// `BusinessMembershipsService` fails closed the same way, by refusing outright
+// rather than defaulting. (An older comment here claimed the opposite — that a
+// missing business membership meant "platform admin, unbounded". It has not
+// been true for some time, and it was describing the exact bug that reading
+// "I could not find your rank" as "you have no limit" produces.)
 const NO_AUTHORITY_RANK = 0;
 
 // Grants and revokes PLATFORM-scope roles. Business roles are never assigned
-// here — they live in `business_members`, and the database rejects a business
-// role in `user_roles` outright (composite FK + CHECK constraint).
+// here — they live in `business_memberships`, and the database rejects a
+// business role in `user_roles` outright (composite FK + CHECK constraint).
 @Injectable()
 export class UserRolesService {
   constructor(
@@ -65,16 +70,10 @@ export class UserRolesService {
     const role = await this.loadPlatformRole(roleId);
     await this.assertMayAssignRank(actorId, role.rank, ability);
 
-    // PLATFORM_USER carries every self-service grant. Revoking it would leave
-    // an account that cannot read its own profile — broken, not restricted.
-    // Deactivate or delete the user instead.
-    if ((role.name as SeededRoleName) === SeededRoleName.PLATFORM_USER) {
-      throw Errors.resourceConflict(
-        "PLATFORM_USER cannot be revoked — it carries the account's self-service permissions. " +
-          'Deactivate or delete the user instead.',
-      );
-    }
-
+    // Every platform role is revocable, with no exceptions to special-case.
+    // Self-service capability lives in AUTHENTICATED_USER_PERMISSIONS, which
+    // the ability factory grants unconditionally, so taking away an account's
+    // last role restricts it without breaking it.
     const existing = await this.prisma.userRole.findUnique({
       where: { userId_roleId: { userId, roleId } },
       select: { id: true },

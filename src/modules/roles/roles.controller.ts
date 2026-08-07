@@ -1,55 +1,57 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  HttpCode,
-  HttpStatus,
-  Param,
-  ParseUUIDPipe,
-  Patch,
-  Post,
-  Query,
-} from '@nestjs/common';
-import { ApiCreatedResponse, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { Controller, Get, Param, ParseUUIDPipe, Query } from '@nestjs/common';
+import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import type { AppAbility } from '../../common/authorization/app-ability';
 import { ApiPaginatedResponse } from '../../common/decorators/api-paginated-response.decorator';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
+import { CurrentAbility } from '../../common/decorators/current-ability.decorator';
+import {
+  CurrentUser,
+  type AuthenticatedUser,
+} from '../../common/decorators/current-user.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
-import { MetaQueryDto } from '../../common/dto/meta-query.dto';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
-import { CreateRoleDto } from './dto/create-role.dto';
+import { RoleQueryDto } from './dto/role-query.dto';
 import { RoleResponseDto } from './dto/role-response.dto';
-import { UpdateRoleDto } from './dto/update-role.dto';
 import { RolesService } from './roles.service';
 
+/**
+ * Roles are READ-ONLY over HTTP.
+ *
+ * There is no `POST`, `PATCH`, or `DELETE` here, and their absence is the
+ * feature. Every role and every role→permission grant is defined in
+ * `src/common/authorization/permission-catalog.ts`, reviewed like code, and
+ * projected into the database by `yarn prisma:seed`. A runtime-editable role is
+ * a privilege-escalation primitive with an audit trail nobody reads: an
+ * operator who can add `platform.all.manage` to a role they already hold has
+ * made themselves an admin without anyone approving a diff.
+ *
+ * The previous incarnation of this controller allowed exactly that, guarded
+ * only by `administrative: true`. It also could not work: the boot-time
+ * `PermissionCatalogIntegrityService` fails startup when the database and the
+ * catalog disagree, so a custom role's grants were reverted by the next seed
+ * anyway.
+ */
 @ApiTags('Roles')
+@ApiBearerAuth()
 @Controller('roles')
 export class RolesController {
   constructor(private readonly rolesService: RolesService) {}
 
-  @Post()
-  @RequirePermission('create', 'Role', { administrative: true })
-  @ApiCreatedResponse({ type: RoleResponseDto })
-  async create(
-    @Body() dto: CreateRoleDto,
-    @CurrentUser() currentUser: AuthenticatedUser,
-  ): Promise<RoleResponseDto> {
-    return new RoleResponseDto(
-      await this.rolesService.create(dto, currentUser.id),
-    );
-  }
-
-  // Readable by every authenticated user: a business owner needs a `roleId`
-  // before they can add anyone to their roster. Role names and descriptions
-  // are a vocabulary, not a secret.
+  // Readable by every authenticated user — via AUTHENTICATED_USER_PERMISSIONS,
+  // not via a role. A business owner needs a `roleId` before they can invite
+  // anyone, and role names and descriptions are a vocabulary, not a secret.
   @Get()
   @RequirePermission('read', 'Role')
   @ApiPaginatedResponse(RoleResponseDto)
   async findPaginated(
-    @Query() query: MetaQueryDto,
+    @Query() query: RoleQueryDto,
+    @CurrentAbility() ability: AppAbility,
+    @CurrentUser() user: AuthenticatedUser,
   ): Promise<PaginatedResponseDto<RoleResponseDto>> {
-    const { data, meta } = await this.rolesService.findPaginated(query);
+    const { data, meta } = await this.rolesService.findPaginated(
+      query,
+      ability,
+      user.id,
+    );
     return { data: data.map((row) => new RoleResponseDto(row)), meta };
   }
 
@@ -60,28 +62,5 @@ export class RolesController {
     @Param('id', new ParseUUIDPipe()) id: string,
   ): Promise<RoleResponseDto> {
     return new RoleResponseDto(await this.rolesService.findById(id));
-  }
-
-  @Patch(':id')
-  @RequirePermission('update', 'Role', { administrative: true })
-  @ApiOkResponse({ type: RoleResponseDto })
-  async update(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() dto: UpdateRoleDto,
-    @CurrentUser() currentUser: AuthenticatedUser,
-  ): Promise<RoleResponseDto> {
-    return new RoleResponseDto(
-      await this.rolesService.update(id, dto, currentUser.id),
-    );
-  }
-
-  @Delete(':id')
-  @RequirePermission('delete', 'Role', { administrative: true })
-  @HttpCode(HttpStatus.NO_CONTENT)
-  async remove(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @CurrentUser() currentUser: AuthenticatedUser,
-  ): Promise<void> {
-    await this.rolesService.remove(id, currentUser.id);
   }
 }

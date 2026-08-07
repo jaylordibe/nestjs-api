@@ -84,6 +84,11 @@ jobs:
       - name: Generate Prisma client
         run: yarn prisma:generate
 
+      # `lint`, never `lint:fix`. `eslint --fix` exits 0 after rewriting
+      # whatever it could repair — so a fixing linter in CI silently patches the
+      # runner's copy, passes, and throws the fixes away with the container.
+      # Formatting and every other auto-fixable rule would be enforced nowhere.
+      # `scripts/build-config-contract.spec.ts` asserts this step stays honest.
       - name: Lint
         run: yarn lint
 

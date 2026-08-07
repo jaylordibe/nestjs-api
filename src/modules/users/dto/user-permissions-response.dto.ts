@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import type { BusinessMembershipStatus } from '../../../common/enums/business-membership-status.enum';
 
 /**
  * The caller's authorization, in a form the client can evaluate itself.
@@ -34,18 +35,31 @@ export class UserPermissionsResponseDto {
   rules!: unknown[];
 
   @ApiProperty({
-    description: 'Names of the platform roles held by the caller.',
-    example: ['platform_user'],
+    description:
+      'Names of the platform roles held by the caller. Empty for most accounts — platform roles are STAFF roles, and self-service capability comes from the intrinsic authenticated-user grants rather than from a role. An empty array is normal, not an error state.',
+    example: [],
     type: [String],
   })
   platformRoles!: string[];
 
   @ApiProperty({
     description:
-      'Business memberships held by the caller, as { businessId, roleName }.',
-    example: [{ businessId: 'b7c…', roleName: 'business_owner' }],
+      'Every business membership the caller holds, in ANY status. Only `active` ones contribute to `rules`; the rest are context so a client can show a pending invitation or a suspended membership rather than silently omitting it. Never infer authority from this list — read `rules`.',
+    example: [
+      {
+        membershipId: 'm3f…',
+        businessId: 'b7c…',
+        roleName: 'business_owner',
+        status: 'active',
+      },
+    ],
   })
-  businessMemberships!: Array<{ businessId: string; roleName: string }>;
+  businessMemberships!: Array<{
+    membershipId: string;
+    businessId: string;
+    roleName: string;
+    status: BusinessMembershipStatus;
+  }>;
 
   constructor(value: UserPermissionsResponseDto) {
     Object.assign(this, value);

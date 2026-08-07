@@ -53,6 +53,12 @@ export interface AppConfig {
     // TTL only bounds the damage from a missed invalidation.
     grantsCacheTtlSeconds: number;
   };
+  businessInvitation: {
+    // How long an invitation token stays redeemable. Bounded because the token
+    // is a bearer credential sitting in somebody's inbox: the longer it lives,
+    // the longer a forwarded or breached mailbox is a way into the business.
+    expiresInDays: number;
+  };
   email: {
     provider: 'stub' | 'resend';
     from: string | undefined;
@@ -151,6 +157,12 @@ export default (): AppConfig => ({
   authorization: {
     grantsCacheTtlSeconds: parseInt(
       process.env.AUTHORIZATION_GRANTS_CACHE_TTL_SECONDS ?? '300',
+      10,
+    ),
+  },
+  businessInvitation: {
+    expiresInDays: parseInt(
+      process.env.BUSINESS_INVITATION_EXPIRES_IN_DAYS ?? '7',
       10,
     ),
   },

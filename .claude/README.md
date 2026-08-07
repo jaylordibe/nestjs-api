@@ -221,7 +221,6 @@ slash-command menu:
   subcommand and blocks human-owned operations a prefix rule cannot see.
 - `hooks/guard-protected-paths.sh` — path-specific `ask` with the precondition
   that path requires.
-- `hooks/format-changed-file.sh` — formats the single file just edited.
 - `../scripts/validate-claude-config.ts` — the guardrail for this directory,
   run by `yarn claude:validate` and in CI.
 
@@ -333,7 +332,7 @@ cat .env                                 the shell, not the Read tool
 ```
 
 Hooks also teach: a deny rule gives an anonymous refusal, a hook explains the
-precondition. All three live in `.claude/hooks/` as real scripts — `set -euo
+precondition. Both live in `.claude/hooks/` as real scripts — `set -euo
 pipefail`, syntax-checked and behaviour-tested in CI, and **fail closed**: an
 unavailable `jq` degrades to a prompt, never to silent approval.
 
@@ -343,9 +342,7 @@ unavailable `jq` degrades to a prompt, never to silent approval.
   Its git verb table is kept in lockstep with the deny rules by the validator;
 - `guard-protected-paths.sh` — `ask` before editing `prisma/migrations/**`,
   `prisma/schema.prisma`, auth/authorization surfaces, or the error contract,
-  each with the specific precondition that path requires;
-- `format-changed-file.sh` — formats and auto-fixes the single `.ts` file just
-  edited, so lint stays green continuously.
+  each with the specific precondition that path requires.
 
 **None of this is a sandbox, and it must not be described as one.** A shell can
 always express an operation the parser does not model — a verb built from a

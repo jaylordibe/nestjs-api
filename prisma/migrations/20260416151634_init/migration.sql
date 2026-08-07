@@ -32,6 +32,22 @@ CREATE TABLE "users" (
 );
 
 -- CreateTable
+CREATE TABLE "refresh_tokens" (
+    "id" UUID NOT NULL,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "user_id" UUID NOT NULL,
+    "token_hash" TEXT NOT NULL,
+    "family_id" UUID NOT NULL,
+    "expires_at" TIMESTAMP(3) NOT NULL,
+    "consumed_at" TIMESTAMP(3),
+    "revoked_at" TIMESTAMP(3),
+    "user_agent" TEXT,
+    "ip_address" TEXT,
+
+    CONSTRAINT "refresh_tokens_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "businesses" (
     "id" UUID NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -59,7 +75,6 @@ CREATE TABLE "roles" (
     "scope" TEXT NOT NULL,
     "rank" INTEGER NOT NULL,
     "description" TEXT,
-    "is_system" BOOLEAN NOT NULL DEFAULT false,
 
     CONSTRAINT "roles_pkey" PRIMARY KEY ("id")
 );
@@ -103,7 +118,7 @@ CREATE TABLE "user_roles" (
 );
 
 -- CreateTable
-CREATE TABLE "business_members" (
+CREATE TABLE "business_memberships" (
     "id" UUID NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
@@ -113,23 +128,36 @@ CREATE TABLE "business_members" (
     "user_id" UUID NOT NULL,
     "role_id" UUID NOT NULL,
     "scope" TEXT NOT NULL DEFAULT 'business',
+    "status" TEXT NOT NULL DEFAULT 'active',
+    "joined_at" TIMESTAMP(3),
+    "ended_at" TIMESTAMP(3),
+    "invited_by" UUID,
+    "notes" TEXT,
 
-    CONSTRAINT "business_members_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "business_memberships_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
-CREATE TABLE "business_customers" (
+CREATE TABLE "business_invitations" (
     "id" UUID NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
     "created_by" UUID,
     "updated_by" UUID,
     "business_id" UUID NOT NULL,
-    "user_id" UUID NOT NULL,
-    "notes" TEXT,
-    "is_active" BOOLEAN NOT NULL DEFAULT true,
+    "email" TEXT NOT NULL,
+    "role_id" UUID NOT NULL,
+    "scope" TEXT NOT NULL DEFAULT 'business',
+    "token_hash" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'pending',
+    "invited_by" UUID,
+    "expires_at" TIMESTAMP(3) NOT NULL,
+    "accepted_at" TIMESTAMP(3),
+    "accepted_by" UUID,
+    "revoked_at" TIMESTAMP(3),
+    "revoked_by" UUID,
 
-    CONSTRAINT "business_customers_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "business_invitations_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -180,6 +208,18 @@ CREATE TABLE "device_tokens" (
 );
 
 -- CreateIndex
+CREATE UNIQUE INDEX "refresh_tokens_token_hash_key" ON "refresh_tokens"("token_hash");
+
+-- CreateIndex
+CREATE INDEX "refresh_tokens_user_id_idx" ON "refresh_tokens"("user_id");
+
+-- CreateIndex
+CREATE INDEX "refresh_tokens_family_id_idx" ON "refresh_tokens"("family_id");
+
+-- CreateIndex
+CREATE INDEX "refresh_tokens_expires_at_idx" ON "refresh_tokens"("expires_at");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "roles_name_key" ON "roles"("name");
 
 -- CreateIndex
@@ -207,22 +247,25 @@ CREATE INDEX "user_roles_user_id_idx" ON "user_roles"("user_id");
 CREATE UNIQUE INDEX "user_roles_user_id_role_id_key" ON "user_roles"("user_id", "role_id");
 
 -- CreateIndex
-CREATE INDEX "business_members_user_id_idx" ON "business_members"("user_id");
+CREATE INDEX "business_memberships_user_id_status_idx" ON "business_memberships"("user_id", "status");
 
 -- CreateIndex
-CREATE INDEX "business_members_business_id_idx" ON "business_members"("business_id");
+CREATE INDEX "business_memberships_business_id_status_idx" ON "business_memberships"("business_id", "status");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "business_members_business_id_user_id_key" ON "business_members"("business_id", "user_id");
+CREATE INDEX "business_memberships_role_id_idx" ON "business_memberships"("role_id");
 
 -- CreateIndex
-CREATE INDEX "business_customers_user_id_idx" ON "business_customers"("user_id");
+CREATE UNIQUE INDEX "business_memberships_business_id_user_id_key" ON "business_memberships"("business_id", "user_id");
 
 -- CreateIndex
-CREATE INDEX "business_customers_business_id_idx" ON "business_customers"("business_id");
+CREATE UNIQUE INDEX "business_invitations_token_hash_key" ON "business_invitations"("token_hash");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "business_customers_business_id_user_id_key" ON "business_customers"("business_id", "user_id");
+CREATE INDEX "business_invitations_business_id_status_idx" ON "business_invitations"("business_id", "status");
+
+-- CreateIndex
+CREATE INDEX "business_invitations_expires_at_idx" ON "business_invitations"("expires_at");
 
 -- CreateIndex
 CREATE INDEX "audit_logs_actor_id_created_at_idx" ON "audit_logs"("actor_id", "created_at");
@@ -249,6 +292,9 @@ CREATE UNIQUE INDEX "device_tokens_token_key" ON "device_tokens"("token");
 CREATE INDEX "device_tokens_user_id_idx" ON "device_tokens"("user_id");
 
 -- AddForeignKey
+ALTER TABLE "refresh_tokens" ADD CONSTRAINT "refresh_tokens_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "role_permissions" ADD CONSTRAINT "role_permissions_role_id_fkey" FOREIGN KEY ("role_id") REFERENCES "roles"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -261,37 +307,43 @@ ALTER TABLE "user_roles" ADD CONSTRAINT "user_roles_user_id_fkey" FOREIGN KEY ("
 ALTER TABLE "user_roles" ADD CONSTRAINT "user_roles_role_id_scope_fkey" FOREIGN KEY ("role_id", "scope") REFERENCES "roles"("id", "scope") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "business_members" ADD CONSTRAINT "business_members_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "businesses"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "business_memberships" ADD CONSTRAINT "business_memberships_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "businesses"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "business_members" ADD CONSTRAINT "business_members_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "business_memberships" ADD CONSTRAINT "business_memberships_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "business_members" ADD CONSTRAINT "business_members_role_id_scope_fkey" FOREIGN KEY ("role_id", "scope") REFERENCES "roles"("id", "scope") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "business_memberships" ADD CONSTRAINT "business_memberships_role_id_scope_fkey" FOREIGN KEY ("role_id", "scope") REFERENCES "roles"("id", "scope") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "business_customers" ADD CONSTRAINT "business_customers_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "businesses"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "business_memberships" ADD CONSTRAINT "business_memberships_invited_by_fkey" FOREIGN KEY ("invited_by") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "business_customers" ADD CONSTRAINT "business_customers_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "business_invitations" ADD CONSTRAINT "business_invitations_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "businesses"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "business_invitations" ADD CONSTRAINT "business_invitations_role_id_scope_fkey" FOREIGN KEY ("role_id", "scope") REFERENCES "roles"("id", "scope") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "device_tokens" ADD CONSTRAINT "device_tokens_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
-
 -- ─────────────────────────────────────────────────────────────────────────
 -- Constraints Prisma cannot express in schema.prisma.
 --
--- Everything above is generated by `prisma migrate diff`. Everything below is
--- hand-written and has no `@@`-attribute equivalent, so `prisma migrate dev`
--- will not try to manage it.
+-- Everything above is the shape `prisma migrate diff` produces from
+-- schema.prisma. Everything below is hand-written and has no `@@`-attribute
+-- equivalent, so `prisma migrate dev` will not try to manage it — and, more
+-- importantly, will NOT regenerate it if this file is ever rebuilt. Anyone
+-- squashing a future schema change back into this migration must carry these
+-- blocks across by hand.
 --
 -- This is the ONLY migration in the template. A starter is a fork in time — a
 -- clone begins its own migration history from whatever this file says the day
 -- it is cloned — so squash schema changes back into it rather than accreting
 -- edits nobody made. Once it has been applied to a real environment its
--- checksum is recorded in `_prisma_migrations` and you must add new migrations
--- instead.
+-- checksum is recorded in `_prisma_migrations`, and you must add NEW migrations
+-- instead; re-baselining after that point breaks `migrate deploy` everywhere it
+-- has already run.
 --
 -- Note every identifier below is unquoted: columns are snake_case (via `@map`),
 -- so Postgres' unquoted-identifier folding is a no-op rather than a trap.
@@ -299,19 +351,27 @@ ALTER TABLE "device_tokens" ADD CONSTRAINT "device_tokens_user_id_fkey" FOREIGN 
 
 -- Scope integrity.
 --
--- `user_roles.scope` and `business_members.scope` are constant discriminators,
--- not free columns. Pinning each to a literal, combined with the composite
--- foreign keys on (role_id, scope) -> roles(id, scope) that Prisma generated
--- above, makes it a DATABASE ERROR to assign a BUSINESS role platform-wide, or
--- a PLATFORM role inside a business.
+-- `scope` on each assignment table is a constant discriminator, not a free
+-- column. Pinning each to a literal, combined with the composite foreign keys
+-- on (role_id, scope) -> roles(id, scope) generated above, makes it a DATABASE
+-- ERROR to assign a BUSINESS role platform-wide, or a PLATFORM role inside a
+-- business.
+--
+-- `business_invitations` carries the same pair for a reason worth stating: an
+-- invitation names the role its acceptor will receive, so without this it would
+-- be a side door into exactly the escalation the other two constraints close —
+-- invite yourself with a platform role, accept, and the membership inherits it.
 --
 -- Without the CHECK, the composite FK alone would still permit a row with
 -- scope='business' in user_roles pointing at a business role.
 ALTER TABLE user_roles
   ADD CONSTRAINT user_roles_scope_check CHECK (scope = 'platform');
 
-ALTER TABLE business_members
-  ADD CONSTRAINT business_members_scope_check CHECK (scope = 'business');
+ALTER TABLE business_memberships
+  ADD CONSTRAINT business_memberships_scope_check CHECK (scope = 'business');
+
+ALTER TABLE business_invitations
+  ADD CONSTRAINT business_invitations_scope_check CHECK (scope = 'business');
 
 -- Soft-delete-aware uniqueness.
 --
@@ -338,6 +398,31 @@ CREATE UNIQUE INDEX users_username_key
 CREATE UNIQUE INDEX businesses_slug_key
   ON businesses (slug)
   WHERE deleted_at IS NULL;
+
+-- One OUTSTANDING invitation per (business, email).
+--
+-- Partial rather than total, for the same reason as the indexes above: an
+-- accepted or revoked invitation is history and must not stop the business from
+-- inviting that address again. Restricting the index to `pending` also makes
+-- the race safe — two concurrent invites to one address collide here rather
+-- than both succeeding.
+--
+-- Prisma cannot see this, so `BusinessInvitation` carries no `@@unique` on
+-- (business_id, email): look a pending invitation up with `findFirst`.
+CREATE UNIQUE INDEX business_invitations_business_id_email_pending_key
+  ON business_invitations (business_id, email)
+  WHERE status = 'pending';
+
+-- Membership lifecycle integrity.
+--
+-- `joined_at` records when someone first became ACTIVE here, so it must be set
+-- for every state that has ever been active, and absent while merely INVITED.
+-- Expressed as a CHECK rather than trusted to the service layer because a
+-- membership with no join date is indistinguishable from a corrupt row later,
+-- and by then the code that wrote it is long gone.
+ALTER TABLE business_memberships
+  ADD CONSTRAINT business_memberships_joined_at_check
+  CHECK (status = 'invited' OR joined_at IS NOT NULL);
 
 -- Trigram index for substring search across the audit-log metadata envelope.
 --

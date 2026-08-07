@@ -47,7 +47,6 @@ async function main(): Promise<void> {
     const seededRoleNames = new Set(
       (
         await prisma.role.findMany({
-          where: { isSystem: true },
           select: { name: true },
         })
       ).map((row) => row.name),

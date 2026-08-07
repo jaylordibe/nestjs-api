@@ -115,8 +115,8 @@ yarn prisma:migrate dev               # apply any new migrations
 | `yarn start:worker` | Run the queue worker alone, no HTTP server (needs `QUEUE_WORKER_ENABLED=true`) |
 | `yarn start:worker:dev` | Same, in watch mode |
 | `yarn build` | Compile TypeScript to `dist/` |
-| `yarn lint` | ESLint `--fix` over `src` and `test` |
-| `yarn format` | Prettier write |
+| `yarn lint` | ESLint over `src`, `test`, `scripts`, and `prisma` — the gate; never rewrites files |
+| `yarn lint:fix` | The same rules with `--fix` — the local fixer, and the only form that edits code |
 | `yarn test` | Jest unit tests (`*.spec.ts`, rootDir `src`) |
 | `yarn test:e2e` | e2e tests against a real Postgres test DB |
 | `yarn prisma:generate` | Regenerate `@prisma/client` after schema edits |

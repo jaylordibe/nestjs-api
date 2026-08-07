@@ -164,16 +164,17 @@ export class PermissionsGuard implements CanActivate {
    * The partial record the guard checks a tenant-scoped rule against.
    *
    * It carries the tenant key AND, when the subject is also ownable, the
-   * caller's own id. `BusinessCustomer` is both: staff reach it through a
-   * `{ businessId }` rule, a customer through a `{ userId }` rule. Supplying
-   * only the tenant key would silently deny the customer — their rule would
-   * see `userId: undefined` and fail.
+   * caller's own id. `BusinessMembership` is both: staff reach a roster row
+   * through a `{ businessId }` rule, while a member reaches their OWN row
+   * through the intrinsic `{ userId }` rule. Supplying only the tenant key
+   * would silently deny the member — their rule would see `userId: undefined`
+   * and fail — which is how a business customer would lose access to their own
+   * membership.
    *
    * Supplying the caller's own id is safe. It answers "may I act on MY record
    * in this business?", which is the only thing the guard could honestly ask
    * before a record exists. Acting on SOMEONE ELSE's record is re-checked in
-   * the service with the real target id (`BusinessCustomersService.add`), and
-   * every read is scoped by the query.
+   * the service against the real row, and every read is scoped by the query.
    */
   private buildTenantStub(
     subject: AuthorizationSubject,

@@ -59,7 +59,7 @@ describe('Businesses (e2e)', () => {
     const business = await createBusiness(app, founder, 'acme');
 
     const prisma = app.get(PrismaService);
-    const membership = await prisma.businessMember.findUniqueOrThrow({
+    const membership = await prisma.businessMembership.findUniqueOrThrow({
       where: {
         businessId_userId: { businessId: business.id, userId: founder.id },
       },

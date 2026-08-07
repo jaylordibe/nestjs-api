@@ -59,17 +59,23 @@ model User {
   birthday              DateTime? @db.Date
   timezone              String?
 
-  deviceTokens      DeviceToken[]
+  deviceTokens DeviceToken[]
   // PLATFORM-scope role assignments. BUSINESS-scope roles live on
-  // `businessMembers` instead — a database constraint keeps the two from
-  // crossing over (see `user_roles.scope` / `business_members.scope`).
-  userRoles         UserRole[]
-  businessMembers   BusinessMember[]
-  // Customer relationships. NOT an authorization role — a customer of a
-  // business is a relationship, not authority over it. See
-  // src/common/authorization/README.md.
-  businessCustomers BusinessCustomer[]
-  refreshTokens     RefreshToken[]
+  // `businessMemberships` instead — a database constraint keeps the two from
+  // crossing over (see `user_roles.scope` / `business_memberships.scope`).
+  //
+  // A user may hold NO platform role at all and still be a complete,
+  // functioning account: their self-service capabilities come from
+  // AUTHENTICATED_USER_PERMISSIONS, which the ability factory injects for
+  // every authenticated caller rather than from a row in this table.
+  userRoles    UserRole[]
+  // Every business this person belongs to, in any capacity — staff or
+  // customer, active or ended. One row per business, forever.
+  memberships  BusinessMembership[]
+  // Invitations this person sent. Distinct from `memberships` because an
+  // inviter is not necessarily still a member by the time it is accepted.
+  sentInvitations    BusinessMembership[] @relation("BusinessMembershipInviter")
+  refreshTokens      RefreshToken[]
 
   @@map("users")
 }
@@ -152,8 +158,8 @@ model Business {
   description String?
   isActive    Boolean   @default(true) @map("is_active")
 
-  members   BusinessMember[]
-  customers BusinessCustomer[]
+  memberships BusinessMembership[]
+  invitations BusinessInvitation[]
 
   @@map("businesses")
 }
@@ -166,22 +172,26 @@ model Role {
   updatedBy   String?  @map("updated_by") @db.Uuid
   name        String   @unique
   scope       String
-  // Orders roles for the privilege-escalation guard ONLY: you may never
-  // assign a role whose rank is >= your own. It does NOT imply inherited
-  // permissions — each role's grants are explicit in the catalog.
+  // Orders roles for the privilege-escalation guard ONLY: you may assign a
+  // role AT OR BELOW your own rank, never one above it. A lateral grant is not
+  // an escalation — an admin appointing a peer admin gains nothing it did not
+  // already have. Rank does NOT imply inherited permissions; each role's
+  // grants are listed explicitly in the catalog.
   rank        Int
   description String?
-  // Seeded, catalog-owned roles. Immutable through the API; their permission
-  // sets are reconciled by `yarn prisma:seed`.
-  isSystem    Boolean  @default(false) @map("is_system")
+  // Every role is seeded and catalog-owned — there is no endpoint that creates
+  // one, so in practice this is always true. Retained as an explicit marker
+  // that the row is code-owned and will be reconciled by `yarn prisma:seed`.
 
-  permissions     RolePermission[]
-  userRoles       UserRole[]
-  businessMembers BusinessMember[]
+  permissions RolePermission[]
+  userRoles   UserRole[]
+  memberships BusinessMembership[]
+  invitations BusinessInvitation[]
 
-  // FK target for the scope-integrity constraint on the two assignment
-  // tables. Lets `user_roles` reference `(roleId, 'platform')` so a
-  // business role can never be assigned platform-wide, and vice versa.
+  // FK target for the scope-integrity constraint on every assignment table
+  // (`user_roles`, `business_memberships`, `business_invitations`). Lets
+  // `user_roles` reference `(roleId, 'platform')` so a business role can never
+  // be assigned platform-wide, and vice versa.
   @@unique([id, scope])
   @@index([scope])
   @@map("roles")
@@ -241,66 +251,126 @@ model UserRole {
   @@map("user_roles")
 }
 
-model BusinessMember {
-  id         String   @id @default(uuid()) @db.Uuid
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
-  createdBy  String?  @map("created_by") @db.Uuid
-  updatedBy  String?  @map("updated_by") @db.Uuid
-  businessId String   @map("business_id") @db.Uuid
-  userId     String   @map("user_id") @db.Uuid
-  roleId     String   @map("role_id") @db.Uuid
-  scope      String   @default("business")
+/// One person's relationship with one business — the ONLY such relationship
+/// there is. Staff and customers are the same table distinguished by `roleId`,
+/// which is what makes the platform's tenancy model Slack-shaped: one global
+/// account, many businesses, exactly one role in each.
+///
+/// The row is created once per (business, user) pair and then moves between
+/// lifecycle states forever. It is never deleted and never soft-deleted, so
+/// `@@unique([businessId, userId])` is an UNCONDITIONAL database constraint —
+/// see `BusinessMembershipStatus` for why soft deletion cannot express it.
+///
+/// ONLY `status = 'active'` grants authority. That filter lives in
+/// `PermissionLoaderService`'s grant query, not in a guard: a guard runs before
+/// the row is loaded and therefore cannot see a status at all.
+///
+/// This subject is BOTH ownable (by the person, via `userId`) and tenant-scoped
+/// (by the business, via `businessId`). The two CASL rules OR-compose, so
+/// someone who owns one business and is a customer of another gets exactly the
+/// union of the two — with no special case in application code. See
+/// SUBJECT_OWNER_KEY / SUBJECT_TENANT_KEY.
+model BusinessMembership {
+  id         String    @id @default(uuid()) @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  createdBy  String?   @map("created_by") @db.Uuid
+  updatedBy  String?   @map("updated_by") @db.Uuid
+  businessId String    @map("business_id") @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  roleId     String    @map("role_id") @db.Uuid
+  /// Constant discriminator pinned to `business` by a CHECK constraint in the
+  /// migration. With the composite FK below it makes attaching a PLATFORM role
+  /// to a membership a database error rather than a code bug.
+  scope      String    @default("business")
+  /// `BusinessMembershipStatus`. A plain String, per the no-DB-enums rule —
+  /// constrained by the TS enum and `@IsEnum`, so widening the lifecycle needs
+  /// no migration.
+  status     String    @default("active")
+  /// When they first became active here. Null while merely INVITED, and
+  /// preserved across a suspend/reactivate cycle so "member since" stays true.
+  joinedAt   DateTime? @map("joined_at")
+  /// When the relationship ended. Set alongside `status = 'left'`, cleared if
+  /// they re-join on the same row.
+  endedAt    DateTime? @map("ended_at")
+  invitedBy  String?   @map("invited_by") @db.Uuid
+  /// Staff-visible annotation on the relationship (preferences, allergies…).
+  /// Gated in the service: writable only by a caller who may `update` the
+  /// membership, never by the member themselves.
+  notes      String?
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Restrict, not Cascade: deleting a role must never silently strip access.
   role     Role     @relation(fields: [roleId, scope], references: [id, scope], onDelete: Restrict)
+  /// SetNull, not Cascade: deleting the inviter's account must not delete the
+  /// membership they created.
+  inviter  User?    @relation("BusinessMembershipInviter", fields: [invitedBy], references: [id], onDelete: SetNull)
 
-  // One role per user per business. A user needing two sets of powers gets a
-  // custom role, not a second membership row.
+  /// The tenancy invariant. Unconditional precisely because the row is never
+  /// removed — one relationship per person per business, in any state.
   @@unique([businessId, userId])
-  @@index([userId])
-  @@index([businessId])
-  @@map("business_members")
+  /// Grant loading: every request resolves the caller's ACTIVE memberships.
+  @@index([userId, status])
+  /// Roster listing, and the owner-count check behind the last-owner invariant.
+  @@index([businessId, status])
+  /// Closes the otherwise-unindexed scan behind `ON DELETE RESTRICT` and the
+  /// assignment count in `RolesService`. This is the large table once customers
+  /// live here, so a sequential scan per role delete is not acceptable.
+  @@index([roleId])
+  @@map("business_memberships")
 }
 
-// A person who buys from a business.
-//
-// Deliberately NOT a `business_members` row and NOT a role. A customer holds no
-// authority over the business; everything they do acts on their OWN records.
-// Modelling them as members would collide with `business_members`'
-// one-role-per-user constraint (a stylist could never book at their own salon),
-// and would mix a ten-row staff roster with a hundred-thousand-row customer
-// list.
-//
-// This is the first subject that is BOTH ownable (by the customer, via
-// `userId`) and tenant-scoped (by the business, via `businessId`). See
-// SUBJECT_OWNER_KEY / SUBJECT_TENANT_KEY.
-//
-// A customer is an ordinary `User` with PLATFORM_USER, so they log in through
-// the same `/auth/login` as everyone else. One account, many businesses.
-model BusinessCustomer {
-  id         String   @id @default(uuid()) @db.Uuid
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
-  createdBy  String?  @map("created_by") @db.Uuid
-  updatedBy  String?  @map("updated_by") @db.Uuid
-  businessId String   @map("business_id") @db.Uuid
-  userId     String   @map("user_id") @db.Uuid
-  // Staff-visible annotation on the relationship (preferences, allergies…).
-  // Never written by the customer themselves.
-  notes      String?
-  isActive   Boolean  @default(true) @map("is_active")
+/// An outstanding offer to join a business.
+///
+/// Modelled separately from `BusinessMembership` because an invited email need
+/// not belong to a user yet — there is no `userId` to hang a membership row on
+/// until somebody accepts. When the invitee DOES already have an account, an
+/// INVITED membership row is created alongside this one so the roster shows
+/// them as pending and the (business, user) slot is reserved.
+///
+/// Acceptance is a conditional UPDATE out of `pending`, inside the same
+/// transaction that writes the membership, so two simultaneous redemptions of
+/// one token produce exactly one membership.
+model BusinessInvitation {
+  id         String    @id @default(uuid()) @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  createdBy  String?   @map("created_by") @db.Uuid
+  updatedBy  String?   @map("updated_by") @db.Uuid
+  businessId String    @map("business_id") @db.Uuid
+  /// Lowercased at the DTO boundary. Deliberately NOT a FK to `users`: the
+  /// whole point is that the invitee may not exist yet.
+  ///
+  /// Unique among PENDING rows only, via a partial index declared in the init
+  /// migration (`WHERE status = 'pending'`). Prisma cannot express that, so it
+  /// carries no `@@unique` here — look it up with `findFirst`, never
+  /// `findUnique`.
+  email      String
+  roleId     String    @map("role_id") @db.Uuid
+  scope      String    @default("business")
+  /// SHA-256 of the opaque token, hex-encoded — the same construction, and the
+  /// same reasoning, as `RefreshToken.tokenHash`. The plaintext is emailed once
+  /// and never stored.
+  tokenHash  String    @unique @map("token_hash")
+  /// `BusinessInvitationStatus`.
+  status     String    @default("pending")
+  invitedBy  String?   @map("invited_by") @db.Uuid
+  /// Expiry is a timestamp rather than a status, so an unattended invitation
+  /// becomes unusable without any sweep having to run.
+  expiresAt  DateTime  @map("expires_at")
+  acceptedAt DateTime? @map("accepted_at")
+  acceptedBy String?   @map("accepted_by") @db.Uuid
+  revokedAt  DateTime? @map("revoked_at")
+  revokedBy  String?   @map("revoked_by") @db.Uuid
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role     Role     @relation(fields: [roleId, scope], references: [id, scope], onDelete: Restrict)
 
-  // One customer record per person per business. Unlike `business_members`,
-  // this does not restrict the same person from being staff here too.
-  @@unique([businessId, userId])
-  @@index([userId])
-  @@index([businessId])
-  @@map("business_customers")
+  @@index([businessId, status])
+  /// Supports a retention sweep over expired invitations.
+  @@index([expiresAt])
+  @@map("business_invitations")
 }
 
 model AuditLog {

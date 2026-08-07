@@ -91,6 +91,33 @@ export enum ErrorCode {
    *  violation (e.g. business-rule clashes). */
   RESOURCE_CONFLICT = 'RESOURCE_CONFLICT',
 
+  // ── Business membership + invitations (400, 403, 409) ────────────────
+  /** 409 — the operation would leave a business with no active owner. Emitted
+   *  when the last active owner is removed, suspended, demoted, or leaves.
+   *  Clients should tell the user to appoint another owner first. Enforced for
+   *  EVERY caller including a platform admin: it is a data-integrity
+   *  invariant, not an authorization rule. */
+  LAST_OWNER_PROTECTED = 'LAST_OWNER_PROTECTED',
+  /** 409 — the membership exists but is not in a state that permits this
+   *  operation (e.g. reactivating one that was never suspended, or acting on
+   *  a membership that has ended). `details` is
+   *  `{ status: BusinessMembershipStatus }`. */
+  MEMBERSHIP_NOT_ACTIVE = 'MEMBERSHIP_NOT_ACTIVE',
+  /** 403 — the requested role cannot be assigned here. Covers a role from the
+   *  wrong scope, and a role outranking the caller's own assignment ceiling.
+   *  Deliberately ONE code for both: distinguishing them tells a caller
+   *  probing for escalation exactly which wall they hit. */
+  ROLE_NOT_ASSIGNABLE = 'ROLE_NOT_ASSIGNABLE',
+  /** 400 — an invitation token is unknown, already used, or revoked. Kept
+   *  indistinguishable from one another so a token cannot be probed for
+   *  existence, exactly like REFRESH_TOKEN_INVALID. */
+  INVITATION_INVALID = 'INVITATION_INVALID',
+  /** 400 — the invitation was genuine but has passed its expiry. Separate
+   *  from INVITATION_INVALID because it is safe to disclose (the holder
+   *  already proved possession of a real token) and because the client's
+   *  remedy differs: ask for a fresh invitation rather than check the link. */
+  INVITATION_EXPIRED = 'INVITATION_EXPIRED',
+
   // ── Infrastructure (429, 500, 503) ───────────────────────────────────
   /** @nestjs/throttler rejected — too many requests. */
   RATE_LIMITED = 'RATE_LIMITED',

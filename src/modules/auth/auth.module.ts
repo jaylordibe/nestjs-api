@@ -43,6 +43,10 @@ import { JwtStrategy } from './strategies/jwt.strategy';
   // Re-export JwtModule so UsersService can inject JwtService (used to
   // sign email-verification links). Keeps the JWT sign config in one
   // place rather than re-registering the module inside UsersModule.
-  exports: [AuthService, JwtModule],
+  // `RefreshTokenService` is exported so `UsersService` can end every session
+  // an account holds — used by the support session-revocation endpoint and by
+  // account deactivation. Sessions are auth's concern, so the capability lives
+  // here and is borrowed, rather than re-implemented against the table.
+  exports: [AuthService, RefreshTokenService, JwtModule],
 })
 export class AuthModule {}

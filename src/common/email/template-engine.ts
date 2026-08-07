@@ -23,6 +23,19 @@ export interface EmailTemplates {
     signInUrl: string;
     occurredAt: string;
   };
+  // Sent to an invited address, which may or may not already have an account —
+  // that is the whole reason invitations are a separate model. Carries the
+  // single-use token in the URL; the database holds only its SHA-256 digest.
+  //
+  // No `firstName`: the business is inviting an ADDRESS, and the API must not
+  // reveal whether that address is already registered by greeting it by name.
+  'business-invitation': {
+    businessName: string;
+    inviterName: string;
+    roleName: string;
+    acceptUrl: string;
+    expiresInDays: number;
+  };
 }
 
 export type EmailTemplateKey = keyof EmailTemplates;
@@ -46,6 +59,7 @@ const TEMPLATE_SUBJECTS: {
   // Deliberately reassuring rather than alarming: the overwhelmingly common
   // trigger is the owner themselves forgetting they already registered.
   'duplicate-signup-attempt': 'You already have an account',
+  'business-invitation': (vars) => `Join ${vars.businessName}`,
 };
 
 // Templates live in `./templates/<name>.html.hbs` with an optional

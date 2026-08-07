@@ -4,8 +4,8 @@ import type {
   AppVersion,
   AuditLog,
   Business,
-  BusinessCustomer,
-  BusinessMember,
+  BusinessInvitation,
+  BusinessMembership,
   DeviceToken,
   Permission,
   Role,
@@ -15,6 +15,17 @@ import type {
   AuthorizationAction,
   AuthorizationSubject,
 } from './permission-catalog';
+
+// A background job is not a Prisma model — BullMQ stores it in Redis — so
+// there is no generated row type to map it to. CASL only needs a shape to
+// match rule conditions against, and `QueueJob` rules are never conditioned
+// (they are platform-scope ANY), so an id-bearing stub is sufficient and
+// honest. It is deliberately NOT usable with `accessibleBy`, because there is
+// no table to build a `where` for.
+// A type alias rather than an interface, deliberately: CASL's `Subjects<>`
+// constrains each entry to `Record<string, unknown>`, and TypeScript gives an
+// implicit index signature to a type alias but not to an interface.
+type QueueJobSubject = { id: string };
 
 // The application's CASL ability type.
 //
@@ -29,13 +40,14 @@ export type AppAbility = PrismaAbility<
       | Subjects<{
           User: User;
           Business: Business;
-          BusinessMember: BusinessMember;
-          BusinessCustomer: BusinessCustomer;
+          BusinessMembership: BusinessMembership;
+          BusinessInvitation: BusinessInvitation;
           Role: Role;
           Permission: Permission;
           AppVersion: AppVersion;
           DeviceToken: DeviceToken;
           AuditLog: AuditLog;
+          QueueJob: QueueJobSubject;
         }>
       | 'all'
     ),

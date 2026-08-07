@@ -12,9 +12,9 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CreateDeviceTokenDto } from './dto/create-device-token.dto';
 import { UpdateDeviceTokenDto } from './dto/update-device-token.dto';
 
-// Device tokens are owned by a user. A holder of `manage DeviceToken (own)`
-// (i.e. every registered user, via PLATFORM_USER) may manage their own; a
-// platform admin may manage anyone's.
+// Device tokens are owned by a user. `manage DeviceToken (own)` is intrinsic to
+// every authenticated caller, so anyone may manage their own; a platform admin
+// may manage anyone's.
 //
 // The guard cannot tell those apart — it only knows a rule exists — so
 // ownership is enforced here: reads and writes go through an ability-scoped

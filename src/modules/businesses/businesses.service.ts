@@ -4,6 +4,7 @@ import { AuditService } from '../../common/audit/audit.service';
 import type { AppAbility } from '../../common/authorization/app-ability';
 import { buildOrderBy, MetaQueryDto } from '../../common/dto/meta-query.dto';
 import { PaginationMeta } from '../../common/dto/paginated-response.dto';
+import { BusinessMembershipStatus } from '../../common/enums/business-membership-status.enum';
 import { SeededRoleName } from '../../common/enums/seeded-role-name.enum';
 import { Errors } from '../../common/errors/errors';
 import { buildAuditSnapshot } from '../../common/util/audit-snapshot.util';
@@ -29,8 +30,8 @@ export class BusinessesService {
    *
    * A business without an owner is unadministrable — nobody could add members
    * or delete it — so the two writes are one transaction. `create Business` is
-   * a PLATFORM permission held by every registered user (via PLATFORM_USER);
-   * the BUSINESS_OWNER row is what grants authority *inside* the new business.
+   * intrinsic to every authenticated caller; the BUSINESS_OWNER membership is
+   * what grants authority *inside* the new business.
    */
   async create(dto: CreateBusinessDto, actorId: string): Promise<Business> {
     // `slug` is unique only among live rows (partial index), so a soft-deleted
@@ -60,11 +61,15 @@ export class BusinessesService {
         where: { name: SeededRoleName.BUSINESS_OWNER },
         select: { id: true },
       });
-      await transaction.businessMember.create({
+      await transaction.businessMembership.create({
         data: {
           businessId: created.id,
           userId: actorId,
           roleId: ownerRole.id,
+          status: BusinessMembershipStatus.ACTIVE,
+          // The DB CHECK requires `joined_at` for anything past INVITED, and
+          // the creator joins the instant the business exists.
+          joinedAt: new Date(),
           createdBy: actorId,
           updatedBy: actorId,
         },
@@ -213,8 +218,8 @@ export class BusinessesService {
     return updated;
   }
 
-  // Soft delete. `business_members` rows are left in place: the membership is
-  // history, and a restore (clearing `deletedAt`) must bring the roster back
+  // Soft delete. `business_memberships` rows are left in place: the membership
+  // is history, and a restore (clearing `deletedAt`) must bring the roster back
   // with it. The scoped client hides the business from every read, and
   // `PermissionLoaderService` stops issuing its business-scoped grants.
   async remove(
@@ -226,8 +231,10 @@ export class BusinessesService {
     this.assertMayAct(ability, 'delete', existing);
 
     // Read the roster BEFORE the delete: these are the users whose authority is
-    // about to change.
-    const members = await this.prisma.businessMember.findMany({
+    // about to change. Every status, not just ACTIVE — a suspended member holds
+    // no authority now, but a cached grant set written while they were active
+    // could still be live, and this is the moment to retire it.
+    const memberships = await this.prisma.businessMembership.findMany({
       where: { businessId: id },
       select: { userId: true },
     });
@@ -237,13 +244,18 @@ export class BusinessesService {
       data: { deletedAt: new Date(), deletedBy: actorId },
     });
 
-    // Every member just lost their business-scoped grants. Grants are cached
-    // per user, so each cached copy must be dropped — otherwise the roster
-    // keeps its authority over this business, and over its customer records,
-    // until the cache TTL expires. A roster is a staff list, not a customer
-    // list, so iterating it is bounded.
-    for (const member of members) {
-      await this.permissionLoaderService.invalidateUser(member.userId);
+    // Everyone on the roster just lost their business-scoped grants. Grants are
+    // cached per user, so each cached copy must be dropped — otherwise they keep
+    // authority over a business nobody can see any more, until the TTL expires.
+    //
+    // Now that customers are memberships too, this list is no longer bounded by
+    // "staff only": a consumer business could carry a very large roster, and
+    // this loop is serial. It is acceptable here because soft-deleting a
+    // business is a rare, human-initiated action, not a hot path — but a
+    // template that grows a bulk-tenant-deletion feature should move it to the
+    // queue rather than let one request fan out unboundedly.
+    for (const membership of memberships) {
+      await this.permissionLoaderService.invalidateUser(membership.userId);
     }
 
     await this.auditService.record({

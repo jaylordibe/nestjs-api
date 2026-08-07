@@ -26,8 +26,9 @@ interface SeedUser {
   password: string;
   firstName: string;
   lastName: string;
-  // PLATFORM-scope roles granted through `user_roles`. Every user gets
-  // PLATFORM_USER (the self-service grants); staff get an additional role.
+  // PLATFORM-scope roles granted through `user_roles`. Empty for an ordinary
+  // account — platform roles are staff roles, and self-service capability comes
+  // from AUTHENTICATED_USER_PERMISSIONS rather than from a row here.
   platformRoles: readonly SeededRoleName[];
 }
 
@@ -119,15 +120,16 @@ async function main(): Promise<void> {
     throw new Error('DATABASE_URL is not set. Cannot seed.');
   }
 
-  // Every user carries PLATFORM_USER — it holds the self-service grants that
-  // make /users/me/* and device-token management work. Staff roles are additive.
+  // Platform roles are STAFF roles. The ordinary seed user deliberately gets
+  // NONE — that is the shape of a real account, and seeding one proves the
+  // claim that a user with no platform role and no membership is fully
+  // functional. Self-service capability comes from
+  // AUTHENTICATED_USER_PERMISSIONS, which the ability factory grants to every
+  // authenticated caller rather than from any row in `user_roles`.
   const admin = readSeedUser('ADMIN', 'Admin', 'User', [
-    SeededRoleName.PLATFORM_USER,
     SeededRoleName.PLATFORM_ADMIN,
   ]);
-  const user = readSeedUser('USER', 'Regular', 'User', [
-    SeededRoleName.PLATFORM_USER,
-  ]);
+  const user = readSeedUser('USER', 'Regular', 'User', []);
 
   const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
   const prisma = new PrismaClient({ adapter });

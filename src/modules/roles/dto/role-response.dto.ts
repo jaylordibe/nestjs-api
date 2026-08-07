@@ -16,7 +16,6 @@ export interface RoleRow {
   scope: string;
   rank: number;
   description: string | null;
-  isSystem: boolean;
   permissions?: Array<{ permission: PermissionRow }>;
 }
 
@@ -33,7 +32,6 @@ export class RoleResponseDto {
   rank!: number;
   description!: string | null;
   // Seeded, catalog-owned roles are immutable through the API.
-  isSystem!: boolean;
   permissions!: PermissionResponseDto[];
 
   constructor(row: RoleRow) {

@@ -6,8 +6,12 @@ import { SeededRoleName } from '../src/common/enums/seeded-role-name.enum';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { truncateAll } from './setup/db';
 import {
+  addMembership,
+  createBusinessWithOwner,
   createPlatformAdmin,
   createRegularUser,
+  createUser,
+  roleIdFor,
   seedRbacCatalog,
   SeededUser,
 } from './setup/rbac';
@@ -23,7 +27,7 @@ interface PageBody<T> {
 interface RoleBody {
   id: string;
   name: string;
-  isSystem: boolean;
+  scope: RoleScope;
   rank: number;
   permissions: Array<{ name: string }>;
 }
@@ -32,20 +36,6 @@ describe('Roles (e2e)', () => {
   let app: INestApplication<App>;
   let admin: SeededUser;
   let user: SeededUser;
-
-  const roleFor = async (name: SeededRoleName) => {
-    const prisma = app.get(PrismaService);
-    return prisma.role.findUniqueOrThrow({ where: { name } });
-  };
-
-  const permissionIdsFor = async (scope: RoleScope, take = 2) => {
-    const prisma = app.get(PrismaService);
-    const permissions = await prisma.permission.findMany({
-      where: { scope },
-      take,
-    });
-    return permissions.map((permission) => permission.id);
-  };
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -62,186 +52,238 @@ describe('Roles (e2e)', () => {
     await app.close();
   });
 
-  it('GET /api/roles is readable by any authenticated user (needed to pick a roleId)', async () => {
-    const response = await request(app.getHttpServer())
-      .get('/api/roles?perPage=100')
-      .set('Authorization', `Bearer ${user.token}`)
-      .expect(200);
-    const body = response.body as PageBody<RoleBody>;
-    expect(body.meta.total).toBe(8);
-    expect(body.data.every((role) => role.isSystem)).toBe(true);
+  describe('the catalog is readable', () => {
+    it('lists every seeded role to any authenticated caller', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/api/roles?perPage=100')
+        .set('Authorization', `Bearer ${user.token}`)
+        .expect(200);
+
+      const body = response.body as PageBody<RoleBody>;
+      // Derived, never a literal: the assertion and the catalog then move
+      // together, so adding a role cannot fail this test for the wrong reason.
+      expect(body.meta.total).toBe(Object.values(SeededRoleName).length);
+    });
+
+    it('is readable with NO platform role at all', async () => {
+      // `read Role` is intrinsic, not granted by any role — a user needs a
+      // roleId before they can invite anyone, and this fixture holds nothing.
+      const prisma = app.get(PrismaService);
+      const roleCount = await prisma.userRole.count({
+        where: { userId: user.id },
+      });
+      expect(roleCount).toBe(0);
+
+      await request(app.getHttpServer())
+        .get('/api/roles')
+        .set('Authorization', `Bearer ${user.token}`)
+        .expect(200);
+    });
+
+    it('GET /api/permissions reflects the catalog', async () => {
+      const response = await request(app.getHttpServer())
+        // 100 is `MetaQueryDto`'s hard ceiling — asking for more is a 400, not
+        // a bigger page. Deliberately not raised for this endpoint: an
+        // unbounded page size is the same OOM risk as an unpaginated list.
+        .get('/api/permissions?perPage=100')
+        .set('Authorization', `Bearer ${user.token}`)
+        .expect(200);
+
+      const body = response.body as PageBody<{ name: string }>;
+      expect(body.meta.total).toBeGreaterThan(0);
+      expect(body.data.some((row) => row.name === 'platform.all.manage')).toBe(
+        true,
+      );
+    });
+
+    it('filters by scope', async () => {
+      const response = await request(app.getHttpServer())
+        .get(`/api/roles?scope=${RoleScope.BUSINESS}&perPage=100`)
+        .set('Authorization', `Bearer ${user.token}`)
+        .expect(200);
+
+      const body = response.body as PageBody<RoleBody>;
+      expect(body.data.length).toBeGreaterThan(0);
+      expect(body.data.every((role) => role.scope === RoleScope.BUSINESS)).toBe(
+        true,
+      );
+    });
   });
 
-  it('GET /api/permissions is readable and reflects the catalog', async () => {
-    const response = await request(app.getHttpServer())
-      .get('/api/permissions?perPage=100')
-      .set('Authorization', `Bearer ${user.token}`)
-      .expect(200);
-    const body = response.body as PageBody<{ name: string }>;
-    expect(
-      body.data.some((permission) => permission.name === 'platform.all.manage'),
-    ).toBe(true);
-    expect(
-      body.data.some(
-        (permission) => permission.name === 'platform.user.read.own',
-      ),
-    ).toBe(true);
+  describe('roles are code-owned — no runtime mutation exists', () => {
+    // These are the whole point of the read-only controller. A 404 here means
+    // the route is genuinely absent, not merely guarded: a guarded route would
+    // answer 403, and a 403 is a door with a lock rather than no door.
+    it.each([
+      ['post', '/api/roles'],
+      ['patch', '/api/roles/00000000-0000-4000-8000-000000000001'],
+      ['delete', '/api/roles/00000000-0000-4000-8000-000000000001'],
+    ])(
+      '%s %s does not exist, even for a platform admin',
+      async (method, path) => {
+        await request(app.getHttpServer())
+          [method as 'post' | 'patch' | 'delete'](path)
+          .set('Authorization', `Bearer ${admin.token}`)
+          .send({ name: 'smuggled_role', scope: 'platform', rank: 50 })
+          .expect(404);
+      },
+    );
+
+    it('leaves no create/update/delete permission in the catalog', async () => {
+      const prisma = app.get(PrismaService);
+      const roleWritePermissions = await prisma.permission.findMany({
+        where: {
+          subject: 'Role',
+          action: { in: ['create', 'update', 'delete'] },
+        },
+      });
+      expect(roleWritePermissions).toEqual([]);
+    });
   });
 
-  it('a non-admin cannot create a role', async () => {
-    const response = await request(app.getHttpServer())
-      .post('/api/roles')
-      .set('Authorization', `Bearer ${user.token}`)
-      .send({
-        name: 'sneaky',
-        scope: RoleScope.PLATFORM,
-        rank: 99,
-        permissionIds: [],
-      })
-      .expect(403);
-    expect((response.body as ErrorBody).errorCode).toBe('PERMISSION_DENIED');
+  describe('assignment ceiling on the role picker', () => {
+    it('offers a business admin only roles at or below its own rank', async () => {
+      const owner = await createRegularUser(app, 'owner@example.com');
+      const business = await createBusinessWithOwner(app, owner.id);
+      const businessAdmin = await createRegularUser(app, 'ba@example.com');
+      await addMembership(
+        app,
+        business.id,
+        businessAdmin.id,
+        SeededRoleName.BUSINESS_ADMIN,
+      );
+
+      const response = await request(app.getHttpServer())
+        .get(`/api/roles?assignableIn=${business.id}&perPage=100`)
+        .set('Authorization', `Bearer ${businessAdmin.token}`)
+        .expect(200);
+
+      const body = response.body as PageBody<RoleBody>;
+      const names = body.data.map((role) => role.name);
+      expect(names).toContain(SeededRoleName.BUSINESS_ADMIN);
+      expect(names).toContain(SeededRoleName.BUSINESS_MEMBER);
+      // The one that matters: an admin must never be offered OWNER, because it
+      // must never be able to mint one.
+      expect(names).not.toContain(SeededRoleName.BUSINESS_OWNER);
+      // …and platform roles are not assignable inside a business at all.
+      expect(names).not.toContain(SeededRoleName.PLATFORM_ADMIN);
+    });
+
+    it('offers a stranger to the business nothing, without leaking a 403', async () => {
+      const owner = await createRegularUser(app, 'owner2@example.com');
+      const business = await createBusinessWithOwner(app, owner.id, 'other');
+
+      const response = await request(app.getHttpServer())
+        .get(`/api/roles?assignableIn=${business.id}`)
+        .set('Authorization', `Bearer ${user.token}`)
+        .expect(200);
+
+      const body = response.body as PageBody<RoleBody>;
+      // An empty page, not a 403 — otherwise the status code becomes an oracle
+      // for which businesses the caller belongs to.
+      expect(body.data).toEqual([]);
+    });
   });
 
-  it('a system role cannot be edited', async () => {
-    const platformAdminRole = await roleFor(SeededRoleName.PLATFORM_ADMIN);
-    const response = await request(app.getHttpServer())
-      .patch(`/api/roles/${platformAdminRole.id}`)
-      .set('Authorization', `Bearer ${admin.token}`)
-      .send({ description: 'hijacked' })
-      .expect(409);
-    expect((response.body as ErrorBody).errorCode).toBe('RESOURCE_CONFLICT');
-  });
+  describe('platform role assignment', () => {
+    it('an admin grants and revokes a platform role, and the ability follows', async () => {
+      const engineerRoleId = await roleIdFor(
+        app,
+        SeededRoleName.PLATFORM_ENGINEER,
+      );
 
-  it('a system role cannot be deleted', async () => {
-    const staffRole = await roleFor(SeededRoleName.BUSINESS_STAFF);
-    await request(app.getHttpServer())
-      .delete(`/api/roles/${staffRole.id}`)
-      .set('Authorization', `Bearer ${admin.token}`)
-      .expect(409);
-  });
+      await request(app.getHttpServer())
+        .post(`/api/users/${user.id}/roles`)
+        .set('Authorization', `Bearer ${admin.token}`)
+        .send({ roleId: engineerRoleId })
+        .expect(204);
 
-  it('an admin creates a custom role, and it is not a system role', async () => {
-    const permissionIds = await permissionIdsFor(RoleScope.BUSINESS, 1);
-    const response = await request(app.getHttpServer())
-      .post('/api/roles')
-      .set('Authorization', `Bearer ${admin.token}`)
-      .send({
-        name: 'business_auditor',
-        scope: RoleScope.BUSINESS,
-        rank: 20,
-        description: 'Read-only auditor',
-        permissionIds,
-      })
-      .expect(201);
-    const body = response.body as RoleBody;
-    expect(body.isSystem).toBe(false);
-    expect(body.permissions).toHaveLength(1);
-  });
+      // App versions are an engineer capability, so the grant is observable.
+      await request(app.getHttpServer())
+        .get('/api/queues')
+        .set('Authorization', `Bearer ${user.token}`)
+        .expect(200);
 
-  it('a role cannot hold permissions from another scope', async () => {
-    const platformPermissionIds = await permissionIdsFor(RoleScope.PLATFORM, 1);
-    const response = await request(app.getHttpServer())
-      .post('/api/roles')
-      .set('Authorization', `Bearer ${admin.token}`)
-      .send({
-        name: 'confused_role',
-        scope: RoleScope.BUSINESS,
-        rank: 20,
-        permissionIds: platformPermissionIds,
-      })
-      .expect(400);
-    expect((response.body as ErrorBody).errorCode).toBe('VALIDATION_FAILED');
-  });
+      await request(app.getHttpServer())
+        .delete(`/api/users/${user.id}/roles/${engineerRoleId}`)
+        .set('Authorization', `Bearer ${admin.token}`)
+        .expect(204);
 
-  it('a custom role cannot outrank the built-ins (rank <= 99)', async () => {
-    await request(app.getHttpServer())
-      .post('/api/roles')
-      .set('Authorization', `Bearer ${admin.token}`)
-      .send({
-        name: 'super_role',
-        scope: RoleScope.PLATFORM,
-        rank: 100,
-        permissionIds: [],
-      })
-      .expect(400);
-  });
+      await request(app.getHttpServer())
+        .get('/api/queues')
+        .set('Authorization', `Bearer ${user.token}`)
+        .expect(403);
+    });
 
-  // ── platform role assignment ────────────────────────────────────────────
+    it('every platform role is revocable — an account with none still works', async () => {
+      const supportRoleId = await roleIdFor(
+        app,
+        SeededRoleName.PLATFORM_APP_SUPPORT,
+      );
+      const support = await createUser(app, {
+        email: 'support@example.com',
+        roles: [SeededRoleName.PLATFORM_APP_SUPPORT],
+      });
 
-  it('an admin grants and revokes a platform role, and the ability follows', async () => {
-    const supportRole = await roleFor(SeededRoleName.PLATFORM_SUPPORT);
+      await request(app.getHttpServer())
+        .delete(`/api/users/${support.id}/roles/${supportRoleId}`)
+        .set('Authorization', `Bearer ${admin.token}`)
+        .expect(204);
 
-    // Before: a regular user cannot list users.
-    await request(app.getHttpServer())
-      .get('/api/users')
-      .set('Authorization', `Bearer ${user.token}`)
-      .expect(403);
+      // The account is restricted, not broken: self-service still works,
+      // because it never came from a role in the first place.
+      await request(app.getHttpServer())
+        .get('/api/users/me')
+        .set('Authorization', `Bearer ${support.token}`)
+        .expect(200);
+    });
 
-    await request(app.getHttpServer())
-      .post(`/api/users/${user.id}/roles`)
-      .set('Authorization', `Bearer ${admin.token}`)
-      .send({ roleId: supportRole.id })
-      .expect(204);
+    it('rejects a BUSINESS role assigned platform-wide', async () => {
+      const businessOwnerRoleId = await roleIdFor(
+        app,
+        SeededRoleName.BUSINESS_OWNER,
+      );
 
-    // After: PLATFORM_SUPPORT holds `read User (any)`. The grants cache was
-    // invalidated, so this takes effect on the very next request.
-    await request(app.getHttpServer())
-      .get('/api/users')
-      .set('Authorization', `Bearer ${user.token}`)
-      .expect(200);
+      const response = await request(app.getHttpServer())
+        .post(`/api/users/${user.id}/roles`)
+        .set('Authorization', `Bearer ${admin.token}`)
+        .send({ roleId: businessOwnerRoleId })
+        .expect(400);
 
-    await request(app.getHttpServer())
-      .delete(`/api/users/${user.id}/roles/${supportRole.id}`)
-      .set('Authorization', `Bearer ${admin.token}`)
-      .expect(204);
+      expect((response.body as ErrorBody).errorCode).toBe('VALIDATION_FAILED');
+    });
 
-    await request(app.getHttpServer())
-      .get('/api/users')
-      .set('Authorization', `Bearer ${user.token}`)
-      .expect(403);
-  });
+    it('a non-admin cannot assign platform roles', async () => {
+      const adminRoleId = await roleIdFor(app, SeededRoleName.PLATFORM_ADMIN);
 
-  it('PLATFORM_USER cannot be revoked — it carries self-service grants', async () => {
-    const platformUserRole = await roleFor(SeededRoleName.PLATFORM_USER);
-    const response = await request(app.getHttpServer())
-      .delete(`/api/users/${user.id}/roles/${platformUserRole.id}`)
-      .set('Authorization', `Bearer ${admin.token}`)
-      .expect(409);
-    expect((response.body as ErrorBody).errorCode).toBe('RESOURCE_CONFLICT');
-  });
+      await request(app.getHttpServer())
+        .post(`/api/users/${user.id}/roles`)
+        .set('Authorization', `Bearer ${user.token}`)
+        .send({ roleId: adminRoleId })
+        .expect(403);
+    });
 
-  it('a BUSINESS role cannot be assigned as a platform role', async () => {
-    const ownerRole = await roleFor(SeededRoleName.BUSINESS_OWNER);
-    const response = await request(app.getHttpServer())
-      .post(`/api/users/${user.id}/roles`)
-      .set('Authorization', `Bearer ${admin.token}`)
-      .send({ roleId: ownerRole.id })
-      .expect(400);
-    expect((response.body as ErrorBody).errorCode).toBe('VALIDATION_FAILED');
-  });
+    it('an engineer cannot promote itself into governance', async () => {
+      // The separation the platform role split exists to create. An engineer
+      // holds the highest TECHNICAL authority and no governance authority, so
+      // it must not be able to hand itself PLATFORM_ADMIN.
+      const engineer = await createUser(app, {
+        email: 'engineer@example.com',
+        roles: [SeededRoleName.PLATFORM_ENGINEER],
+      });
+      const adminRoleId = await roleIdFor(app, SeededRoleName.PLATFORM_ADMIN);
 
-  it('a non-admin cannot assign platform roles', async () => {
-    const supportRole = await roleFor(SeededRoleName.PLATFORM_SUPPORT);
-    await request(app.getHttpServer())
-      .post(`/api/users/${user.id}/roles`)
-      .set('Authorization', `Bearer ${user.token}`)
-      .send({ roleId: supportRole.id })
-      .expect(403);
-  });
+      await request(app.getHttpServer())
+        .post(`/api/users/${engineer.id}/roles`)
+        .set('Authorization', `Bearer ${engineer.token}`)
+        .send({ roleId: adminRoleId })
+        .expect(403);
 
-  it('PLATFORM_SUPPORT is read-only: it cannot edit a user', async () => {
-    const supportRole = await roleFor(SeededRoleName.PLATFORM_SUPPORT);
-    await request(app.getHttpServer())
-      .post(`/api/users/${user.id}/roles`)
-      .set('Authorization', `Bearer ${admin.token}`)
-      .send({ roleId: supportRole.id })
-      .expect(204);
-
-    const victim = await createRegularUser(app, 'victim@example.com');
-    await request(app.getHttpServer())
-      .patch(`/api/users/${victim.id}`)
-      .set('Authorization', `Bearer ${user.token}`)
-      .send({ firstName: 'Owned' })
-      .expect(403);
+      const prisma = app.get(PrismaService);
+      const assignments = await prisma.userRole.count({
+        where: { userId: engineer.id },
+      });
+      expect(assignments).toBe(1);
+    });
   });
 });

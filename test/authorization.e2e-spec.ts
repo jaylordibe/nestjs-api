@@ -7,7 +7,7 @@ import { SeededRoleName } from '../src/common/enums/seeded-role-name.enum';
 import { truncateAll } from './setup/db';
 import {
   createPlatformAdmin,
-  createPlatformUser,
+  createUser,
   createRegularUser,
   seedRbacCatalog,
   SeededUser,
@@ -18,7 +18,12 @@ import { createTestApp } from './setup/test-app';
 interface PermissionsBody {
   rules: unknown[];
   platformRoles: string[];
-  businessMemberships: Array<{ businessId: string; roleName: string }>;
+  businessMemberships: Array<{
+    membershipId: string;
+    businessId: string;
+    roleName: string;
+    status: string;
+  }>;
 }
 
 describe('Authorization (e2e)', () => {
@@ -73,7 +78,10 @@ describe('Authorization (e2e)', () => {
   it('GET /users/me/permissions reports the caller’s roles', async () => {
     const user = await createRegularUser(app, 'user@example.com');
     const body = await fetchPermissions(user);
-    expect(body.platformRoles).toEqual([SeededRoleName.PLATFORM_USER]);
+    // An ordinary account holds NO platform role. Self-service capability
+    // comes from AUTHENTICATED_USER_PERMISSIONS, so an empty array here is
+    // the normal, fully-functional state rather than a broken one.
+    expect(body.platformRoles).toEqual([]);
     expect(body.businessMemberships).toEqual([]);
   });
 
@@ -81,8 +89,17 @@ describe('Authorization (e2e)', () => {
     const owner = await createRegularUser(app, 'owner@example.com');
     const businessId = await createBusiness(owner, 'acme');
     const body = await fetchPermissions(owner);
+    // `membershipId` and `status` are part of the contract now: a client
+    // rendering "your businesses" needs to distinguish an active membership
+    // from a pending or suspended one, and `rules` alone cannot express that
+    // — only ACTIVE memberships compile into grants at all.
     expect(body.businessMemberships).toEqual([
-      { businessId, roleName: SeededRoleName.BUSINESS_OWNER },
+      {
+        membershipId: expect.any(String),
+        businessId,
+        roleName: SeededRoleName.BUSINESS_OWNER,
+        status: 'active',
+      },
     ]);
   });
 
@@ -148,7 +165,7 @@ describe('Authorization (e2e)', () => {
 
   // ── the seeded roles, against representative endpoints ──────────────────
 
-  it('PLATFORM_USER: self-service yes, administration no', async () => {
+  it('an account with NO role: self-service yes, administration no', async () => {
     const user = await createRegularUser(app, 'user@example.com');
 
     await request(app.getHttpServer())
@@ -168,7 +185,7 @@ describe('Authorization (e2e)', () => {
       .expect(403);
   });
 
-  it('PLATFORM_USER cannot reset another user’s password via the admin route', async () => {
+  it('an account with NO role cannot reset another user’s password', async () => {
     const user = await createRegularUser(app, 'user@example.com');
     const victim = await createRegularUser(app, 'victim@example.com');
 
@@ -179,15 +196,15 @@ describe('Authorization (e2e)', () => {
       .expect(403);
   });
 
-  it('PLATFORM_DEVELOPER manages app versions but not users', async () => {
-    const developer = await createPlatformUser(app, {
-      email: 'dev@example.com',
-      roles: [SeededRoleName.PLATFORM_DEVELOPER],
+  it('PLATFORM_ENGINEER runs releases and diagnostics, but governs nothing', async () => {
+    const engineer = await createUser(app, {
+      email: 'engineer@example.com',
+      roles: [SeededRoleName.PLATFORM_ENGINEER],
     });
 
     await request(app.getHttpServer())
       .post('/api/app-versions')
-      .set('Authorization', `Bearer ${developer.token}`)
+      .set('Authorization', `Bearer ${engineer.token}`)
       .send({
         version: '1.0.0',
         platform: 'mobile',
@@ -197,16 +214,83 @@ describe('Authorization (e2e)', () => {
       })
       .expect(201);
 
+    // Queue diagnostics: the highest technical authority on the platform.
     await request(app.getHttpServer())
-      .get('/api/users')
-      .set('Authorization', `Bearer ${developer.token}`)
+      .get('/api/queues')
+      .set('Authorization', `Bearer ${engineer.token}`)
+      .expect(200);
+
+    // …and no governance whatsoever. Reading a user is investigation;
+    // creating one is administration.
+    await request(app.getHttpServer())
+      .post('/api/users')
+      .set('Authorization', `Bearer ${engineer.token}`)
+      .send({
+        email: 'new@example.com',
+        password: 'correct-horse-battery-1',
+        firstName: 'New',
+        lastName: 'Person',
+      })
       .expect(403);
   });
 
-  it('PLATFORM_SUPPORT reads users but cannot create or edit them', async () => {
-    const support = await createPlatformUser(app, {
+  it('PLATFORM_TECHNICAL_SUPPORT sees jobs but never their payloads', async () => {
+    // The distinction that makes "sanitized diagnostic visibility" real rather
+    // than aspirational — support can act on a failure without reading the user
+    // data it was carrying.
+    const support = await createUser(app, {
+      email: 'techsupport@example.com',
+      roles: [SeededRoleName.PLATFORM_TECHNICAL_SUPPORT],
+    });
+
+    await request(app.getHttpServer())
+      .get('/api/queues')
+      .set('Authorization', `Bearer ${support.token}`)
+      .expect(200);
+
+    // No app-version authority: that is a release operation, not support.
+    await request(app.getHttpServer())
+      .post('/api/app-versions')
+      .set('Authorization', `Bearer ${support.token}`)
+      .send({
+        version: '2.0.0',
+        platform: 'web',
+        releaseDate: new Date().toISOString(),
+      })
+      .expect(403);
+  });
+
+  it('PLATFORM_APP_SUPPORT helps an account without being able to take it', async () => {
+    const support = await createUser(app, {
+      email: 'appsupport@example.com',
+      roles: [SeededRoleName.PLATFORM_APP_SUPPORT],
+    });
+    const victim = await createRegularUser(app, 'victim@example.com');
+
+    // Unlocking HELPS the owner…
+    await request(app.getHttpServer())
+      .post(`/api/users/${victim.id}/unlock`)
+      .set('Authorization', `Bearer ${support.token}`)
+      .expect(200);
+
+    // …whereas changing their email TAKES the account, so it is refused.
+    await request(app.getHttpServer())
+      .patch(`/api/users/${victim.id}`)
+      .set('Authorization', `Bearer ${support.token}`)
+      .send({ email: 'attacker@example.com' })
+      .expect(403);
+
+    // And no infrastructure access at all.
+    await request(app.getHttpServer())
+      .get('/api/queues')
+      .set('Authorization', `Bearer ${support.token}`)
+      .expect(403);
+  });
+
+  it('PLATFORM_APP_SUPPORT reads users but cannot create them', async () => {
+    const support = await createUser(app, {
       email: 'support@example.com',
-      roles: [SeededRoleName.PLATFORM_SUPPORT],
+      roles: [SeededRoleName.PLATFORM_APP_SUPPORT],
     });
 
     await request(app.getHttpServer())
@@ -226,30 +310,66 @@ describe('Authorization (e2e)', () => {
       .expect(403);
   });
 
-  it('BUSINESS_STAFF reads the business but cannot edit it', async () => {
+  it('BUSINESS_MEMBER reads the business but cannot edit it', async () => {
     const owner = await createRegularUser(app, 'owner@example.com');
-    const staff = await createRegularUser(app, 'staff@example.com');
+    const member = await createRegularUser(app, 'member@example.com');
     const businessId = await createBusiness(owner, 'acme');
 
     const prisma = app.get(PrismaService);
-    const staffRole = await prisma.role.findUniqueOrThrow({
-      where: { name: SeededRoleName.BUSINESS_STAFF },
+    const memberRole = await prisma.role.findUniqueOrThrow({
+      where: { name: SeededRoleName.BUSINESS_MEMBER },
     });
     await request(app.getHttpServer())
-      .post(`/api/businesses/${businessId}/members`)
+      .post(`/api/businesses/${businessId}/memberships`)
       .set('Authorization', `Bearer ${owner.token}`)
-      .send({ email: staff.email, roleId: staffRole.id })
+      .send({ email: member.email, roleId: memberRole.id })
       .expect(201);
 
     await request(app.getHttpServer())
       .get(`/api/businesses/${businessId}`)
-      .set('Authorization', `Bearer ${staff.token}`)
+      .set('Authorization', `Bearer ${member.token}`)
       .expect(200);
 
     await request(app.getHttpServer())
       .patch(`/api/businesses/${businessId}`)
-      .set('Authorization', `Bearer ${staff.token}`)
-      .send({ name: 'Renamed by staff' })
+      .set('Authorization', `Bearer ${member.token}`)
+      .send({ name: 'Renamed by a member' })
+      .expect(403);
+  });
+
+  it('BUSINESS_CUSTOMER gets the business and its own row, and no roster', async () => {
+    const owner = await createRegularUser(app, 'owner@example.com');
+    const customer = await createRegularUser(app, 'customer@example.com');
+    const businessId = await createBusiness(owner, 'acme');
+
+    const prisma = app.get(PrismaService);
+    const customerRole = await prisma.role.findUniqueOrThrow({
+      where: { name: SeededRoleName.BUSINESS_CUSTOMER },
+    });
+    await request(app.getHttpServer())
+      .post(`/api/businesses/${businessId}/memberships`)
+      .set('Authorization', `Bearer ${owner.token}`)
+      .send({ email: customer.email, roleId: customerRole.id })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .get(`/api/businesses/${businessId}`)
+      .set('Authorization', `Bearer ${customer.token}`)
+      .expect(200);
+
+    // The roster read returns exactly their own row — never the staff list.
+    const roster = await request(app.getHttpServer())
+      .get(`/api/businesses/${businessId}/memberships`)
+      .set('Authorization', `Bearer ${customer.token}`)
+      .expect(200);
+    const rosterBody = roster.body as { data: Array<{ userId: string }> };
+    expect(rosterBody.data.map((row) => row.userId)).toEqual([customer.id]);
+
+    // And no authority over anyone else's membership.
+    await request(app.getHttpServer())
+      .post(`/api/businesses/${businessId}/memberships`)
+      .set('Authorization', `Bearer ${customer.token}`)
+      .send({ email: owner.email, roleId: customerRole.id })
       .expect(403);
   });
 });

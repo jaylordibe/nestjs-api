@@ -30,9 +30,9 @@ import { UpdateBusinessDto } from './dto/update-business.dto';
 export class BusinessesController {
   constructor(private readonly businessesService: BusinessesService) {}
 
-  // Any registered user may start a business — `create Business` ships with
-  // PLATFORM_USER. The creator becomes its BUSINESS_OWNER in the same
-  // transaction.
+  // Any authenticated caller may start a business — `create Business` is one of
+  // the intrinsic AUTHENTICATED_USER_PERMISSIONS. The creator becomes its
+  // BUSINESS_OWNER in the same transaction.
   @Post()
   @RequirePermission('create', 'Business')
   @ApiCreatedResponse({ type: BusinessResponseDto })

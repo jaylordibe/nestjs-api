@@ -55,7 +55,6 @@ export class PermissionCatalogIntegrityService implements OnApplicationBootstrap
     const seededRoleNames = new Set(
       (
         await this.prisma.role.findMany({
-          where: { isSystem: true },
           select: { name: true },
         })
       ).map((row) => row.name),
