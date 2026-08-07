@@ -90,6 +90,16 @@ export const envValidationSchema = Joi.object({
     .max(365)
     .default(30),
 
+  // OpenTelemetry collector base URL, e.g. http://otel-collector:4318. Empty
+  // disables telemetry entirely — the SDK never starts, so a fresh clone and
+  // the e2e suite pay nothing.
+  //
+  // Read directly from process.env in src/telemetry.ts (which runs before the
+  // Nest container exists), NOT through ConfigService. Declared here anyway so
+  // it is documented and validated alongside every other key rather than being
+  // an undeclared string someone discovers in the source.
+  OTEL_EXPORTER_OTLP_ENDPOINT: Joi.string().uri().allow('').default(''),
+
   // Backstop TTL for the per-user permission-grants cache in Redis. Role and
   // membership changes invalidate explicitly, so this only bounds the window
   // of a missed invalidation. Lower it if you distrust the invalidation paths;

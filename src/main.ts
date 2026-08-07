@@ -1,3 +1,10 @@
+// MUST be first: OpenTelemetry auto-instrumentation patches `http`, `pg`, and
+// `ioredis` as they are required, so anything imported above this line keeps an
+// unpatched reference and silently never produces spans. See src/telemetry.ts.
+import { startTelemetry } from './telemetry';
+
+startTelemetry();
+
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
@@ -72,6 +79,9 @@ async function bootstrap(): Promise<void> {
     });
   }
 
+  // Also drives TelemetryShutdownService, which flushes spans and metrics so
+  // the final seconds before a deploy or restart — the window you actually go
+  // looking for — are not the ones that get dropped.
   app.enableShutdownHooks();
 
   await app.listen(port);

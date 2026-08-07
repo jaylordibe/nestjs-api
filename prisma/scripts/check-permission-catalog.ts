@@ -76,7 +76,9 @@ async function main(): Promise<void> {
     }
 
     if (hasDrift) {
-      console.error('\n[rbac:check] FAILED — run `yarn rbac:sync` to reconcile.');
+      console.error(
+        '\n[rbac:check] FAILED — run `yarn rbac:sync` to reconcile.',
+      );
       process.exitCode = 1;
       return;
     }

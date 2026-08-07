@@ -108,6 +108,32 @@ export default tseslint.config(
           message:
             'Do not construct HttpException subclasses directly. Use the `Errors.*` factory in src/common/errors/errors.ts so the response carries a stable errorCode. See src/common/errors/README.md.',
         },
+        // Soft-delete guardrail.
+        //
+        // The `prisma.scoped` extension rewrites TOP-LEVEL reads only — Prisma
+        // client extensions cannot intercept a nested read. So pulling a
+        // soft-deletable relation in through `include`/`select` returns deleted
+        // rows even on the scoped client, which is precisely the trap the
+        // extension's own header warns about. That warning was a comment, and a
+        // comment does not fail a build.
+        //
+        // `user` and `business` are the relation names pointing at the two
+        // models in SOFT_DELETE_MODELS. **Add the relation name here whenever a
+        // model gains a `deletedAt`** — the rule cannot read schema.prisma.
+        //
+        // Scope, stated honestly: this catches the bare `user: true` form, which
+        // is unambiguously unfiltered. It does NOT catch `user: { select: … }`,
+        // because that shape is also how the codebase legitimately projects a
+        // relation whose parent rows are already filtered (see
+        // MEMBER_OF_LIVE_USER). Narrow and silent beats broad and noisy: a rule
+        // that cried wolf on the correct pattern would be suppressed within a
+        // week, and then it would catch nothing at all.
+        {
+          selector:
+            "Property[key.name=/^(include|select)$/] > ObjectExpression > Property[key.name=/^(user|business)$/][value.raw='true']",
+          message:
+            'Including a soft-deletable relation unfiltered returns deleted rows: `prisma.scoped` only filters top-level reads, never nested ones. Filter it explicitly — `{ where: { deletedAt: null } }` for a to-many relation, or filter the PARENT rows for a to-one (Prisma has no `where` on a to-one include). See src/prisma/prisma-soft-delete.extension.ts.',
+        },
       ],
     },
   },

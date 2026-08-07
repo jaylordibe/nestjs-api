@@ -1,3 +1,10 @@
+// MUST be first — see the note in src/telemetry.ts. Auto-instrumentation
+// patches modules as they are required, so an import above this line is never
+// traced, silently.
+import { startTelemetry, stopTelemetry } from './telemetry';
+
+startTelemetry();
+
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { SchedulerRegistry } from '@nestjs/schedule';
@@ -88,6 +95,9 @@ function registerShutdownHandlers(
 
     applicationContext
       .close()
+      // Flush telemetry AFTER the context closes, so spans emitted while jobs
+      // were draining are included rather than cut off mid-shutdown.
+      .then(() => stopTelemetry())
       .then(() => {
         clearTimeout(shutdownTimer);
         logger.log('Worker shut down cleanly', 'Worker');

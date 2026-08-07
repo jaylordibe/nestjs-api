@@ -5,11 +5,7 @@ import * as bcrypt from 'bcrypt';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import { SeededRoleName } from '../src/common/enums/seeded-role-name.enum';
-import {
-  assignPlatformRole,
-  seedPermissions,
-  seedRoles,
-} from './rbac-seeder';
+import { assignPlatformRole, seedPermissions, seedRoles } from './rbac-seeder';
 
 // Load .env (with ${VAR} expansion) before touching process.env, matching
 // how the runtime app bootstraps via @nestjs/config + prisma.config.ts.
@@ -87,7 +83,9 @@ async function upsertSeedUser(
     // Idempotent re-run: don't clobber anything. If an operator has
     // manually rotated the seeded admin's password, a repeat seed should
     // not reset it.
-    console.log(`[seed] ${user.label}: already exists (${email}) — leaving as is.`);
+    console.log(
+      `[seed] ${user.label}: already exists (${email}) — leaving as is.`,
+    );
     userId = existing.id;
   } else {
     const created = await prisma.user.create({
@@ -100,7 +98,9 @@ async function upsertSeedUser(
         emailVerifiedAt: new Date(),
       },
     });
-    console.log(`[seed] ${user.label}: created ${created.email} (${created.id})`);
+    console.log(
+      `[seed] ${user.label}: created ${created.email} (${created.id})`,
+    );
     userId = created.id;
   }
 

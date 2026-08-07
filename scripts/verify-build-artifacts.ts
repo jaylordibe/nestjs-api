@@ -30,7 +30,7 @@
  * root. Both are explained in the failure output.
  */
 
-import { readdirSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 /**
@@ -202,6 +202,63 @@ export function findBuildArtifactViolations(
       violations.push(
         `dist/${distributionRelativePath}/ has ${builtCount} ${requiredExtension} file(s) but ` +
           `${sourceRelativePath}/ has ${sourceCount} — the asset copy is incomplete.`,
+      );
+    }
+  }
+
+  violations.push(...findTelemetryOrderingViolations(distributionDirectory));
+
+  return violations;
+}
+
+/**
+ * Asserts that each entrypoint starts telemetry BEFORE it requires anything
+ * that OpenTelemetry needs to patch.
+ *
+ * Auto-instrumentation works by intercepting `require`, so a module loaded
+ * before `startTelemetry()` keeps an unpatched reference and never emits spans.
+ * Nothing about that failure is loud: the process boots, serves traffic, and
+ * exports traces — they are simply missing every database and outbound-HTTP
+ * span, which is most of what makes a trace worth reading.
+ *
+ * The source ordering is correct today only because `module: nodenext` emits
+ * CommonJS `require` calls in statement order. Switching the build to real ESM
+ * would hoist every import above the call and silently break this, with no
+ * type error and no failing test — which is exactly why it is checked in the
+ * artifact rather than trusted in the source.
+ */
+function findTelemetryOrderingViolations(
+  distributionDirectory: string,
+): string[] {
+  const violations: string[] = [];
+
+  for (const relativePath of [
+    CONTAINER_ENTRYPOINT_RELATIVE_PATH,
+    WORKER_ENTRYPOINT_RELATIVE_PATH,
+  ]) {
+    const entrypointPath = join(distributionDirectory, relativePath);
+    if (!isExistingFile(entrypointPath)) continue; // already reported above
+
+    const compiled = readFileSync(entrypointPath, 'utf8');
+    const startCallIndex = compiled.indexOf('startTelemetry)()');
+    const nestRequireIndex = compiled.indexOf('require("@nestjs/core")');
+
+    if (startCallIndex === -1) {
+      violations.push(
+        `dist/${relativePath} never calls startTelemetry() — telemetry will be ` +
+          'silently disabled in this entrypoint. Import src/telemetry and call ' +
+          'startTelemetry() on the first line.',
+      );
+      continue;
+    }
+
+    if (nestRequireIndex !== -1 && startCallIndex > nestRequireIndex) {
+      violations.push(
+        `dist/${relativePath} requires @nestjs/core BEFORE calling ` +
+          'startTelemetry(), so OpenTelemetry cannot patch pg/http/ioredis and ' +
+          'traces will be missing their database and outbound-HTTP spans. This ' +
+          'usually means the build now emits ESM (which hoists imports above ' +
+          'statements) rather than CommonJS.',
       );
     }
   }

@@ -73,7 +73,9 @@ async function main(): Promise<void> {
       select: { id: true },
     });
     await prisma.userRole.upsert({
-      where: { userId_roleId: { userId: admin.id, roleId: platformAdminRole.id } },
+      where: {
+        userId_roleId: { userId: admin.id, roleId: platformAdminRole.id },
+      },
       create: { userId: admin.id, roleId: platformAdminRole.id },
       update: {},
     });

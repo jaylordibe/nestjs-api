@@ -23,6 +23,7 @@ import { GlobalExceptionFilter } from './common/filters/global-exception.filter'
 import { QueueModule } from './common/queue/queue.module';
 import { RedisModule } from './common/redis/redis.module';
 import { ScheduledJobsModule } from './common/scheduled-jobs/scheduled-jobs.module';
+import { TelemetryShutdownService } from './common/telemetry/telemetry-shutdown.service';
 import { SmsModule } from './common/sms/sms.module';
 import { FileStorageModule } from './common/storage/file-storage.module';
 import configuration from './config/configuration';
@@ -251,6 +252,9 @@ import { UsersModule } from './modules/users/users.module';
     PublicModule,
   ],
   providers: [
+    // Participates in enableShutdownHooks() so pending spans and metrics are
+    // flushed after the modules close, instead of being dropped on exit.
+    TelemetryShutdownService,
     // Guard order is the execution order. Throttle before authenticating (an
     // unauthenticated flood must not reach the database), authenticate before
     // authorizing (PermissionsGuard needs `request.user`).

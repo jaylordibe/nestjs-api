@@ -26,6 +26,26 @@ describe('verify-build-artifacts', () => {
   };
   const REQUIRED_ENTRYPOINTS = [CONTAINER_ENTRYPOINT, WORKER_ENTRYPOINT];
 
+  // Compiled-entrypoint shapes, reduced to the two lines the ordering check
+  // reads. What matters is their ORDER: OpenTelemetry patches modules as they
+  // are required, so anything pulled in before `startTelemetry()` is never
+  // instrumented — and nothing about that failure is visible at runtime.
+  const CORRECTLY_ORDERED_ENTRYPOINT = [
+    'const telemetry_1 = require("./telemetry");',
+    '(0, telemetry_1.startTelemetry)();',
+    'const core_1 = require("@nestjs/core");',
+  ].join('\n');
+
+  const ENTRYPOINT_STARTING_TELEMETRY_TOO_LATE = [
+    'const core_1 = require("@nestjs/core");',
+    'const telemetry_1 = require("./telemetry");',
+    '(0, telemetry_1.startTelemetry)();',
+  ].join('\n');
+
+  const ENTRYPOINT_WITHOUT_TELEMETRY = [
+    'const core_1 = require("@nestjs/core");',
+  ].join('\n');
+
   let repositoryRoot: string;
   let distributionDirectory: string;
 
@@ -37,8 +57,14 @@ describe('verify-build-artifacts', () => {
 
     mkdirSync(builtTemplates, { recursive: true });
     mkdirSync(sourceTemplates, { recursive: true });
-    writeFileSync(join(distributionDirectory, 'main.js'), '');
-    writeFileSync(join(distributionDirectory, 'worker.js'), '');
+    writeFileSync(
+      join(distributionDirectory, 'main.js'),
+      CORRECTLY_ORDERED_ENTRYPOINT,
+    );
+    writeFileSync(
+      join(distributionDirectory, 'worker.js'),
+      CORRECTLY_ORDERED_ENTRYPOINT,
+    );
     writeFileSync(join(compiledEmailDirectory, 'template-engine.js'), '');
 
     for (
@@ -186,6 +212,50 @@ describe('verify-build-artifacts', () => {
       createSoundBuild(1);
       rmSync(join(distributionDirectory, 'main.js'));
       rmSync(join(distributionDirectory, 'worker.js'));
+
+      expect(findViolations()).toHaveLength(2);
+    });
+
+    // The failure this guards against is silent at runtime: the process boots,
+    // serves traffic, and exports traces that are simply missing every database
+    // and outbound-HTTP span. Only the compiled artifact shows it.
+    it('rejects an entrypoint that requires @nestjs/core before starting telemetry', () => {
+      createSoundBuild(1);
+      writeFileSync(
+        join(distributionDirectory, 'main.js'),
+        ENTRYPOINT_STARTING_TELEMETRY_TOO_LATE,
+      );
+
+      expect(findViolations()).toEqual([
+        expect.stringContaining('BEFORE calling'),
+      ]);
+    });
+
+    it('rejects an entrypoint that never starts telemetry at all', () => {
+      createSoundBuild(1);
+      writeFileSync(
+        join(distributionDirectory, 'worker.js'),
+        ENTRYPOINT_WITHOUT_TELEMETRY,
+      );
+
+      expect(findViolations()).toEqual([
+        expect.stringContaining('never calls startTelemetry()'),
+      ]);
+    });
+
+    // Both entrypoints are checked, not just the HTTP one — the worker runs the
+    // queue, where the spans are arguably more valuable and no human is
+    // watching a response time to notice they are missing.
+    it('checks the worker entrypoint as well as the container entrypoint', () => {
+      createSoundBuild(1);
+      writeFileSync(
+        join(distributionDirectory, 'main.js'),
+        ENTRYPOINT_WITHOUT_TELEMETRY,
+      );
+      writeFileSync(
+        join(distributionDirectory, 'worker.js'),
+        ENTRYPOINT_STARTING_TELEMETRY_TOO_LATE,
+      );
 
       expect(findViolations()).toHaveLength(2);
     });
