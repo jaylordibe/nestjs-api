@@ -75,7 +75,20 @@ export const envValidationSchema = Joi.object({
       'any.invalid':
         'JWT_SECRET is the template default — regenerate with `openssl rand -hex 48`.',
     }),
-  JWT_EXPIRES_IN: Joi.string().default('30d'),
+  // Access-token lifetime. Short by default and deliberately so: a stateless
+  // token cannot be withdrawn once signed, so nothing but its expiry bounds a
+  // leaked one. Clients are expected to refresh, not to hold this for days.
+  JWT_EXPIRES_IN: Joi.string().default('15m'),
+
+  // Refresh-token lifetime in whole days — the actual "keep me signed in"
+  // window, and the one users feel. Unlike the access token this IS revocable
+  // (see the `refresh_tokens` table), so a long value here is a usability
+  // choice rather than an unbounded liability.
+  REFRESH_TOKEN_EXPIRES_IN_DAYS: Joi.number()
+    .integer()
+    .min(1)
+    .max(365)
+    .default(30),
 
   // Backstop TTL for the per-user permission-grants cache in Redis. Role and
   // membership changes invalidate explicitly, so this only bounds the window

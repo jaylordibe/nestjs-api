@@ -69,8 +69,57 @@ model User {
   // business is a relationship, not authority over it. See
   // src/common/authorization/README.md.
   businessCustomers BusinessCustomer[]
+  refreshTokens     RefreshToken[]
 
   @@map("users")
+}
+
+/// One issued refresh token.
+///
+/// The access token is a short-lived, stateless JWT; this table is the
+/// long-lived half of a session and the authority on whether it is still alive.
+/// That split is the whole point: a stateless token cannot be revoked before it
+/// expires, so it is made cheap to lose by keeping it brief, and the durable
+/// credential is kept somewhere it CAN be revoked.
+///
+/// Why a row rather than a second JWT: a refresh token must be revocable, and a
+/// revocable JWT needs a server-side blocklist anyway. Since the store is
+/// unavoidable, an opaque random string with the store as the single source of
+/// truth is simpler than a signed token plus a store that can disagree with it.
+model RefreshToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at")
+  userId     String    @map("user_id") @db.Uuid
+  /// SHA-256 of the opaque token, hex-encoded. The token itself is returned to
+  /// the client once, at issue, and never stored — a database disclosure must
+  /// not hand over usable sessions.
+  ///
+  /// SHA-256 rather than bcrypt on purpose: this value is 256 bits of CSPRNG
+  /// output, not a human-chosen password, so there is no guessing attack for a
+  /// slow KDF to frustrate. A fast digest also keeps the refresh path from
+  /// becoming a CPU-bound denial-of-service lever.
+  tokenHash  String    @unique @map("token_hash")
+  /// The session chain. Rotation issues a new row carrying the same familyId,
+  /// so an entire lineage can be revoked together when replay is detected.
+  familyId   String    @map("family_id") @db.Uuid
+  expiresAt  DateTime  @map("expires_at")
+  /// Stamped when this token is exchanged. Its presence is what makes replay
+  /// detectable: a second exchange of the same token means the token leaked,
+  /// because a well-behaved client discards it after a single use.
+  consumedAt DateTime? @map("consumed_at")
+  revokedAt  DateTime? @map("revoked_at")
+  /// Captured at issue for the audit trail — "which device was this?" is the
+  /// first question asked after a suspected token theft.
+  userAgent  String?   @map("user_agent")
+  ipAddress  String?   @map("ip_address")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  /// Supports the retention sweep that clears expired rows.
+  @@index([expiresAt])
+  @@map("refresh_tokens")
 }
 
 // ─────────────────────────────────────────────────────────────────────────

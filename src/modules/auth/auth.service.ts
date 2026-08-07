@@ -21,6 +21,8 @@ import { LoginDto } from './dto/login.dto';
 import { LoginResponseDto } from './dto/login-response.dto';
 import { RegisterDto } from './dto/register.dto';
 import { RegisterResponseDto } from './dto/register-response.dto';
+import type { RefreshTokenContext } from './refresh-token.service';
+import { RefreshTokenService } from './refresh-token.service';
 import { JwtPayload, LOGOUT_KEY_PREFIX } from './strategies/jwt.strategy';
 
 const MAX_FAILED_ATTEMPTS = 5;
@@ -45,6 +47,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly auditService: AuditService,
+    private readonly refreshTokenService: RefreshTokenService,
   ) {}
 
   async register(dto: RegisterDto): Promise<RegisterResponseDto> {
@@ -122,7 +125,10 @@ export class AuthService {
     return { message: AuthService.REGISTER_OK_MESSAGE };
   }
 
-  async login(dto: LoginDto): Promise<LoginResponseDto> {
+  async login(
+    dto: LoginDto,
+    context: RefreshTokenContext = {},
+  ): Promise<LoginResponseDto> {
     // Reject disposable-email logins up-front, collapsed into the generic
     // INVALID_CREDENTIALS so an attacker can't tell the disposable check (vs
     // unknown identifier / wrong password) is what rejected them. A dummy
@@ -186,7 +192,44 @@ export class AuthService {
       });
     }
 
-    return this.buildLoginResponse(user);
+    return this.buildLoginResponse(user, context);
+  }
+
+  /**
+   * Exchanges a refresh token for a fresh access + refresh pair.
+   *
+   * Public and unauthenticated by necessity — a client reaches here precisely
+   * because its access token has expired. The refresh token IS the credential,
+   * which is why the endpoint is throttled and why rotation is unconditional.
+   *
+   * The user is re-read on every exchange rather than trusted from the stored
+   * session. A refresh is the natural checkpoint at which deactivation, soft
+   * deletion, or a password rotation should end a session — without this, a
+   * disabled account would keep minting valid access tokens until its refresh
+   * token expired weeks later.
+   */
+  async refresh(
+    presentedToken: string,
+    context: RefreshTokenContext = {},
+  ): Promise<LoginResponseDto> {
+    const { userId, refreshToken } = await this.refreshTokenService.rotate(
+      presentedToken,
+      context,
+    );
+
+    const user = await this.usersService.findByIdOrNull(userId);
+    if (!user || !user.isActive || !user.emailVerifiedAt) {
+      // The session is real but the account is no longer eligible. Close the
+      // whole chain rather than leaving a token that will fail on every use.
+      await this.refreshTokenService.revokeAllForUser(userId);
+      throw Errors.refreshTokenInvalid();
+    }
+
+    return {
+      accessToken: this.signAccessToken(user.id),
+      refreshToken: refreshToken.token,
+      user: new UserResponseDto(user),
+    };
   }
 
   private async registerFailedAttempt(
@@ -220,7 +263,17 @@ export class AuthService {
   // on its own — no cleanup job needed. JwtStrategy rejects any subsequent
   // request carrying that jti. Other tokens for the same user (other
   // devices) are unaffected; use logoutAll for "sign me out everywhere."
-  async logout(currentUser: AuthenticatedUser): Promise<void> {
+  async logout(
+    currentUser: AuthenticatedUser,
+    presentedRefreshToken?: string,
+  ): Promise<void> {
+    // Blocklisting the access token alone would be theatre: the client would
+    // still hold a refresh token able to mint a new one seconds later. Revoke
+    // the chain first so logout means what it says.
+    if (presentedRefreshToken) {
+      await this.refreshTokenService.revokeByToken(presentedRefreshToken);
+    }
+
     if (!currentUser.jti || !currentUser.exp) {
       // Legacy token issued before jti/exp were wired through — nothing to
       // revoke. Still record the audit event so the action isn't invisible.
@@ -259,6 +312,12 @@ export class AuthService {
       where: { id: userId },
       data: { passwordChangedAt: new Date() },
     });
+    // The `passwordChangedAt` bump only invalidates ACCESS tokens, which are
+    // stateless and check `iat` against it. Refresh tokens are rows and carry
+    // no `iat` to compare, so they have to be revoked explicitly — otherwise
+    // "sign me out everywhere" would leave every device able to mint new
+    // access tokens on its next refresh.
+    await this.refreshTokenService.revokeAllForUser(userId);
     await this.auditService.record({
       action: 'auth.logout_all',
       actorId: userId,
@@ -266,15 +325,26 @@ export class AuthService {
     });
   }
 
-  private buildLoginResponse(
+  private async buildLoginResponse(
     user: Awaited<ReturnType<UsersService['findById']>>,
-  ): LoginResponseDto {
-    const payload: JwtPayload = { sub: user.id };
+    context: RefreshTokenContext,
+  ): Promise<LoginResponseDto> {
+    // A login starts a NEW session chain — never continues an existing one.
+    // Reusing a family here would mean a fresh sign-in could be killed by a
+    // replay on a session the user had already abandoned.
+    const refreshToken = await this.refreshTokenService.issue(user.id, context);
     return {
-      // jwtid sets the `jti` claim. One per token, used by /auth/logout to
-      // revoke this specific token via Redis without affecting others.
-      accessToken: this.jwtService.sign(payload, { jwtid: randomUUID() }),
+      accessToken: this.signAccessToken(user.id),
+      refreshToken: refreshToken.token,
       user: new UserResponseDto(user),
     };
+  }
+
+  // `jwtid` sets the `jti` claim: one per token, so `/auth/logout` can revoke
+  // this specific access token through the Redis blocklist without touching
+  // the user's other devices.
+  private signAccessToken(userId: string): string {
+    const payload: JwtPayload = { sub: userId };
+    return this.jwtService.sign(payload, { jwtid: randomUUID() });
   }
 }

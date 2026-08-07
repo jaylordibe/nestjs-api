@@ -68,6 +68,14 @@ export const Errors = {
       errorCode: ErrorCode.CURRENT_PASSWORD_INCORRECT,
       message: 'Current password is incorrect',
     }),
+  // One error for unknown / expired / already-exchanged / revoked. The message
+  // is deliberately incurious: any wording that hinted at WHICH case applied
+  // would let a caller probe whether a token it holds is real.
+  refreshTokenInvalid: (): UnauthorizedException =>
+    new UnauthorizedException({
+      errorCode: ErrorCode.REFRESH_TOKEN_INVALID,
+      message: 'Your session has expired. Please sign in again.',
+    }),
 
   // ── 403 ────────────────────────────────────────────────────────────
   insufficientRole: (): ForbiddenException =>

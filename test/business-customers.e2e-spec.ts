@@ -349,4 +349,53 @@ describe('Business customers (e2e)', () => {
       0,
     );
   });
+
+  /**
+   * A SOFT delete cascades nothing, which is the whole danger.
+   *
+   * `business_members` rows deliberately survive it, so that restoring the
+   * business brings its roster back. `BusinessCustomer` carries no `deletedAt`
+   * of its own, so the scoped client hides nothing here either. The only thing
+   * standing between "this business was deleted" and "its staff still read its
+   * customer list" is the live-business filter in `PermissionLoaderService` —
+   * and the cache invalidation that makes it take effect immediately rather
+   * than whenever the grants TTL happens to lapse.
+   */
+  it('staff lose the customer list when their business is soft-deleted', async () => {
+    const owner = await createRegularUser(app, 'owner@example.com');
+    const manager = await createRegularUser(app, 'manager@example.com');
+    const customer = await createRegularUser(app, 'customer@example.com');
+    const businessId = await createBusiness(owner);
+    await addStaff(
+      businessId,
+      owner,
+      manager.email,
+      SeededRoleName.BUSINESS_MANAGER,
+    );
+    await selfJoin(businessId, customer).expect(201);
+
+    // Reading the list first is load-bearing, not just an arrange step: it
+    // warms this manager's grants cache, so the assertion after the delete
+    // fails unless the cache was actively invalidated.
+    const before = await request(app.getHttpServer())
+      .get(`/api/businesses/${businessId}/customers`)
+      .set('Authorization', `Bearer ${manager.token}`)
+      .expect(200);
+    expect((before.body as PageBody<CustomerBody>).meta.total).toBe(1);
+
+    await request(app.getHttpServer())
+      .delete(`/api/businesses/${businessId}`)
+      .set('Authorization', `Bearer ${owner.token}`)
+      .expect(204);
+
+    // 200-with-nothing rather than 403: the manager still holds PLATFORM_USER's
+    // own-scoped rule on BusinessCustomer, so the request clears the guard and
+    // is then scoped down to the rows they own here — none, since they are
+    // staff, not a customer.
+    const after = await request(app.getHttpServer())
+      .get(`/api/businesses/${businessId}/customers`)
+      .set('Authorization', `Bearer ${manager.token}`)
+      .expect(200);
+    expect((after.body as PageBody<CustomerBody>).data).toEqual([]);
+  });
 });

@@ -5,6 +5,8 @@ import { PassportModule } from '@nestjs/passport';
 import { UsersModule } from '../users/users.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { RefreshTokenRetentionService } from './refresh-token-retention.service';
+import { RefreshTokenService } from './refresh-token.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 
 @Module({
@@ -32,7 +34,12 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
+  providers: [
+    AuthService,
+    JwtStrategy,
+    RefreshTokenService,
+    RefreshTokenRetentionService,
+  ],
   // Re-export JwtModule so UsersService can inject JwtService (used to
   // sign email-verification links). Keeps the JWT sign config in one
   // place rather than re-registering the module inside UsersModule.

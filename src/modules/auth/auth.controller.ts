@@ -7,6 +7,7 @@ import {
   HttpStatus,
   Post,
   Query,
+  Req,
   Res,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -18,7 +19,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { AuthenticatedOnly } from '../../common/decorators/authenticated-only.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
@@ -29,10 +30,24 @@ import { AuthService } from './auth.service';
 import { EmailVerificationResponseDto } from './dto/email-verification-response.dto';
 import { LoginDto } from './dto/login.dto';
 import { LoginResponseDto } from './dto/login-response.dto';
+import { LogoutDto } from './dto/logout.dto';
+import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RegisterDto } from './dto/register.dto';
 import { RegisterResponseDto } from './dto/register-response.dto';
+import type { RefreshTokenContext } from './refresh-token.service';
 import { ResendVerificationDto } from './dto/resend-verification.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
+
+// Device provenance recorded against an issued refresh token, for the audit
+// trail. `request.ip` already honours `trust proxy` (set in main.ts), so this
+// is the client address rather than the load balancer's. Both fields are
+// best-effort: a missing header must never be a reason to fail a login.
+function readRefreshTokenContext(request: Request): RefreshTokenContext {
+  return {
+    userAgent: request.get('user-agent') ?? null,
+    ipAddress: request.ip ?? null,
+  };
+}
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -56,8 +71,38 @@ export class AuthController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOkResponse({ type: LoginResponseDto })
-  login(@Body() dto: LoginDto): Promise<LoginResponseDto> {
-    return this.authService.login(dto);
+  login(
+    @Body() dto: LoginDto,
+    @Req() request: Request,
+  ): Promise<LoginResponseDto> {
+    return this.authService.login(dto, readRefreshTokenContext(request));
+  }
+
+  /**
+   * Exchanges a refresh token for a new access + refresh pair.
+   *
+   * `@Public()` by necessity: a client arrives here precisely because its
+   * access token has expired, so it has no bearer credential to present. The
+   * refresh token in the body IS the credential.
+   *
+   * Throttled harder than login. A legitimate client refreshes once per access
+   * token lifetime — a handful of times an hour at most — so anything
+   * approaching this ceiling is either a broken retry loop or someone walking
+   * stolen tokens, and neither deserves the bandwidth.
+   */
+  @Post('refresh')
+  @Public()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  @ApiOkResponse({ type: LoginResponseDto })
+  refresh(
+    @Body() dto: RefreshTokenDto,
+    @Req() request: Request,
+  ): Promise<LoginResponseDto> {
+    return this.authService.refresh(
+      dto.refreshToken,
+      readRefreshTokenContext(request),
+    );
   }
 
   // POST form — for frontends that extract the token from the email link
@@ -127,19 +172,27 @@ export class AuthController {
     return { ok: true };
   }
 
-  // Revoke the exact token this request arrived on. Other sessions (other
-  // devices) stay active. Client should also discard its local copy.
+  // Ends THIS device's session: blocklists the access token this request
+  // arrived on and revokes the refresh chain it belongs to. Other devices stay
+  // signed in. The client should also discard both tokens locally.
+  //
+  // Sending `refreshToken` is optional but strongly recommended — without it
+  // only the access token dies, and the refresh token can mint a new one.
   @Post('logout')
   @AuthenticatedOnly()
   @ApiBearerAuth()
   @HttpCode(HttpStatus.NO_CONTENT)
-  async logout(@CurrentUser() currentUser: AuthenticatedUser): Promise<void> {
-    await this.authService.logout(currentUser);
+  async logout(
+    @CurrentUser() currentUser: AuthenticatedUser,
+    @Body() dto: LogoutDto,
+  ): Promise<void> {
+    await this.authService.logout(currentUser, dto.refreshToken);
   }
 
-  // "Sign me out everywhere" — invalidates every active token for the user
-  // via the passwordChangedAt mechanism. Use when the user suspects their
-  // account is compromised but isn't ready to change their password yet.
+  // "Sign me out everywhere" — invalidates every active access token via the
+  // passwordChangedAt mechanism AND revokes every refresh token the user holds.
+  // Use when the user suspects their account is compromised but isn't ready to
+  // change their password yet.
   @Post('logout-all')
   @AuthenticatedOnly()
   @ApiBearerAuth()

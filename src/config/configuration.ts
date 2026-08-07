@@ -38,7 +38,13 @@ export interface AppConfig {
   };
   jwt: {
     secret: string;
+    // Access-token lifetime. Deliberately short: an access token is stateless
+    // and therefore cannot be withdrawn once issued, so its blast radius is
+    // bounded by its expiry and nothing else. The refresh token below is the
+    // long-lived half, and it IS revocable.
     expiresIn: string;
+    // Refresh-token lifetime, in whole days — the real "stay signed in" window.
+    refreshExpiresInDays: number;
   };
   authorization: {
     // How long a user's compiled permission grants stay cached in Redis.
@@ -136,7 +142,11 @@ export default (): AppConfig => ({
   },
   jwt: {
     secret: process.env.JWT_SECRET!,
-    expiresIn: process.env.JWT_EXPIRES_IN ?? '30d',
+    expiresIn: process.env.JWT_EXPIRES_IN ?? '15m',
+    refreshExpiresInDays: parseInt(
+      process.env.REFRESH_TOKEN_EXPIRES_IN_DAYS ?? '30',
+      10,
+    ),
   },
   authorization: {
     grantsCacheTtlSeconds: parseInt(

@@ -14,10 +14,6 @@ import type { BusinessMemberRow } from './dto/business-member-response.dto';
 import { AddBusinessMemberDto } from './dto/add-business-member.dto';
 import { UpdateBusinessMemberDto } from './dto/update-business-member.dto';
 
-// A platform admin has no membership row and therefore no rank inside any
-// business. They outrank everyone, so their ceiling is unbounded.
-const UNBOUNDED_RANK = Number.POSITIVE_INFINITY;
-
 const MEMBER_INCLUDE = {
   user: { select: { id: true, email: true, firstName: true, lastName: true } },
   role: { select: { id: true, name: true, description: true, rank: true } },
@@ -310,8 +306,19 @@ export class BusinessMembersService {
    * advice ("promote another member first") unreachable. What is forbidden is
    * reaching UP: an admin can never mint an owner.
    *
-   * A platform admin has no membership row here and is unbounded — they were
-   * already granted `manage all`.
+   * A platform admin is unbounded and returns early, on `manage all`.
+   *
+   * EVERY OTHER CALLER MUST HAVE A MEMBERSHIP ROW, and a caller without one is
+   * denied. That is the only safe reading: past the `manage all` gate, a
+   * missing row means the caller reached this business through a
+   * platform-scoped grant on `BusinessMember` *without* unrestricted authority,
+   * so nothing bounds them — they hold no rank to be measured against. This
+   * previously defaulted to an unbounded rank, on the assumption that "no
+   * membership" could only mean "platform admin". It could not: any future
+   * platform role granted `assignRole` would have inherited an infinite
+   * ceiling and been able to mint a BUSINESS_OWNER in any business on the
+   * platform. A guard whose whole purpose is to bound authority must never
+   * treat "I could not find your rank" as "you have no limit".
    *
    * `rank` orders roles for this check ONLY. It does not imply inherited
    * permissions; each role's grants are listed explicitly in the catalog.
@@ -328,9 +335,13 @@ export class BusinessMembersService {
       where: { businessId_userId: { businessId, userId: actorId } },
       select: { role: { select: { rank: true } } },
     });
-    const actorRank = actorMembership?.role.rank ?? UNBOUNDED_RANK;
+    // Fail closed: an actor with no rank in this business has no ceiling to
+    // check against, so there is no rank they may safely be allowed to assign.
+    if (!actorMembership) {
+      throw Errors.permissionDenied('assignRole', 'BusinessMember');
+    }
 
-    if (targetRank > actorRank) {
+    if (targetRank > actorMembership.role.rank) {
       throw Errors.permissionDenied('assignRole', 'BusinessMember');
     }
   }

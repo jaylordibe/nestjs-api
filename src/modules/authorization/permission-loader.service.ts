@@ -25,6 +25,23 @@ const GRANTS_KEY_PREFIX = `authz:${GRANTS_CACHE_VERSION}:grants`;
 // is affected. Stale keys are never deleted; they simply age out via TTL.
 export const AUTHORIZATION_EPOCH_KEY = 'authz:epoch';
 
+// Business-scoped grants come from a LIVE business only.
+//
+// Soft-deleting a business deliberately leaves its `business_members` rows in
+// place, so that restoring it brings the roster back with it. That makes this
+// filter the thing standing between "the business was deleted" and "its staff
+// still hold authority over it". Without it, every member kept their
+// business-scoped grants over a business nobody can see any more — and because
+// `BusinessCustomer` carries no `deletedAt` of its own, those grants still
+// resolved to real rows: the customer list, including names, emails, and staff
+// notes, stayed readable after the business was gone.
+//
+// It must be written here, explicitly. `prisma.scoped` rewrites TOP-LEVEL
+// reads only, so the nested `businessMembers` collection is not filtered by the
+// soft-delete extension — the same reason the roster queries compose
+// `MEMBER_OF_LIVE_USER` by hand.
+const MEMBERSHIP_OF_LIVE_BUSINESS = { business: { deletedAt: null } } as const;
+
 // Shape of the one nested query below. Declared so the mapping code stays
 // typed without leaking Prisma's generated payload types outward.
 interface RolePermissionRow {
@@ -167,6 +184,7 @@ export class PermissionLoaderService {
           },
         },
         businessMembers: {
+          where: MEMBERSHIP_OF_LIVE_BUSINESS,
           select: {
             businessId: true,
             role: { select: { permissions: { select: PERMISSION_SELECT } } },

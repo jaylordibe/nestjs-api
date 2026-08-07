@@ -215,7 +215,8 @@ export class BusinessesService {
 
   // Soft delete. `business_members` rows are left in place: the membership is
   // history, and a restore (clearing `deletedAt`) must bring the roster back
-  // with it. The scoped client hides the business from every read.
+  // with it. The scoped client hides the business from every read, and
+  // `PermissionLoaderService` stops issuing its business-scoped grants.
   async remove(
     id: string,
     ability: AppAbility,
@@ -223,10 +224,28 @@ export class BusinessesService {
   ): Promise<void> {
     const existing = await this.findById(id, ability);
     this.assertMayAct(ability, 'delete', existing);
+
+    // Read the roster BEFORE the delete: these are the users whose authority is
+    // about to change.
+    const members = await this.prisma.businessMember.findMany({
+      where: { businessId: id },
+      select: { userId: true },
+    });
+
     await this.prisma.business.update({
       where: { id },
       data: { deletedAt: new Date(), deletedBy: actorId },
     });
+
+    // Every member just lost their business-scoped grants. Grants are cached
+    // per user, so each cached copy must be dropped — otherwise the roster
+    // keeps its authority over this business, and over its customer records,
+    // until the cache TTL expires. A roster is a staff list, not a customer
+    // list, so iterating it is bounded.
+    for (const member of members) {
+      await this.permissionLoaderService.invalidateUser(member.userId);
+    }
+
     await this.auditService.record({
       action: 'business.soft_deleted',
       actorId,

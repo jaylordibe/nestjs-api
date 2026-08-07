@@ -34,6 +34,13 @@ export enum ErrorCode {
   /** Re-authentication in a `/me/*` flow failed (wrong currentPassword).
    *  CRITICAL: token is still valid — clients MUST NOT auto-logout on this. */
   CURRENT_PASSWORD_INCORRECT = 'CURRENT_PASSWORD_INCORRECT',
+  /** /auth/refresh: the presented refresh token is unknown, expired, already
+   *  exchanged, or revoked. Deliberately ONE code for all four — naming which
+   *  one applied would confirm to a caller that a token it holds is genuine,
+   *  and separating "replayed" from "unknown" would tell an attacker their
+   *  stolen token was the real one. Clients treat this as "the session is
+   *  over": discard both tokens and send the user to login. */
+  REFRESH_TOKEN_INVALID = 'REFRESH_TOKEN_INVALID',
 
   // ── Authorization (403) ──────────────────────────────────────────────
   /** Generic 403 fallback. Emitted when a bare `ForbiddenException` reaches
