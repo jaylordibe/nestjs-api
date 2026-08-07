@@ -168,6 +168,53 @@ describe('Auth refresh tokens (e2e)', () => {
     );
   });
 
+  it('treats a CONCURRENT double-exchange as replay, not as a lost race', async () => {
+    // The case a sequential test cannot reach. Both requests read the token
+    // row before either has consumed it, so both see `consumedAt: null` and
+    // both skip the ordinary replay branch — the conditional consume is the
+    // only thing that separates them.
+    //
+    // Returning a bare 401 to the loser would silently defeat RFC 9700 §4.14.2
+    // reuse detection roughly half the time: an attacker racing the legitimate
+    // client keeps a live, renewable family, and the real user — told only
+    // "your session has expired" — simply signs in again while nothing anywhere
+    // records that one token was presented twice.
+    const tokens = await signedInUser();
+
+    const [first, second] = await Promise.all([
+      refresh(tokens.refreshToken),
+      refresh(tokens.refreshToken),
+    ]);
+
+    // Exactly one winner.
+    const statuses = [first.status, second.status].sort();
+    expect(statuses).toEqual([200, 401]);
+
+    // The winner's brand-new replacement must ALSO be dead: the family was
+    // revoked on the evidence that the token was presented twice, and a
+    // revocation that leaves one live child has not ended the session.
+    const winner = (first.status === 200 ? first : second).body as TokenPair;
+    const afterReplay = await refresh(winner.refreshToken).expect(401);
+    expect((afterReplay.body as ErrorBody).errorCode).toBe(
+      'REFRESH_TOKEN_INVALID',
+    );
+
+    // Assert the database directly rather than trusting the status codes — a
+    // revocation that failed to commit could still produce the 401 above by
+    // some other path.
+    const prisma = app.get(PrismaService);
+    const live = await prisma.refreshToken.count({
+      where: { revokedAt: null },
+    });
+    expect(live).toBe(0);
+
+    // …and the theft is visible to whoever investigates it later.
+    const audited = await prisma.auditLog.findFirst({
+      where: { action: 'auth.refresh_token.replay_detected' },
+    });
+    expect(audited).not.toBeNull();
+  });
+
   it('records the replay in the audit trail', async () => {
     const tokens = await signedInUser();
     await refresh(tokens.refreshToken).expect(200);

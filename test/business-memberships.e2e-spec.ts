@@ -362,27 +362,74 @@ describe('Business memberships (e2e)', () => {
       );
     });
 
-    it('the DATABASE rejects a platform role in a membership, not just the service', async () => {
-      // The service check is a clean 403; this proves the constraint underneath
-      // it, so a future code path that forgets the check still cannot escalate.
+    it('a platform role smuggled into a membership grants NOTHING', async () => {
+      // The service refuses this with a clean 403. This asserts what happens if
+      // a future code path forgets to ask — inserting the row directly, exactly
+      // as a backfill script or a careless migration would.
+      //
+      // There is deliberately no database constraint blocking the write. The
+      // guarantee lives in `AbilityFactory`, which refuses to compile a
+      // permission whose scope does not match the branch it arrived in: one
+      // place, both directions, and — unlike a CHECK — it also covers a grant
+      // set arriving from the Redis cache.
       const prisma = app.get(PrismaService);
       const person = await createRegularUser(app, 'person@example.com');
-      const platformRoleId = await roleIdFor(
+      const platformAdminRoleId = await roleIdFor(
         app,
         SeededRoleName.PLATFORM_ADMIN,
       );
 
-      await expect(
-        prisma.businessMembership.create({
-          data: {
-            businessId: business.id,
-            userId: person.id,
-            roleId: platformRoleId,
-            status: BusinessMembershipStatus.ACTIVE,
-            joinedAt: new Date(),
-          },
-        }),
-      ).rejects.toThrow();
+      await prisma.businessMembership.create({
+        data: {
+          businessId: business.id,
+          userId: person.id,
+          roleId: platformAdminRoleId,
+          status: BusinessMembershipStatus.ACTIVE,
+          joinedAt: new Date(),
+        },
+      });
+
+      // `platform_admin` holds `manage all`. If this membership conferred it,
+      // this person would own the platform.
+      await request(app.getHttpServer())
+        .get('/api/users')
+        .set('Authorization', `Bearer ${person.token}`)
+        .expect(403);
+      await request(app.getHttpServer())
+        .get(`/api/businesses/${business.id}`)
+        .set('Authorization', `Bearer ${person.token}`)
+        .expect(404);
+    });
+
+    it('a BUSINESS role smuggled platform-wide grants NOTHING', async () => {
+      // The direction that actually escalates, and the reason the guard lives
+      // in the ability factory rather than in the schema.
+      //
+      // Business permissions are always `ANY`, and the platform branch emits an
+      // UNCONDITIONAL rule — so without the guard this is `read
+      // BusinessMembership` across every tenant on the platform, with no
+      // businessId condition at all.
+      const prisma = app.get(PrismaService);
+      const person = await createRegularUser(app, 'person@example.com');
+      const businessAdminRoleId = await roleIdFor(
+        app,
+        SeededRoleName.BUSINESS_ADMIN,
+      );
+
+      await prisma.userRole.create({
+        data: { userId: person.id, roleId: businessAdminRoleId },
+      });
+
+      const roster = await request(app.getHttpServer())
+        .get(membershipsUrl())
+        .set('Authorization', `Bearer ${person.token}`)
+        .expect(200);
+      expect((roster.body as PageBody<MembershipBody>).data).toEqual([]);
+
+      await request(app.getHttpServer())
+        .get(`/api/businesses/${business.id}`)
+        .set('Authorization', `Bearer ${person.token}`)
+        .expect(404);
     });
   });
 

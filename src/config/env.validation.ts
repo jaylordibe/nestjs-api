@@ -110,6 +110,19 @@ export const envValidationSchema = Joi.object({
     .max(3600)
     .default(300),
 
+  // Whether the Cloudflare-injected request headers may be believed.
+  //
+  // Defaults to `false`, and that default is the point: these headers are
+  // forgeable by anyone who can reach the origin directly, and they are
+  // persisted into `audit_logs`. A fork that deploys without restricting the
+  // origin to Cloudflare's ranges records the IP Express actually saw rather
+  // than one the caller chose. Turn it on only alongside the `cloudflare_only`
+  // snippet in docs/prod/Caddyfile.
+  TRUST_CLOUDFLARE_HEADERS: Joi.string()
+    .valid('true', 'false')
+    .allow('')
+    .default('false'),
+
   // How long a business invitation stays redeemable. The token is a bearer
   // credential living in somebody's inbox, so this is bounded on purpose: a
   // long-lived invitation turns any later mailbox compromise into a way into

@@ -81,6 +81,20 @@ export class AbilityFactory {
     }
 
     for (const permission of grants.platformPermissions) {
+      // ── THE scope guard ──────────────────────────────────────────────
+      //
+      // This loop branches on where a grant ARRIVED from, not on what the
+      // permission claims to be, and the `else` below emits an UNCONDITIONAL
+      // rule. Business permissions are always `ANY`, so a business permission
+      // reaching this loop — a business role assigned through `user_roles` —
+      // would compile to platform-wide authority with no tenant bound. That is
+      // the single most dangerous shape this file can produce.
+      //
+      // Skipping rather than throwing is deliberate: a mis-scoped grant is a
+      // data fault, and failing the whole request would turn one bad row into
+      // an outage for that account. Dropping the rule fails closed.
+      if (permission.scope !== RoleScope.PLATFORM) continue;
+
       if (permission.ownership === PermissionOwnership.OWN) {
         // "…but only the rows you own." `User` is keyed by `id`, its children
         // by `userId`; resolveOwnerKey throws rather than silently widening
@@ -108,6 +122,14 @@ export class AbilityFactory {
       if (membership.status !== BusinessMembershipStatus.ACTIVE) continue;
 
       for (const permission of membership.permissions) {
+        // The mirror of the guard above, closing the other direction: a
+        // PLATFORM permission attached to a membership. Less dangerous —
+        // `resolveTenantKey` already throws for `all`, `User`, `Role`,
+        // `AuditLog` and `QueueJob`, so most of it fails closed on its own —
+        // but "most" is not a guarantee, and a throw here would take out every
+        // request for that account rather than dropping one rule.
+        if (permission.scope !== RoleScope.BUSINESS) continue;
+
         // Business-scoped authority is bounded by the tenant, always. The
         // `Business` record itself is keyed by `id`; everything owned by a
         // business is keyed by `businessId`.

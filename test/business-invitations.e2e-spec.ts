@@ -1,0 +1,511 @@
+import { INestApplication } from '@nestjs/common';
+import request from 'supertest';
+import { App } from 'supertest/types';
+import { BusinessInvitationStatus } from '../src/common/enums/business-invitation-status.enum';
+import { BusinessMembershipStatus } from '../src/common/enums/business-membership-status.enum';
+import { SeededRoleName } from '../src/common/enums/seeded-role-name.enum';
+import { hashOpaqueToken } from '../src/common/util/opaque-token.util';
+import { AbilityFactory } from '../src/modules/authorization/ability.factory';
+import { PermissionLoaderService } from '../src/modules/authorization/permission-loader.service';
+import { BusinessInvitationsService } from '../src/modules/businesses/invitations/business-invitations.service';
+import { PrismaService } from '../src/prisma/prisma.service';
+import { truncateAll } from './setup/db';
+import {
+  addMembership,
+  createBusinessWithOwner,
+  createRegularUser,
+  roleIdFor,
+  seedRbacCatalog,
+  SeededBusiness,
+  SeededUser,
+  TEST_PASSWORD,
+} from './setup/rbac';
+import { createTestApp } from './setup/test-app';
+
+interface ErrorBody {
+  errorCode: string;
+}
+
+describe('Business invitations (e2e)', () => {
+  let app: INestApplication<App>;
+  let owner: SeededUser;
+  let business: SeededBusiness;
+
+  beforeAll(async () => {
+    app = await createTestApp();
+  });
+
+  beforeEach(async () => {
+    await truncateAll(app);
+    await seedRbacCatalog(app);
+    owner = await createRegularUser(app, 'owner@example.com');
+    business = await createBusinessWithOwner(app, owner.id);
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  const invitationsUrl = () => `/api/businesses/${business.id}/invitations`;
+
+  /**
+   * Mints an invitation and returns its plaintext token.
+   *
+   * Goes through the service rather than the HTTP endpoint because the endpoint
+   * deliberately does NOT return the token — it is emailed and nowhere else, so
+   * that being able to invite an address does not also let you redeem the
+   * invitation yourself. The service is the only place the plaintext exists.
+   * Every assertion BELOW this helper still goes over HTTP.
+   */
+  const inviteAndCaptureToken = async (
+    email: string,
+    roleName: SeededRoleName = SeededRoleName.BUSINESS_MEMBER,
+    actorId: string = owner.id,
+  ): Promise<{ token: string; invitationId: string }> => {
+    const service = app.get(BusinessInvitationsService);
+    const ability = await abilityFor(actorId);
+    const { invitation, token } = await service.create(
+      business.id,
+      { email, roleId: await roleIdFor(app, roleName) },
+      ability,
+      actorId,
+    );
+    return { token, invitationId: invitation.id };
+  };
+
+  // The real compiled ability for a user, so the service sees exactly what a
+  // request would hand it — not a hand-built stub that could drift.
+  const abilityFor = async (userId: string) => {
+    const loader = app.get(PermissionLoaderService);
+    const factory = app.get(AbilityFactory);
+    return factory.createForUser(userId, await loader.loadGrants(userId));
+  };
+
+  const acceptAs = (actor: SeededUser, token: string) =>
+    request(app.getHttpServer())
+      .post('/api/invitations/accept')
+      .set('Authorization', `Bearer ${actor.token}`)
+      .send({ token });
+
+  describe('issuing', () => {
+    it('an owner may invite an address that has no account yet', async () => {
+      await request(app.getHttpServer())
+        .post(invitationsUrl())
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({
+          email: 'nobody@example.com',
+          roleId: await roleIdFor(app, SeededRoleName.BUSINESS_MEMBER),
+        })
+        .expect(201);
+
+      // No membership row: there is no user to hang one on. That is the entire
+      // reason invitations are a separate model.
+      const prisma = app.get(PrismaService);
+      expect(
+        await prisma.businessMembership.count({
+          where: { businessId: business.id },
+        }),
+      ).toBe(1); // the owner only
+    });
+
+    it('never returns the token — it goes to the invited address alone', async () => {
+      const response = await request(app.getHttpServer())
+        .post(invitationsUrl())
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({
+          email: 'nobody@example.com',
+          roleId: await roleIdFor(app, SeededRoleName.BUSINESS_MEMBER),
+        })
+        .expect(201);
+
+      const body = response.body as Record<string, unknown>;
+      expect(body.token).toBeUndefined();
+      // The digest must not leak either: SHA-256 over a known 43-character
+      // alphabet is not a slow hash, so publishing it invites an offline search.
+      expect(body.tokenHash).toBeUndefined();
+    });
+
+    it('reserves an INVITED membership when the address already has an account', async () => {
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      await inviteAndCaptureToken(invitee.email);
+
+      const prisma = app.get(PrismaService);
+      const membership = await prisma.businessMembership.findUniqueOrThrow({
+        where: {
+          businessId_userId: { businessId: business.id, userId: invitee.id },
+        },
+      });
+      expect(membership.status).toBe(BusinessMembershipStatus.INVITED);
+      // The DB CHECK requires `joined_at` absent until they have actually
+      // joined something.
+      expect(membership.joinedAt).toBeNull();
+    });
+
+    it('an INVITED membership grants nothing', async () => {
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      await inviteAndCaptureToken(invitee.email, SeededRoleName.BUSINESS_ADMIN);
+
+      await request(app.getHttpServer())
+        .get(`/api/businesses/${business.id}`)
+        .set('Authorization', `Bearer ${invitee.token}`)
+        .expect(404);
+    });
+
+    it('refuses a second pending invitation to the same address', async () => {
+      await inviteAndCaptureToken('invitee@example.com');
+
+      const response = await request(app.getHttpServer())
+        .post(invitationsUrl())
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({
+          email: 'invitee@example.com',
+          roleId: await roleIdFor(app, SeededRoleName.BUSINESS_MEMBER),
+        })
+        .expect(409);
+
+      expect((response.body as ErrorBody).errorCode).toBe('RESOURCE_CONFLICT');
+    });
+
+    it('enforces the rank ceiling at INVITE time, not just at acceptance', async () => {
+      // Checking only on acceptance would be too late in the way that matters:
+      // the email would already have promised a role the inviter could never
+      // grant, and the refusal would land on the invitee.
+      const businessAdmin = await createRegularUser(app, 'ba@example.com');
+      await addMembership(
+        app,
+        business.id,
+        businessAdmin.id,
+        SeededRoleName.BUSINESS_ADMIN,
+      );
+
+      const response = await request(app.getHttpServer())
+        .post(invitationsUrl())
+        .set('Authorization', `Bearer ${businessAdmin.token}`)
+        .send({
+          email: 'invitee@example.com',
+          roleId: await roleIdFor(app, SeededRoleName.BUSINESS_OWNER),
+        })
+        .expect(403);
+
+      expect((response.body as ErrorBody).errorCode).toBe(
+        'ROLE_NOT_ASSIGNABLE',
+      );
+    });
+
+    it('refuses a PLATFORM-scoped role', async () => {
+      const response = await request(app.getHttpServer())
+        .post(invitationsUrl())
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({
+          email: 'invitee@example.com',
+          roleId: await roleIdFor(app, SeededRoleName.PLATFORM_ADMIN),
+        })
+        .expect(403);
+
+      expect((response.body as ErrorBody).errorCode).toBe(
+        'ROLE_NOT_ASSIGNABLE',
+      );
+    });
+
+    it('a platform role smuggled onto an invitation grants NOTHING once accepted', async () => {
+      // An invitation names the role its acceptor receives, so it is a second
+      // door into the same escalation as a membership. The service refuses it
+      // with a 403 (above); this asserts the end state if some future code path
+      // writes the row directly, and follows it all the way through acceptance
+      // rather than stopping at the insert.
+      const prisma = app.get(PrismaService);
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      const token = 'z'.repeat(43);
+      await prisma.businessInvitation.create({
+        data: {
+          businessId: business.id,
+          email: invitee.email,
+          roleId: await roleIdFor(app, SeededRoleName.PLATFORM_ADMIN),
+          tokenHash: hashOpaqueToken(token),
+          expiresAt: new Date(Date.now() + 86_400_000),
+        },
+      });
+
+      // Acceptance succeeds — nothing structurally forbids the row.
+      await acceptAs(invitee, token).expect(200);
+
+      // …and the resulting membership confers nothing, because `AbilityFactory`
+      // drops a PLATFORM permission arriving through a membership.
+      await request(app.getHttpServer())
+        .get('/api/users')
+        .set('Authorization', `Bearer ${invitee.token}`)
+        .expect(403);
+      await request(app.getHttpServer())
+        .get(`/api/businesses/${business.id}`)
+        .set('Authorization', `Bearer ${invitee.token}`)
+        .expect(404);
+    });
+
+    it('a member with no invite permission cannot invite', async () => {
+      const member = await createRegularUser(app, 'member@example.com');
+      await addMembership(
+        app,
+        business.id,
+        member.id,
+        SeededRoleName.BUSINESS_MEMBER,
+      );
+
+      await request(app.getHttpServer())
+        .post(invitationsUrl())
+        .set('Authorization', `Bearer ${member.token}`)
+        .send({
+          email: 'invitee@example.com',
+          roleId: await roleIdFor(app, SeededRoleName.BUSINESS_MEMBER),
+        })
+        .expect(403);
+    });
+  });
+
+  describe('acceptance', () => {
+    it('an existing user accepts and becomes ACTIVE', async () => {
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      const { token } = await inviteAndCaptureToken(invitee.email);
+
+      await acceptAs(invitee, token).expect(200);
+
+      const prisma = app.get(PrismaService);
+      const membership = await prisma.businessMembership.findUniqueOrThrow({
+        where: {
+          businessId_userId: { businessId: business.id, userId: invitee.id },
+        },
+      });
+      expect(membership.status).toBe(BusinessMembershipStatus.ACTIVE);
+      expect(membership.joinedAt).not.toBeNull();
+
+      // Authority follows immediately — the grants cache was invalidated.
+      await request(app.getHttpServer())
+        .get(`/api/businesses/${business.id}`)
+        .set('Authorization', `Bearer ${invitee.token}`)
+        .expect(200);
+    });
+
+    it('someone who registers AFTER being invited can still accept', async () => {
+      // The token stays valid across registration, which is what lets the
+      // platform keep ONE registration policy instead of forking a second
+      // account-creation path behind a bearer token.
+      const { token } = await inviteAndCaptureToken('newcomer@example.com');
+
+      await request(app.getHttpServer())
+        .post('/api/auth/register')
+        .send({
+          email: 'newcomer@example.com',
+          password: TEST_PASSWORD,
+          firstName: 'New',
+          lastName: 'Comer',
+        })
+        .expect(201);
+
+      const prisma = app.get(PrismaService);
+      const created = await prisma.user.findFirstOrThrow({
+        where: { email: 'newcomer@example.com' },
+      });
+      await prisma.user.update({
+        where: { id: created.id },
+        data: { emailVerifiedAt: new Date() },
+      });
+      const newcomer = await createSessionFor('newcomer@example.com');
+
+      await acceptAs(newcomer, token).expect(200);
+
+      const membership = await prisma.businessMembership.findUniqueOrThrow({
+        where: {
+          businessId_userId: { businessId: business.id, userId: created.id },
+        },
+      });
+      expect(membership.status).toBe(BusinessMembershipStatus.ACTIVE);
+    });
+
+    it('a DIFFERENT account cannot redeem a forwarded invitation', async () => {
+      // Without the email match the token alone would be sufficient, and a
+      // forwarded invitation would let anyone join a business that invited
+      // somebody else specifically.
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      void invitee;
+      const bystander = await createRegularUser(app, 'bystander@example.com');
+      const { token } = await inviteAndCaptureToken('invitee@example.com');
+
+      const response = await acceptAs(bystander, token).expect(400);
+      expect((response.body as ErrorBody).errorCode).toBe('INVITATION_INVALID');
+    });
+
+    it('rejects an unknown token indistinguishably from a used one', async () => {
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      const response = await acceptAs(invitee, 'z'.repeat(43)).expect(400);
+      expect((response.body as ErrorBody).errorCode).toBe('INVITATION_INVALID');
+    });
+
+    it('rejects an EXPIRED invitation, distinguishably', async () => {
+      // Safe to distinguish: the holder already proved possession of a real
+      // token, so this discloses nothing they did not have — and their remedy
+      // differs from "that link is wrong".
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      const { token, invitationId } = await inviteAndCaptureToken(
+        invitee.email,
+      );
+
+      const prisma = app.get(PrismaService);
+      await prisma.businessInvitation.update({
+        where: { id: invitationId },
+        data: { expiresAt: new Date(Date.now() - 1_000) },
+      });
+
+      const response = await acceptAs(invitee, token).expect(400);
+      expect((response.body as ErrorBody).errorCode).toBe('INVITATION_EXPIRED');
+    });
+
+    it('rejects a REVOKED invitation', async () => {
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      const { token, invitationId } = await inviteAndCaptureToken(
+        invitee.email,
+      );
+
+      await request(app.getHttpServer())
+        .delete(`${invitationsUrl()}/${invitationId}`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .expect(204);
+
+      const response = await acceptAs(invitee, token).expect(400);
+      expect((response.body as ErrorBody).errorCode).toBe('INVITATION_INVALID');
+
+      // Revoking also clears the placeholder membership it reserved.
+      const prisma = app.get(PrismaService);
+      expect(
+        await prisma.businessMembership.count({
+          where: { businessId: business.id, userId: invitee.id },
+        }),
+      ).toBe(0);
+    });
+
+    it('rejects a REPLAYED invitation — acceptance is single-use', async () => {
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      const { token } = await inviteAndCaptureToken(invitee.email);
+
+      await acceptAs(invitee, token).expect(200);
+      const replay = await acceptAs(invitee, token).expect(400);
+      expect((replay.body as ErrorBody).errorCode).toBe('INVITATION_INVALID');
+    });
+
+    it('refuses an invitation to a soft-deleted business', async () => {
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      const { token } = await inviteAndCaptureToken(invitee.email);
+
+      await request(app.getHttpServer())
+        .delete(`/api/businesses/${business.id}`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .expect(204);
+
+      const response = await acceptAs(invitee, token).expect(400);
+      expect((response.body as ErrorBody).errorCode).toBe('INVITATION_INVALID');
+    });
+
+    it('CONCURRENT acceptance of one token produces exactly ONE membership', async () => {
+      // The invariant the conditional consume exists for. Both requests attempt
+      // the same UPDATE out of `pending`; exactly one matches a row, and the
+      // loser's whole transaction — membership included — rolls back.
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      const { token } = await inviteAndCaptureToken(invitee.email);
+
+      const results = await Promise.all([
+        acceptAs(invitee, token),
+        acceptAs(invitee, token),
+      ]);
+
+      const statuses = results.map((response) => response.status).sort();
+      expect(statuses).toEqual([200, 400]);
+
+      // Read from the database, not from the status codes: a race that produced
+      // two rows could still return one 200 and one 400 by luck.
+      const prisma = app.get(PrismaService);
+      expect(
+        await prisma.businessMembership.count({
+          where: { businessId: business.id, userId: invitee.id },
+        }),
+      ).toBe(1);
+
+      const invitations = await prisma.businessInvitation.findMany({
+        where: { businessId: business.id },
+      });
+      expect(invitations).toHaveLength(1);
+      expect(invitations[0].status).toBe(BusinessInvitationStatus.ACCEPTED);
+      expect(invitations[0].acceptedBy).toBe(invitee.id);
+    });
+
+    it('someone who LEFT can be re-invited, reusing the same row', async () => {
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      await addMembership(
+        app,
+        business.id,
+        invitee.id,
+        SeededRoleName.BUSINESS_MEMBER,
+        BusinessMembershipStatus.LEFT,
+      );
+
+      const { token } = await inviteAndCaptureToken(invitee.email);
+      await acceptAs(invitee, token).expect(200);
+
+      const prisma = app.get(PrismaService);
+      const rows = await prisma.businessMembership.findMany({
+        where: { businessId: business.id, userId: invitee.id },
+      });
+      // `@@unique([businessId, userId])` is unconditional — there can only ever
+      // be one.
+      expect(rows).toHaveLength(1);
+      expect(rows[0].status).toBe(BusinessMembershipStatus.ACTIVE);
+      expect(rows[0].endedAt).toBeNull();
+    });
+
+    it('requires authentication — there is no anonymous redemption', async () => {
+      await request(app.getHttpServer())
+        .post('/api/invitations/accept')
+        .send({ token: 'z'.repeat(43) })
+        .expect(401);
+    });
+  });
+
+  describe('listing and revocation', () => {
+    it('a stranger to the business sees no invitations', async () => {
+      await inviteAndCaptureToken('invitee@example.com');
+      const stranger = await createRegularUser(app, 'stranger@example.com');
+
+      const response = await request(app.getHttpServer())
+        .get(invitationsUrl())
+        .set('Authorization', `Bearer ${stranger.token}`)
+        .expect(200);
+
+      expect((response.body as { data: unknown[] }).data).toEqual([]);
+    });
+
+    it('an accepted invitation cannot be revoked', async () => {
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      const { token, invitationId } = await inviteAndCaptureToken(
+        invitee.email,
+      );
+      await acceptAs(invitee, token).expect(200);
+
+      await request(app.getHttpServer())
+        .delete(`${invitationsUrl()}/${invitationId}`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .expect(409);
+    });
+  });
+
+  // Logs a seeded user in again after their row was created out-of-band.
+  const createSessionFor = async (email: string): Promise<SeededUser> => {
+    const prisma = app.get(PrismaService);
+    const user = await prisma.user.findFirstOrThrow({ where: { email } });
+    const response = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ identifier: email, password: TEST_PASSWORD })
+      .expect(200);
+    return {
+      id: user.id,
+      email,
+      token: (response.body as { accessToken: string }).accessToken,
+    };
+  };
+});

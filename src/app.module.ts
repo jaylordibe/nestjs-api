@@ -8,7 +8,6 @@ import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
-import { randomUUID } from 'crypto';
 import type { Request } from 'express';
 import Redis from 'ioredis';
 import type { IncomingMessage, ServerResponse } from 'http';
@@ -18,6 +17,7 @@ import { UAParser } from 'ua-parser-js';
 import { AuditModule } from './common/audit/audit.module';
 import { Errors } from './common/errors/errors';
 import { flattenValidationErrors } from './common/errors/flatten-validation-errors';
+import { resolveRequestId } from './common/util/request-id.util';
 import { EmailModule } from './common/email/email.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { QueueModule } from './common/queue/queue.module';
@@ -58,100 +58,123 @@ import { UsersModule } from './modules/users/users.module';
     // HTTP request so downstream services (AuditService, …) can read request
     // metadata without threading it through every callsite or switching to
     // `Scope.REQUEST` (which would propagate request scope through the whole
-    // DI graph and tank perf). `idGenerator` mirrors the LoggerModule's
-    // `genReqId` logic below — the same UUID is reused if the client sent
-    // `X-Request-Id`, otherwise we mint one — so pino logs and
-    // audit_logs.metadata.request.requestId agree for a given request.
+    // DI graph and tank perf).
+    //
+    // `idGenerator` and the LoggerModule's `genReqId` below both call the SAME
+    // `resolveRequestId`, which memoises per request — so the `X-Request-Id`
+    // response header, pino's `req.id`, the error envelope's `requestId`, and
+    // `audit_logs.metadata.request.requestId` are one value by construction.
+    // (Two independent copies of "header else randomUUID()" agreed only when
+    // the client supplied the header, and diverged on all other traffic.)
     //
     // `setup` captures everything AuditService merges into `metadata.request`
     // on every `record()` call. Two tiers of forensic value:
     //   - Tier 1 (zero-ops): `request.ip`, `User-Agent` (+ parsed
     //     browser/os/device via `ua-parser-js`), `Accept-Language`, `method`,
     //     `path`. Pure local parsing; works in dev and behind any proxy.
-    //   - Tier 2 (free behind Cloudflare): `CF-Connecting-IP` overrides
-    //     `request.ip`; `CF-IPCountry` gives a 2-letter ISO country; `CF-Ray` is
-    //     the cross-system trace id. Trusted blindly because the origin is
-    //     allowlisted to CF IPs at the infra layer — don't expose the origin
-    //     directly or an attacker can spoof these.
+    //   - Tier 2 (behind Cloudflare, and ONLY when TRUST_CLOUDFLARE_HEADERS is
+    //     enabled): `CF-Connecting-IP` overrides `request.ip`; `CF-IPCountry`
+    //     gives a 2-letter ISO country; `CF-Ray` is the cross-system trace id.
     // Every field is optional and AuditService skips empties, so a sparse
     // envelope (local dev, non-browser UAs) is never noisy.
-    ClsModule.forRoot({
+    ClsModule.forRootAsync({
       global: true,
-      middleware: {
-        mount: true,
-        generateId: true,
-        idGenerator: (request: Request) => {
-          const headerId = request.headers['x-request-id'];
-          return typeof headerId === 'string' && headerId.length > 0
-            ? headerId
-            : randomUUID();
-        },
-        setup: (cls, request: Request) => {
-          // Tier 1: User-Agent + parsed browser/OS/device.
-          const uaHeader = request.headers['user-agent'];
-          const userAgent =
-            typeof uaHeader === 'string' && uaHeader.length > 0
-              ? uaHeader
-              : undefined;
-          if (userAgent) {
-            cls.set('userAgent', userAgent);
-            const parsed = UAParser(userAgent);
-            if (parsed.browser.name) {
-              cls.set('browser', {
-                name: parsed.browser.name,
-                version: parsed.browser.version,
-              });
-            }
-            if (parsed.os.name) {
-              cls.set('os', {
-                name: parsed.os.name,
-                version: parsed.os.version,
-              });
-            }
-            // Skip the `device` key for desktop UAs (all three sub-fields are
-            // undefined for Chrome on Mac, etc.). Only mobile / tablet /
-            // console / smarttv / wearable / xr / embedded UAs populate any.
-            const deviceType = parsed.device.type;
-            const deviceVendor = parsed.device.vendor;
-            const deviceModel = parsed.device.model;
-            if (deviceType || deviceVendor || deviceModel) {
-              cls.set('device', {
-                type: deviceType,
-                vendor: deviceVendor,
-                model: deviceModel,
-              });
-            }
-          }
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => {
+        // Resolved once at boot, not per request.
+        //
+        // These headers are trivially forgeable by anyone who can reach the
+        // origin directly, and they land in `audit_logs` — the table whose
+        // whole purpose is to be trustworthy after an incident. Defaulting to
+        // OFF means a fork that deploys without the `cloudflare_only` Caddy
+        // snippet records the IP Express actually saw, rather than one the
+        // caller chose for it.
+        const trustCloudflareHeaders = configService.getOrThrow<boolean>(
+          'cloudflare.trustHeaders',
+        );
+        return {
+          middleware: {
+            mount: true,
+            generateId: true,
+            idGenerator: (request: Request) => resolveRequestId(request),
+            setup: (cls, request: Request) => {
+              // Tier 1: User-Agent + parsed browser/OS/device.
+              const uaHeader = request.headers['user-agent'];
+              const userAgent =
+                typeof uaHeader === 'string' && uaHeader.length > 0
+                  ? uaHeader
+                  : undefined;
+              if (userAgent) {
+                cls.set('userAgent', userAgent);
+                const parsed = UAParser(userAgent);
+                if (parsed.browser.name) {
+                  cls.set('browser', {
+                    name: parsed.browser.name,
+                    version: parsed.browser.version,
+                  });
+                }
+                if (parsed.os.name) {
+                  cls.set('os', {
+                    name: parsed.os.name,
+                    version: parsed.os.version,
+                  });
+                }
+                // Skip the `device` key for desktop UAs (all three sub-fields are
+                // undefined for Chrome on Mac, etc.). Only mobile / tablet /
+                // console / smarttv / wearable / xr / embedded UAs populate any.
+                const deviceType = parsed.device.type;
+                const deviceVendor = parsed.device.vendor;
+                const deviceModel = parsed.device.model;
+                if (deviceType || deviceVendor || deviceModel) {
+                  cls.set('device', {
+                    type: deviceType,
+                    vendor: deviceVendor,
+                    model: deviceModel,
+                  });
+                }
+              }
 
-          const acceptLanguage = request.headers['accept-language'];
-          if (typeof acceptLanguage === 'string' && acceptLanguage.length > 0) {
-            cls.set('acceptLanguage', acceptLanguage);
-          }
+              const acceptLanguage = request.headers['accept-language'];
+              if (
+                typeof acceptLanguage === 'string' &&
+                acceptLanguage.length > 0
+              ) {
+                cls.set('acceptLanguage', acceptLanguage);
+              }
 
-          // Tier 2: Cloudflare-injected headers. `CF-Connecting-IP` is the
-          // canonical client IP; falls back to `request.ip` (Express-resolved via
-          // `trust proxy`) for non-CF traffic / local dev.
-          const cfConnectingIp = request.headers['cf-connecting-ip'];
-          cls.set(
-            'ip',
-            typeof cfConnectingIp === 'string' && cfConnectingIp.length > 0
-              ? cfConnectingIp
-              : request.ip,
-          );
+              // Tier 2: Cloudflare-injected headers, read ONLY when the operator
+              // has asserted that the origin is unreachable except through
+              // Cloudflare. With the flag off, `ip` is whatever Express resolved
+              // from `trust proxy`, and `country` / `cfRay` are simply absent —
+              // a missing field is honest, a forged one is not.
+              if (trustCloudflareHeaders) {
+                const cfConnectingIp = request.headers['cf-connecting-ip'];
+                cls.set(
+                  'ip',
+                  typeof cfConnectingIp === 'string' &&
+                    cfConnectingIp.length > 0
+                    ? cfConnectingIp
+                    : request.ip,
+                );
 
-          const cfCountry = request.headers['cf-ipcountry'];
-          if (typeof cfCountry === 'string' && cfCountry.length > 0) {
-            cls.set('country', cfCountry);
-          }
+                const cfCountry = request.headers['cf-ipcountry'];
+                if (typeof cfCountry === 'string' && cfCountry.length > 0) {
+                  cls.set('country', cfCountry);
+                }
 
-          const cfRay = request.headers['cf-ray'];
-          if (typeof cfRay === 'string' && cfRay.length > 0) {
-            cls.set('cfRay', cfRay);
-          }
+                const cfRay = request.headers['cf-ray'];
+                if (typeof cfRay === 'string' && cfRay.length > 0) {
+                  cls.set('cfRay', cfRay);
+                }
+              } else {
+                cls.set('ip', request.ip);
+              }
 
-          cls.set('method', request.method);
-          cls.set('path', request.originalUrl || request.url);
-        },
+              cls.set('method', request.method);
+              cls.set('path', request.originalUrl || request.url);
+            },
+          },
+        };
       },
     }),
     // Structured JSON logs in prod/staging; pretty-printed in local dev.
@@ -173,11 +196,12 @@ import { UsersModule } from './modules/users/users.module';
                 ? { target: 'pino-pretty', options: { singleLine: true } }
                 : undefined,
             genReqId: (request: IncomingMessage, response: ServerResponse) => {
-              const headerId = request.headers['x-request-id'];
-              const id =
-                typeof headerId === 'string' && headerId.length > 0
-                  ? headerId
-                  : randomUUID();
+              // Shared with the CLS middleware below. Memoised per request, so
+              // whichever of the two runs first decides the value and the other
+              // agrees — the header echoed here, the `requestId` in the error
+              // envelope, and `audit_logs.metadata.request.requestId` are then
+              // the same string by construction rather than by coincidence.
+              const id = resolveRequestId(request);
               response.setHeader('X-Request-Id', id);
               return id;
             },

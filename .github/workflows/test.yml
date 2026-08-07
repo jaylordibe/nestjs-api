@@ -373,22 +373,57 @@ jobs:
         run: |
           if diff -rq base/prisma/migrations head/prisma/migrations >/dev/null 2>&1; then
             echo 'changed=false' >> "$GITHUB_OUTPUT"
+            echo 'rebaselined=false' >> "$GITHUB_OUTPUT"
             echo 'No migration changes against the released commit — nothing for this job to prove.'
-          else
-            echo 'changed=true' >> "$GITHUB_OUTPUT"
-            echo 'Migration changes against the released commit:'
-            diff -rq base/prisma/migrations head/prisma/migrations || true
+            exit 0
+          fi
+
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+          echo 'Migration changes against the released commit:'
+          diff -rq base/prisma/migrations head/prisma/migrations || true
+
+          # A migration directory that exists on `main` and has been EDITED or
+          # DELETED here is a template re-baseline, not an ordinary forward
+          # migration. Detected by shape rather than by name, so it keeps
+          # working whatever the baseline is called.
+          #
+          # It breaks the assertions below in two unavoidable ways, and both are
+          # correct refusals for any other change: `migrate deploy` rejects an
+          # edited migration outright, because its checksum is recorded in
+          # `_prisma_migrations`; and the released build necessarily reads
+          # tables the rewritten baseline may no longer create.
+          #
+          # So the comparison is skipped and replaced with a weaker but honest
+          # one (below). This is only ever legitimate BEFORE a first deploy —
+          # afterwards, re-baselining breaks `migrate deploy` in every
+          # environment that has already run it.
+          rebaselined=false
+          for released in base/prisma/migrations/*/; do
+            name="$(basename "$released")"
+            proposed="head/prisma/migrations/$name"
+            if [ ! -d "$proposed" ]; then
+              echo "::warning::released migration '$name' has been DELETED"
+              rebaselined=true
+            elif ! diff -rq "$released" "$proposed" >/dev/null 2>&1; then
+              echo "::warning::released migration '$name' has been EDITED"
+              rebaselined=true
+            fi
+          done
+          echo "rebaselined=$rebaselined" >> "$GITHUB_OUTPUT"
+
+          if [ "$rebaselined" = 'true' ]; then
+            echo '::warning::Template re-baseline detected. SKIPPING the populated-data and released-build assertions — an edited migration cannot be applied on top of itself, and the released build reads a schema that no longer exists. Proving the new baseline applies to an EMPTY database and seeds instead. This is safe ONLY because no environment has applied the old baseline; if one has, `migrate deploy` will refuse there.'
           fi
 
       # The same compose file and the same .env.test everything else uses, so
       # this job cannot drift onto its own database configuration.
       - name: Start Postgres + Redis
-        if: steps.scope.outputs.changed == 'true'
+        if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'false'
         working-directory: head
         run: docker compose --env-file .env.test up -d --wait postgres redis
 
       - name: Set up Node
-        if: steps.scope.outputs.changed == 'true'
+        if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'false'
         uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -396,7 +431,7 @@ jobs:
           cache-dependency-path: head/yarn.lock
 
       - name: Install dependencies (released commit)
-        if: steps.scope.outputs.changed == 'true'
+        if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'false'
         working-directory: base
         run: yarn install --frozen-lockfile --silent
         env:
@@ -409,7 +444,7 @@ jobs:
       # does. `prisma/seed.ts` reads the ADMIN and USER prefixes and throws when
       # either pair is absent, so both are supplied.
       - name: Apply released migrations and seed data
-        if: steps.scope.outputs.changed == 'true'
+        if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'false'
         working-directory: base
         run: |
           set -euo pipefail
@@ -427,7 +462,7 @@ jobs:
       # Without this the job could pass against an empty database and prove
       # nothing at all — the exact vacuous-green failure it exists to prevent.
       - name: Assert the database is actually populated
-        if: steps.scope.outputs.changed == 'true'
+        if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'false'
         working-directory: base
         run: |
           set -euo pipefail
@@ -441,7 +476,7 @@ jobs:
           fi
 
       - name: Install dependencies (proposed commit)
-        if: steps.scope.outputs.changed == 'true'
+        if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'false'
         working-directory: head
         run: yarn install --frozen-lockfile --silent
         env:
@@ -450,7 +485,7 @@ jobs:
       # The primary assertion: the NEW migrations applied on top of the released
       # schema, with real rows underneath them.
       - name: Apply the proposed migrations to the populated database
-        if: steps.scope.outputs.changed == 'true'
+        if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'false'
         working-directory: head
         run: |
           set -euo pipefail
@@ -466,7 +501,7 @@ jobs:
       # removes or tightens something the released code still reads takes the
       # site down before the new container ever starts.
       - name: Prove the released build still serves traffic on the new schema
-        if: steps.scope.outputs.changed == 'true'
+        if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'false'
         working-directory: base
         run: |
           set -euo pipefail
@@ -490,6 +525,37 @@ jobs:
 
           echo '::error::the released build never became healthy against the new schema within 60s — treat this migration as not backwards-compatible'
           exit 1
+
+      # The replacement assertion when the baseline was rewritten. Weaker than
+      # the populated-data check above — deliberately so, and said out loud —
+      # but it still catches invalid SQL, a constraint that cannot be created,
+      # and a seeder the new schema no longer satisfies.
+      - name: Prove the rewritten baseline applies to an empty database
+        if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'true'
+        working-directory: head
+        run: |
+          set -euo pipefail
+          set -a; . ./.env.test; set +a
+          BASELINE_DB_NAME="${DB_NAME}_baseline_check"
+          export DB_NAME="$BASELINE_DB_NAME"
+          export DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${BASELINE_DB_NAME}?schema=public"
+          PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d postgres \
+            -c "DROP DATABASE IF EXISTS \"$BASELINE_DB_NAME\";" \
+            -c "CREATE DATABASE \"$BASELINE_DB_NAME\";"
+          yarn install --frozen-lockfile --silent
+          yarn prisma:generate
+          if ! yarn prisma:deploy; then
+            echo '::error::the rewritten baseline does not apply to an empty database'
+            exit 1
+          fi
+          if ! yarn prisma:seed; then
+            echo '::error::the rewritten baseline applies, but the seeder fails against it — a clone would boot into an unusable state'
+            exit 1
+          fi
+          if ! yarn rbac:check; then
+            echo '::error::the authorization catalog does not match the database the rewritten baseline produces'
+            exit 1
+          fi
 
       - name: Dump container logs on failure
         if: failure() && steps.scope.outputs.changed == 'true'

@@ -53,6 +53,16 @@ export interface AppConfig {
     // TTL only bounds the damage from a missed invalidation.
     grantsCacheTtlSeconds: number;
   };
+  cloudflare: {
+    // Whether `CF-Connecting-IP`, `CF-IPCountry`, and `CF-Ray` may be believed.
+    //
+    // They are ordinary request headers: anyone who can reach the origin
+    // directly can set them to anything, and they are recorded into
+    // `audit_logs` — the table an incident responder trusts. Enable ONLY when
+    // the origin is provably unreachable except through Cloudflare (see the
+    // `cloudflare_only` snippet in docs/prod/Caddyfile).
+    trustHeaders: boolean;
+  };
   businessInvitation: {
     // How long an invitation token stays redeemable. Bounded because the token
     // is a bearer credential sitting in somebody's inbox: the longer it lives,
@@ -159,6 +169,9 @@ export default (): AppConfig => ({
       process.env.AUTHORIZATION_GRANTS_CACHE_TTL_SECONDS ?? '300',
       10,
     ),
+  },
+  cloudflare: {
+    trustHeaders: process.env.TRUST_CLOUDFLARE_HEADERS === 'true',
   },
   businessInvitation: {
     expiresInDays: parseInt(

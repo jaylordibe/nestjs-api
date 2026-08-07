@@ -61,8 +61,8 @@ model User {
 
   deviceTokens DeviceToken[]
   // PLATFORM-scope role assignments. BUSINESS-scope roles live on
-  // `businessMemberships` instead — a database constraint keeps the two from
-  // crossing over (see `user_roles.scope` / `business_memberships.scope`).
+  // `businessMemberships` instead; `AbilityFactory` refuses to compile a
+  // permission that arrives through the wrong one.
   //
   // A user may hold NO platform role at all and still be a complete,
   // functioning account: their self-service capabilities come from
@@ -188,11 +188,6 @@ model Role {
   memberships BusinessMembership[]
   invitations BusinessInvitation[]
 
-  // FK target for the scope-integrity constraint on every assignment table
-  // (`user_roles`, `business_memberships`, `business_invitations`). Lets
-  // `user_roles` reference `(roleId, 'platform')` so a business role can never
-  // be assigned platform-wide, and vice versa.
-  @@unique([id, scope])
   @@index([scope])
   @@map("roles")
 }
@@ -236,15 +231,18 @@ model UserRole {
   createdBy String?  @map("created_by") @db.Uuid
   userId    String   @map("user_id") @db.Uuid
   roleId    String   @map("role_id") @db.Uuid
-  // Constant discriminator, not a free field. Together with the composite FK
-  // below and a CHECK constraint in the migration, it makes assigning a
-  // BUSINESS role platform-wide a database error rather than a code bug.
-  scope     String   @default("platform")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   // Restrict, not Cascade: deleting a role must never silently strip people's
   // access. It fails loudly until every holder is reassigned.
-  role Role @relation(fields: [roleId, scope], references: [id, scope], onDelete: Restrict)
+  //
+  // Only PLATFORM-scoped roles belong here. That is enforced in
+  // `UserRolesService.loadPlatformRole` on the write path, and — the part that
+  // actually bounds authority — in `AbilityFactory`, which refuses to compile a
+  // permission whose scope does not match the branch it arrived in. A business
+  // permission reaching the platform branch would otherwise compile to an
+  // UNCONDITIONAL rule, because business permissions are always `ANY`.
+  role Role @relation(fields: [roleId], references: [id], onDelete: Restrict)
 
   @@unique([userId, roleId])
   @@index([userId])
@@ -279,10 +277,6 @@ model BusinessMembership {
   businessId String    @map("business_id") @db.Uuid
   userId     String    @map("user_id") @db.Uuid
   roleId     String    @map("role_id") @db.Uuid
-  /// Constant discriminator pinned to `business` by a CHECK constraint in the
-  /// migration. With the composite FK below it makes attaching a PLATFORM role
-  /// to a membership a database error rather than a code bug.
-  scope      String    @default("business")
   /// `BusinessMembershipStatus`. A plain String, per the no-DB-enums rule —
   /// constrained by the TS enum and `@IsEnum`, so widening the lifecycle needs
   /// no migration.
@@ -302,7 +296,9 @@ model BusinessMembership {
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   /// Restrict, not Cascade: deleting a role must never silently strip access.
-  role     Role     @relation(fields: [roleId, scope], references: [id, scope], onDelete: Restrict)
+  /// Scope integrity lives in `AbilityFactory` and the service layer — see the
+  /// note on `UserRole.role`.
+  role     Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
   /// SetNull, not Cascade: deleting the inviter's account must not delete the
   /// membership they created.
   inviter  User?    @relation("BusinessMembershipInviter", fields: [invitedBy], references: [id], onDelete: SetNull)
@@ -348,7 +344,6 @@ model BusinessInvitation {
   /// `findUnique`.
   email      String
   roleId     String    @map("role_id") @db.Uuid
-  scope      String    @default("business")
   /// SHA-256 of the opaque token, hex-encoded — the same construction, and the
   /// same reasoning, as `RefreshToken.tokenHash`. The plaintext is emailed once
   /// and never stored.
@@ -365,7 +360,7 @@ model BusinessInvitation {
   revokedBy  String?   @map("revoked_by") @db.Uuid
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  role     Role     @relation(fields: [roleId, scope], references: [id, scope], onDelete: Restrict)
+  role     Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
 
   @@index([businessId, status])
   /// Supports a retention sweep over expired invitations.

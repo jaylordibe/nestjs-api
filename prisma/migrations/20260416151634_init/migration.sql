@@ -112,7 +112,6 @@ CREATE TABLE "user_roles" (
     "created_by" UUID,
     "user_id" UUID NOT NULL,
     "role_id" UUID NOT NULL,
-    "scope" TEXT NOT NULL DEFAULT 'platform',
 
     CONSTRAINT "user_roles_pkey" PRIMARY KEY ("id")
 );
@@ -127,7 +126,6 @@ CREATE TABLE "business_memberships" (
     "business_id" UUID NOT NULL,
     "user_id" UUID NOT NULL,
     "role_id" UUID NOT NULL,
-    "scope" TEXT NOT NULL DEFAULT 'business',
     "status" TEXT NOT NULL DEFAULT 'active',
     "joined_at" TIMESTAMP(3),
     "ended_at" TIMESTAMP(3),
@@ -147,7 +145,6 @@ CREATE TABLE "business_invitations" (
     "business_id" UUID NOT NULL,
     "email" TEXT NOT NULL,
     "role_id" UUID NOT NULL,
-    "scope" TEXT NOT NULL DEFAULT 'business',
     "token_hash" TEXT NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'pending',
     "invited_by" UUID,
@@ -226,9 +223,6 @@ CREATE UNIQUE INDEX "roles_name_key" ON "roles"("name");
 CREATE INDEX "roles_scope_idx" ON "roles"("scope");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "roles_id_scope_key" ON "roles"("id", "scope");
-
--- CreateIndex
 CREATE UNIQUE INDEX "permissions_name_key" ON "permissions"("name");
 
 -- CreateIndex
@@ -304,7 +298,7 @@ ALTER TABLE "role_permissions" ADD CONSTRAINT "role_permissions_permission_id_fk
 ALTER TABLE "user_roles" ADD CONSTRAINT "user_roles_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "user_roles" ADD CONSTRAINT "user_roles_role_id_scope_fkey" FOREIGN KEY ("role_id", "scope") REFERENCES "roles"("id", "scope") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "user_roles" ADD CONSTRAINT "user_roles_role_id_fkey" FOREIGN KEY ("role_id") REFERENCES "roles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "business_memberships" ADD CONSTRAINT "business_memberships_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "businesses"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -313,7 +307,7 @@ ALTER TABLE "business_memberships" ADD CONSTRAINT "business_memberships_business
 ALTER TABLE "business_memberships" ADD CONSTRAINT "business_memberships_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "business_memberships" ADD CONSTRAINT "business_memberships_role_id_scope_fkey" FOREIGN KEY ("role_id", "scope") REFERENCES "roles"("id", "scope") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "business_memberships" ADD CONSTRAINT "business_memberships_role_id_fkey" FOREIGN KEY ("role_id") REFERENCES "roles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "business_memberships" ADD CONSTRAINT "business_memberships_invited_by_fkey" FOREIGN KEY ("invited_by") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
@@ -322,7 +316,7 @@ ALTER TABLE "business_memberships" ADD CONSTRAINT "business_memberships_invited_
 ALTER TABLE "business_invitations" ADD CONSTRAINT "business_invitations_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "businesses"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "business_invitations" ADD CONSTRAINT "business_invitations_role_id_scope_fkey" FOREIGN KEY ("role_id", "scope") REFERENCES "roles"("id", "scope") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "business_invitations" ADD CONSTRAINT "business_invitations_role_id_fkey" FOREIGN KEY ("role_id") REFERENCES "roles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "device_tokens" ADD CONSTRAINT "device_tokens_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -349,29 +343,30 @@ ALTER TABLE "device_tokens" ADD CONSTRAINT "device_tokens_user_id_fkey" FOREIGN 
 -- so Postgres' unquoted-identifier folding is a no-op rather than a trap.
 -- ─────────────────────────────────────────────────────────────────────────
 
--- Scope integrity.
+-- Scope integrity is enforced in CODE, not here — deliberately.
 --
--- `scope` on each assignment table is a constant discriminator, not a free
--- column. Pinning each to a literal, combined with the composite foreign keys
--- on (role_id, scope) -> roles(id, scope) generated above, makes it a DATABASE
--- ERROR to assign a BUSINESS role platform-wide, or a PLATFORM role inside a
--- business.
+-- An earlier shape carried a constant `scope` column on each assignment table
+-- (`user_roles`, `business_memberships`, `business_invitations`), pinned by a
+-- CHECK and paired with a composite FK to `roles(id, scope)`. That is the
+-- standard trick for constraining an FK to a subtype, and it worked — but it
+-- bought less than it looked like it did.
 --
--- `business_invitations` carries the same pair for a reason worth stating: an
--- invitation names the role its acceptor will receive, so without this it would
--- be a side door into exactly the escalation the other two constraints close —
--- invite yourself with a platform role, accept, and the membership inherits it.
+-- It guards the WRITE path only. The escalation that actually matters happens
+-- on the READ path: `AbilityFactory` branches on where a grant ARRIVED from,
+-- never on what the permission claims to be, so a BUSINESS permission reaching
+-- the platform branch compiles to an UNCONDITIONAL rule (business permissions
+-- are always `ANY`) — a platform-wide grant with no tenant bound. A database
+-- constraint cannot see that, and cannot see a stale or corrupted grant set
+-- arriving from the Redis cache either.
 --
--- Without the CHECK, the composite FK alone would still permit a row with
--- scope='business' in user_roles pointing at a business role.
-ALTER TABLE user_roles
-  ADD CONSTRAINT user_roles_scope_check CHECK (scope = 'platform');
-
-ALTER TABLE business_memberships
-  ADD CONSTRAINT business_memberships_scope_check CHECK (scope = 'business');
-
-ALTER TABLE business_invitations
-  ADD CONSTRAINT business_invitations_scope_check CHECK (scope = 'business');
+-- So the guarantee moved to `AbilityFactory`, which refuses to compile any
+-- permission whose scope does not match the branch it arrived in. One place,
+-- both directions, after the cache, covering strictly more than three CHECKs
+-- did — and the schema loses three never-varying columns plus a unique index
+-- that existed solely to be a foreign-key target.
+--
+-- The write path still validates: `UserRolesService.loadPlatformRole` and
+-- `loadAssignableBusinessRole` in both business services.
 
 -- Soft-delete-aware uniqueness.
 --

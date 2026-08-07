@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { AuthenticatedOnly } from '../../../common/decorators/authenticated-only.decorator';
@@ -37,6 +37,11 @@ export class BusinessInvitationAcceptanceController {
    * inside the business is precisely what this call grants.
    */
   @Post('accept')
+  // 200, not Nest's default 201. A membership IS created, but not at this URL —
+  // the response is an acknowledgement carrying the ids to navigate to, there
+  // is no `Location` header, and repeating the call is an error rather than
+  // another create. `@ApiOkResponse` below has to agree with the wire.
+  @HttpCode(HttpStatus.OK)
   @AuthenticatedOnly()
   // The token is a bearer credential presented by an authenticated but
   // unauthorized caller, so brute force is bounded here rather than by the
