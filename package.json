@@ -1,7 +1,7 @@
 {
   "name": "nestjs-api",
   "version": "1.0.0",
-  "description": "Production-grade NestJS 11 + Prisma 7 + PostgreSQL + Redis API template. Auth with email verification, DB-backed RBAC + CASL over platform and business scopes, multi-tenant isolation, soft-delete, audit log, GDPR erase, BullMQ background jobs with a splittable worker, Swagger docs, and 224 e2e tests out of the box.",
+  "description": "Production-grade NestJS 11 + Prisma 7 + PostgreSQL + Redis API template. Auth with email verification and refresh-token rotation, DB-backed RBAC + CASL over platform and business scopes, Slack-style multi-tenant memberships with invitations and ownership invariants, query-level tenant isolation, soft-delete, audit log, GDPR erase, BullMQ background jobs with a splittable worker, and Swagger docs.",
   "author": "Jay Ibe",
   "license": "MIT",
   "repository": {

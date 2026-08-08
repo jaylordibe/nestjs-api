@@ -267,3 +267,4 @@ Load these on demand — they hold the long-form playbooks so this core stays le
 | Write e2e specs (harness, coverage, cadence, error-envelope assertions) | `e2e-testing` skill |
 | Error envelope contract + ErrorCode catalog + client logout rule | `src/common/errors/README.md` |
 | Deployment / infra (Caddy + per-env compose + GitHub Actions) | `docs/README.md` → `docs/prod/` + `docs/staging/` |
+| Which operational controls are ACTUALLY enforced vs. only scaffolded — backups, restore verification, RPO/RTO, secret rotation, retention, backpressure, incident response, rollback | `docs/operations.md` |

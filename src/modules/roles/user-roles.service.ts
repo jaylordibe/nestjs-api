@@ -19,8 +19,10 @@ import { PermissionLoaderService } from '../authorization/permission-loader.serv
 const NO_AUTHORITY_RANK = 0;
 
 // Grants and revokes PLATFORM-scope roles. Business roles are never assigned
-// here — they live in `business_memberships`, and the database rejects a
-// business role in `user_roles` outright (composite FK + CHECK constraint).
+// here — they live in `business_memberships`. `loadPlatformRole` refuses one on
+// the write path; `AbilityFactory` refuses to compile one on the read path,
+// which is where it would otherwise become an unconditional platform-wide
+// grant.
 @Injectable()
 export class UserRolesService {
   constructor(

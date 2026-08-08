@@ -625,9 +625,9 @@ export class BusinessMembershipsService {
     if (!role) {
       throw Errors.resourceNotFound('Role');
     }
-    // The database would reject a cross-scope assignment too (composite FK +
-    // CHECK), but a clean 403 beats a foreign-key error surfacing as
-    // FK_REFERENCE_INVALID — and this refuses before any row is touched.
+    // The write-path half of scope integrity: refuse before any row is
+    // touched, with a clean 403. The read-path half — the one that actually
+    // bounds authority if this check is ever bypassed — is in `AbilityFactory`.
     if ((role.scope as RoleScope) !== RoleScope.BUSINESS) {
       throw Errors.roleNotAssignable();
     }

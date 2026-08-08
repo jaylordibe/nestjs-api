@@ -118,8 +118,8 @@ export async function seedRoles(prisma: PrismaClient): Promise<void> {
 }
 
 // Idempotently grant a PLATFORM role to a user. Business roles are never
-// assigned here — they belong to a `business_memberships` row, and the database
-// rejects a business role in `user_roles` outright.
+// assigned here — they belong to a `business_memberships` row, and
+// `AbilityFactory` would refuse to compile one that arrived this way.
 export async function assignPlatformRole(
   prisma: PrismaClient,
   userId: string,

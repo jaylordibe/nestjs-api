@@ -1,6 +1,8 @@
 # NestJS API Template
 
-A production-grade scaffold for building JSON APIs with **NestJS 11 + Prisma 7 + PostgreSQL + Redis**. Click **Use this template** on GitHub, clone, set a few env vars, and start adding feature modules. Security-hardened, extensively tested (81 e2e tests), documented end-to-end in [`CLAUDE.md`](./CLAUDE.md).
+A production-grade scaffold for building JSON APIs with **NestJS 11 + Prisma 7 + PostgreSQL + Redis**. Click **Use this template** on GitHub, clone, set a few env vars, and start adding feature modules. Security-hardened, documented end-to-end in [`CLAUDE.md`](./CLAUDE.md).
+
+Every e2e spec runs against a **real Postgres and Redis** — no mocks, no in-memory substitutes — so what passes locally is what runs in CI. The suite asserts invariants rather than counts: tenant isolation holds under a forged path parameter, a business never reaches zero owners under concurrent demotion, a replayed refresh token revokes its whole family, and an invitation redeemed twice at the same instant produces one membership.
 
 ## What's inside
 
@@ -9,6 +11,7 @@ A production-grade scaffold for building JSON APIs with **NestJS 11 + Prisma 7 +
 - **Login** with per-route rate limiting and account lockout after 5 failed attempts.
 - **Password policy** — 12+ chars, letter + digit, bcrypt cost 12.
 - **JWT with `jti`**, bound to service via `iss`/`aud`. `passwordChangedAt` invalidates all outstanding tokens on password rotation.
+- **Refresh-token rotation with reuse detection** (RFC 9700 §4.14.2) — every exchange consumes the presented token and issues a new one in the same family. Re-presenting a consumed token is treated as theft and revokes the whole family, **including when the second presentation is concurrent rather than sequential**, which is the case a serial test cannot reach.
 - **Per-device logout** (Redis blocklist) + **logout-all** (via `passwordChangedAt` bump).
 - **Password reset** via OTP email (separate from verification, 15-min expiry).
 - **GDPR erase** endpoint that anonymizes PII + marks `deletedAt`.
@@ -19,6 +22,7 @@ A production-grade scaffold for building JSON APIs with **NestJS 11 + Prisma 7 +
 - **Audit columns** (`createdBy`/`updatedBy`/`deletedBy`) on every resource, populated from `@CurrentUser()`.
 - **Audit log table** (`audit_logs`) recording every privileged admin action.
 - **Three example resources** demonstrating the full CRUD pattern: `Users`, `AppVersions`, `DeviceTokens` (with FK cascade to User).
+- **Slack-style tenancy** — one global account, many businesses, exactly one role in each. `BusinessMembership` carries a lifecycle (`invited → active → suspended → left`) rather than a `deletedAt`: the row is reused forever, which is what lets `@@unique([businessId, userId])` be an unconditional constraint. Only `active` confers authority.
 
 ### Email
 - **Pluggable provider** — `stub` (logs to stdout, default for dev/test) or `resend` (production).
@@ -151,13 +155,16 @@ All routes under `/api`. See Swagger at `/api/docs` for full specs.
 
 ### Multi-tenant (business scope)
 - `POST|GET|PATCH|DELETE /businesses` — any user may create one; the creator becomes its `BUSINESS_OWNER`.
-- `.../businesses/:businessId/members` — the staff roster. Rank-guarded: you may never grant a role above your own.
-- `.../businesses/:businessId/customers` — the customer list. A customer is a `User`, not a role; a staff member may also be a customer of their own business.
+- `.../businesses/:businessId/memberships` — the **one** roster. Staff and customers are the same resource distinguished by role, so there is no parallel tree to keep in step. Rank-guarded: you may never grant a role above your own.
+- `.../memberships/:id/{role,suspend,reactivate,transfer-ownership}` — each a separate permission, because CASL's `manage` wildcard would otherwise let anyone holding "update" also assign roles.
+- `.../businesses/:businessId/invitations` + `POST /invitations/accept` — invite an address that may not have an account yet. Single-use hashed token; concurrent redemption yields exactly one membership.
 
 ### Administrative (platform scope)
 - `POST|GET|PATCH|DELETE /users` + `/users/:id` + `/users/:id/password` — full user management.
 - `POST|DELETE /users/:userId/roles` — grant/revoke a platform role.
-- `POST|GET|PATCH|DELETE /roles`, `GET /permissions` — custom roles; permissions are code-owned.
+- `GET /roles`, `GET /permissions` — **read-only**. Roles and permissions are both code-owned; there is no endpoint that creates one.
+- `GET /queues`, `GET|POST|DELETE /queues/:queue/jobs/:id` — background-job diagnostics and recovery. Job payloads are visible only to `PLATFORM_ENGINEER`; support roles can see a job failed and retry it without reading the user data it carried.
+- `POST /users/:id/{unlock,revoke-sessions,resend-verification}` — narrow support capabilities, each its own permission so app support can help an account holder without being able to change their email.
 - `GET /audit-logs` — the platform audit trail. Filter by `action` / `actorId` / `targetUserId` / `startCreatedAt` / `endCreatedAt`, or cast a wide net with `?search=`, which matches the action name, either party's email, and the `metadata` envelope as text (trigram-indexed). Rows arrive with `actor` / `targetUser` hydrated (id, email, name, current platform roles), batched one query per page, and still resolve for soft-deleted users.
 - `POST|PATCH|DELETE /app-versions` — release signal management.
 
@@ -186,8 +193,9 @@ src/
     auth/                    # AuthService, AuthController, JwtStrategy, JwtAuthGuard
     authorization/           # @Global: AbilityFactory, grants cache, PermissionsGuard, boot-time gates
     users/                   # canonical resource — full CRUD + self-service + GDPR erase
-    roles/                   # roles (data) + permissions (code, read-only) + platform-role assignment
-    businesses/              # tenant resource + members (staff) + customers
+    roles/                   # roles + permissions (both code-owned, read-only) + platform-role assignment
+    businesses/              # tenant resource + memberships (staff AND customers) + invitations
+    queue-admin/             # operator queue diagnostics; payloads gated behind `readPayload`
     audit-logs/              # read-only audit trail
     app-versions/            # client update signal, one row per release train
     device-tokens/           # push notification tokens (FK to User, hard delete)
@@ -224,6 +232,7 @@ Before the first real deploy, confirm:
 - [ ] `JWT_SECRET` regenerated per environment (`openssl rand -hex 48`). Joi refuses the template default at boot.
 - [ ] `CORS_ORIGIN` set to an explicit origin list (Joi refuses `*` in `NODE_ENV=production`).
 - [ ] `TRUST_PROXY` set to `"1"` or a CIDR list if behind a load balancer (Joi refuses `"false"`/`"true"` in production).
+- [ ] `TRUST_CLOUDFLARE_HEADERS` left at `false` **unless** the origin is provably unreachable except through Cloudflare (see the `cloudflare_only` snippet in `docs/prod/Caddyfile`). These headers are forgeable by anyone who can reach the origin directly, and they are written into `audit_logs` — the table an incident responder trusts.
 - [ ] `EMAIL_PROVIDER=resend` + `RESEND_API_KEY` + `EMAIL_FROM` (on a verified domain with DKIM/SPF/DMARC in DNS).
 - [ ] Error tracker wired (Sentry / Datadog / Axiom — not included; plug into pino or bootstrap).
 - [ ] Managed Postgres PITR enabled.
@@ -234,7 +243,7 @@ Before the first real deploy, confirm:
 
 ## Tech stack
 
-- **Runtime** — Node 22+ (Node 24 in CI and Docker)
+- **Runtime** — Node 24 everywhere: `.nvmrc`, `.node-version`, `engines`, the Dockerfile, and CI all name the same major, and `yarn@1.22.22` is pinned via `packageManager`.
 - **Framework** — NestJS 11 on Express
 - **Language** — TypeScript (strict, `isolatedModules`, `emitDecoratorMetadata`)
 - **DB** — PostgreSQL 18 + Prisma 7 via `@prisma/adapter-pg`
@@ -259,18 +268,28 @@ This template ships DB-backed RBAC with CASL over two scopes: **PLATFORM**
 (staff) and **BUSINESS** (tenant-local).
 
 ```bash
-yarn rbac:sync     # projects the permission catalog + 8 system roles into the DB
+yarn rbac:sync     # projects the permission catalog + its seeded roles into the DB
 yarn rbac:check    # asserts the DB matches the catalog (CI-friendly, exits 1 on drift)
 yarn prisma:seed   # rbac:sync + the bootstrap admin/demo users (needs SEED_*)
 ```
+
+**Roles are code.** There is no `POST /roles` — the catalog in
+`src/common/authorization/permission-catalog.ts` is the only place a role is
+defined, so granting authority is a reviewable diff rather than an API call.
+Four platform roles separate governance (`PLATFORM_ADMIN`) from technical
+authority (`PLATFORM_ENGINEER`) from two tiers of support; five business roles
+run from owner to customer.
 
 `rbac:sync` runs on **every deploy**, straight after `prisma migrate deploy` —
 the api refuses to boot when the catalog and the database disagree, so it can
 never be a manual step. It needs only `DATABASE_URL`.
 
 The seeded admin (`SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`) gets
-`PLATFORM_ADMIN`; every registered user gets `PLATFORM_USER`, which carries the
-self-service grants for `/users/me/*` and their own device tokens.
+`PLATFORM_ADMIN`. **Ordinary accounts get no platform role at all** — platform
+roles are staff roles. Self-service over `/users/me/*` and one's own device
+tokens comes from `AUTHENTICATED_USER_PERMISSIONS`, which the ability factory
+injects for every authenticated caller, so an account with zero roles and zero
+memberships is complete rather than broken.
 
 The app **refuses to boot** if (a) the permission catalog and the database
 disagree, or (b) any route handler declares no authorization decision. Both are

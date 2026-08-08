@@ -11,10 +11,15 @@ decorator.
 A **permission** is a tuple `(action, subject, scope, ownership)` defined once
 in [`permission-catalog.ts`](./permission-catalog.ts). A **role** is a named
 bundle of permissions. A user holds PLATFORM roles through `user_roles`, and
-BUSINESS roles through `business_members` — one row per business. On every
-request, `PermissionsGuard` loads the caller's grants (Redis-cached, DB-backed)
-and compiles them into a single CASL `Ability`. Handlers declare what they need;
-queries enforce which rows the caller may touch.
+BUSINESS roles through `business_memberships` — exactly one row per business, in
+any capacity. On every request, `PermissionsGuard` loads the caller's grants
+(Redis-cached, DB-backed) and compiles them into a single CASL `Ability`.
+Handlers declare what they need; queries enforce which rows the caller may touch.
+
+Most accounts hold **no platform role at all**. Self-service capability comes
+from `AUTHENTICATED_USER_PERMISSIONS`, which `AbilityFactory` injects for every
+authenticated caller — so a user with zero roles and zero memberships is a
+complete, working account rather than a broken one.
 
 The database is a **projection** of the catalog. The app refuses to boot if they
 disagree.
@@ -111,8 +116,9 @@ error**, not a runtime 403.
 
 Marks a route that acts on records the caller does not own.
 
-Without it, `PLATFORM_USER`'s `update User (own)` would pass the guard on
-`PATCH /users/:id` — a rule *does* exist, and the guard cannot see its
+Without it, the intrinsic `update User (own)` that EVERY authenticated caller
+holds would pass the guard on `PATCH /users/:id` — a rule *does* exist, and the
+guard cannot see its
 condition. With it, the guard demands a granting rule that is **not**
 owner-conditioned. Tenant-conditioned rules still qualify: a `BUSINESS_ADMIN`
 administers a roster it does not personally own.
@@ -166,19 +172,38 @@ not boot on drift**, so catalog projection is a deploy step, never a manual one.
 
 Steps 2–4 are enforced by the compiler; step 5 by the ESLint rule.
 
-## Adding a custom role at runtime
+## Roles are code — there is no runtime role API
 
-`POST /roles` — permissions must share the role's scope, and `rank` is capped at
-99 so a custom role can never outrank `PLATFORM_ADMIN` / `BUSINESS_OWNER` and
-slip past the escalation guard.
+`GET /roles` and `GET /permissions` are the only role endpoints. There is no
+`POST`, `PATCH`, or `DELETE`, and their absence is the feature: an operator who
+can add `platform.all.manage` to a role they already hold has made themselves an
+admin with no diff for anyone to review.
+
+Two things also make a runtime role API structurally unworkable here.
+`PermissionCatalogIntegrityService` refuses to boot when the database and the
+catalog disagree, and the seeder reconciles every seeded role's grants back to
+the catalog — so a custom role's permissions would be reverted by the next
+deploy anyway.
+
+`GET /roles?assignableIn=<businessId>` narrows the list to roles the caller may
+actually hand out there (business-scoped, at or below their rank). That is
+ergonomics, not a control — the ceiling is enforced on write regardless — but a
+picker that only offers reachable options is the difference between a boundary
+users understand and one they probe.
 
 ---
 
 ## The escalation guard
 
-`assignRole` is a permission distinct from `update`, because CASL's `manage`
-wildcard would otherwise swallow it — and `manage BusinessMember` would let a
-`BUSINESS_ADMIN` promote itself to owner.
+`assignRole`, `suspend`, and `transferOwnership` are permissions distinct from
+`update`, because CASL's `manage` wildcard would otherwise swallow all three —
+and `manage BusinessMembership` would let a `BUSINESS_ADMIN` promote itself to
+owner.
+
+**No BUSINESS-scoped role holds `manage`, including `BUSINESS_OWNER`.** The
+owner genuinely holds every verb today, so `manage` would be equivalent *right
+now* — and would silently grant whatever verb is added to the vocabulary next,
+with nobody reviewing that decision. `permission-catalog.spec.ts` asserts it.
 
 On top of the permission, `rank` bounds it:
 
@@ -192,9 +217,15 @@ make the last-owner invariant's advice ("promote another member first")
 unreachable.
 
 `rank` orders roles **for this check only**. It does *not* imply inherited
-permissions. `BUSINESS_ADMIN` does not contain `BUSINESS_STAFF`; every role's
-grants are listed explicitly. Conflating "outranks" with "inherits" is how RBAC
-systems rot.
+permissions. `BUSINESS_ADMIN` does not contain `BUSINESS_MEMBER`, and
+`PLATFORM_ENGINEER` (rank 90) holds no governance despite outranking both
+support roles — it is deliberately never granted `assignRole User`, so the
+highest *technical* authority on the platform cannot promote itself into the
+highest *governance* authority. Every role's grants are listed explicitly.
+Conflating "outranks" with "inherits" is how RBAC systems rot.
+
+The ceiling is measured against the caller's **ACTIVE** membership. A suspended
+owner still reads rank 100 on paper and must hold nothing in fact.
 
 ---
 
@@ -205,8 +236,17 @@ Redis under `authz:v1:grants:{epoch}:{userId}`.
 
 | change | invalidation |
 |---|---|
-| user's roles or memberships change | `DEL` that one key |
+| platform role assigned or revoked | `DEL` that one key |
+| membership added, role changed, suspended, reactivated, or ended | `DEL` that one key |
+| invitation accepted | `DEL` the acceptor's key |
+| ownership transferred | `DEL` **both** parties' keys |
+| business soft-deleted | `DEL` every membership holder's key — every status, not just active, since a cached set written while they were active may still be live |
 | a **role's** permission set changes | `INCR authz:epoch` — retires every cached grant at once |
+
+Version the key (`v1` above) whenever `AuthorizationGrants` changes shape.
+During a rolling deploy both builds are live at once, so without it the new code
+reads an entry the old code wrote, deserializes it into a shape whose fields are
+now `undefined`, and mis-authorizes for the rest of that key's TTL.
 
 TTL (`AUTHORIZATION_GRANTS_CACHE_TTL_SECONDS`, default 300) is a **backstop for
 a missed invalidation**, not the correctness mechanism. Redis being unavailable
@@ -237,46 +277,118 @@ client ability agrees with the server decision-for-decision. Client checks are a
 
 ---
 
-## Deliberate non-goals
+## One membership, staff and customers alike
 
-**No pending-invitation flow.** Adding a business member requires an existing
-account. To add invitations: a `business_invitations` table (email, businessId,
-roleId, token hash, expiry), an emailed token via the existing `EmailService`,
-and an accept endpoint that creates the `business_members` row. Deliberately out
-of the baseline because it is product surface, not authorization infrastructure.
+`BusinessMembership` is the **only** relationship between a person and a
+business. A customer is a membership holding `BUSINESS_CUSTOMER`, exactly as
+staff is a membership holding `BUSINESS_MEMBER`. `@@unique([businessId, userId])`
+is unconditional, so a person is one or the other in a given business — never
+both.
 
-**No `BUSINESS_CUSTOMER` role.** A customer of a business is a *relationship*,
-not authority over it. Everything a customer does — book, view, cancel — acts on
-their **own** records, which `own`-scoped permissions already express. Modelling
-customers as `business_members` rows would (a) collide with
-`@@unique([businessId, userId])`, so a staff member could never be a customer of
-their own business; (b) mix a ten-row staff roster with a hundred-thousand-row
-customer list; and (c) drag every customer relationship into the ability graph.
+That constraint is a real product decision, not an accident. It buys a
+membership model with one table, one lifecycle, and one authorization path; it
+costs the ability to represent someone who both works at a business and buys
+from it. If your domain needs that (a stylist booking at their own salon), model
+the *customer relationship* as its own project-specific resource and leave
+`BusinessMembership` for authority.
 
-Customers are their own resource: **`business_customers`** (see
-`src/modules/businesses/customers/`). It is the first subject registered in
-**both** key maps:
+It is the one subject in **both** key maps, and that duality is the design:
 
 ```ts
-SUBJECT_OWNER_KEY  = { …, BusinessCustomer: 'userId'     }  // the customer's own record
-SUBJECT_TENANT_KEY = { …, BusinessCustomer: 'businessId' }  // the business's customer list
+SUBJECT_OWNER_KEY  = { …, BusinessMembership: 'userId'     }  // your own row
+SUBJECT_TENANT_KEY = { …, BusinessMembership: 'businessId' }  // the whole roster
 ```
 
-The two rules OR-compose, so one endpoint serves both audiences: `GET
-/businesses/:businessId/customers` returns a customer's single row, a staff
-member's whole tenant, and everything to a platform admin — with no branching in
-the service.
+The rules OR-compose, so one endpoint serves both audiences with no branching:
+`GET /businesses/:businessId/memberships` returns a customer's single row, a
+staff member's whole tenant, and everything to a platform admin. Because the
+subject is ownable *and* tenant-scoped, `PermissionsGuard` checks a stub carrying
+**both** keys — see `buildTenantStub`. Supplying only the tenant key would
+silently deny a member whose rule is conditioned on `userId`.
 
-Because the subject is ownable *and* tenant-scoped, `PermissionsGuard` checks a
-stub carrying **both** keys (`{ businessId, userId: caller }`) — see
-`buildTenantStub`. Supplying only the tenant key would silently deny a customer
-whose rule is conditioned on `userId`. Acting on *someone else's* record is
-re-checked in the service against the resolved target id, which is why a
-customer cannot enrol a third party even though they pass the guard.
+### Lifecycle
 
-Customers log in through the ordinary `/auth/login`: a customer **is** a `User`
-with `PLATFORM_USER`. One account, many businesses — and a stylist can be a
-customer of the salon they work at.
+`BusinessMembershipStatus` is `invited → active → suspended → left`, and the row
+is **never deleted**. `DELETE` ends a membership by moving it to `left`; a
+re-join moves that same row back to `active`. That is what lets the uniqueness
+constraint stay unconditional — soft deletion could not, because SQL treats
+`NULL != NULL`, so `@@unique([businessId, userId, deletedAt])` would accept two
+live rows while reporting itself unique.
+
+**Only `ACTIVE` confers authority**, filtered in `PermissionLoaderService`'s
+query and asserted again in `AbilityFactory`. It cannot live in a guard: a guard
+runs before the row is loaded and cannot see a status.
+
+### Extending it for customer-owned resources
+
+`BUSINESS_CUSTOMER` deliberately gets the smallest coherent grant — `read
+Business`, plus the intrinsic read of its own membership. **No roster access**: a
+customer must never enumerate staff or other customers.
+
+To give customers authority over their own domain records (bookings, orders,
+tickets), do **not** widen the membership role. Add the resource as its own
+subject:
+
+1. Add the Prisma model with a `userId` column (and `businessId` if staff also
+   read it).
+2. Add its name to `AUTHORIZATION_SUBJECTS`.
+3. Register `SUBJECT_OWNER_KEY` (and `SUBJECT_TENANT_KEY` if tenant-scoped).
+4. Define `own`-scoped PLATFORM permissions and add them to
+   `AUTHENTICATED_USER_PERMISSIONS` — or business-scoped ones granted to
+   `BUSINESS_CUSTOMER`, if the authority should end when the membership does.
+5. Read it through `AbilityScopedQueryService`.
+
+The template ships no booking or order module, because inventing one to
+demonstrate this would be product surface masquerading as infrastructure.
+
+## Invitations
+
+An invited email need not belong to a user yet, which is the entire reason
+`BusinessInvitation` is a separate model — `BusinessMembership.userId` is NOT
+NULL.
+
+When the address already has an account, an `INVITED` membership is written
+alongside the invitation: it reserves the `(businessId, userId)` slot, shows the
+person as pending on the roster, and grants nothing.
+
+`POST /invitations/accept` is `@AuthenticatedOnly()`, not `@Public()`. Someone
+without an account registers through the ordinary `/auth/register` first, which
+keeps **one** registration policy (disposable-email blocking, verification,
+lockout) instead of forking a second, less-guarded account-creation path behind a
+bearer token. The token survives registration.
+
+The caller's email must match the invitation's, or the token alone would be
+sufficient and a forwarded invitation would let anyone join. Acceptance is a
+conditional `UPDATE` out of `pending` inside the transaction that writes the
+membership, so two simultaneous redemptions produce exactly one membership and
+the loser's whole transaction rolls back.
+
+## Scope integrity lives in the factory, not the schema
+
+`AbilityFactory` branches on where a grant **arrived from**, never on what the
+permission claims to be — and the platform branch emits an *unconditional* rule.
+Business permissions are always `ANY`, so a business role assigned through
+`user_roles` would compile to platform-wide authority with no tenant bound.
+
+Both loops therefore drop any permission whose `scope` does not match the branch:
+
+```ts
+if (permission.scope !== RoleScope.PLATFORM) continue;   // platform loop
+if (permission.scope !== RoleScope.BUSINESS) continue;   // membership loop
+```
+
+An earlier design carried a constant `scope` column plus a CHECK and a composite
+FK on each assignment table. That guarded the **write** only, and the escalation
+is on the **read** — it also could not see a stale grant set arriving from Redis,
+which this can, because it sits after the cache. `continue` rather than `throw`:
+a mis-scoped grant is a data fault, and failing the build would turn one bad row
+into an outage for that account.
+
+The write path still validates (`loadPlatformRole`,
+`loadAssignableBusinessRole`), and `ability.factory.spec.ts` asserts both
+directions.
+
+## Deliberate non-goals
 
 **No role hierarchy.** See the escalation guard above.
 

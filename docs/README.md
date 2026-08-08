@@ -25,6 +25,14 @@ into `/srv/<service>/` on every API deploy (`<service>` = your
 > CRUD / resource scaffolding lives in [`resource-pattern.md`](./resource-pattern.md),
 > not here — this directory is deployment-only.
 
+**Before you run any of this against real data, read
+[`operations.md`](./operations.md).** It is an honest inventory of which
+operational controls this template actually enforces and which it only gives you
+a place to put — backups, restore verification, RPO/RTO, secret rotation,
+retention, queue backpressure, incident response, and rollback. Several of them
+are scaffolded but **not scheduled**, which means they are not running until you
+wire them up. That page says so rather than implying coverage.
+
 ## Architecture (both environments)
 
 ```
