@@ -246,6 +246,9 @@ model UserRole {
 
   @@unique([userId, roleId])
   @@index([userId])
+  /// Closes the otherwise-unindexed scan behind `ON DELETE RESTRICT` and the
+  /// holder count on a role. Same reasoning as `BusinessMembership.roleId`.
+  @@index([roleId])
   @@map("user_roles")
 }
 
@@ -365,6 +368,9 @@ model BusinessInvitation {
   @@index([businessId, status])
   /// Supports a retention sweep over expired invitations.
   @@index([expiresAt])
+  /// As on the other two role-referencing tables: `ON DELETE RESTRICT` scans
+  /// the referencing side, and an unindexed one is a sequential scan.
+  @@index([roleId])
   @@map("business_invitations")
 }
 

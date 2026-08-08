@@ -71,13 +71,13 @@ export class AbilityFactory {
     // Every entry is ownership-scoped to `userId` or a read of the shared
     // role/permission vocabulary; nothing here reaches into a tenant.
     for (const permission of AUTHENTICATED_USER_PERMISSIONS) {
-      if (permission.ownership === PermissionOwnership.OWN) {
-        can(permission.action, permission.subject, {
-          [resolveOwnerKey(permission.subject)]: userId,
-        });
-      } else {
-        can(permission.action, permission.subject);
-      }
+      // Guarded like the other two loops even though this list is a compile-time
+      // constant, so the invariant lives in the code that compiles the rule
+      // rather than only in `permission-catalog.spec.ts` — a clone can delete a
+      // test, and the failure mode here is a tenant-reaching unconditional rule
+      // granted to every account on the platform.
+      if (permission.scope !== RoleScope.PLATFORM) continue;
+      this.grant(can, permission, userId);
     }
 
     for (const permission of grants.platformPermissions) {
@@ -94,20 +94,7 @@ export class AbilityFactory {
       // data fault, and failing the whole request would turn one bad row into
       // an outage for that account. Dropping the rule fails closed.
       if (permission.scope !== RoleScope.PLATFORM) continue;
-
-      if (permission.ownership === PermissionOwnership.OWN) {
-        // "…but only the rows you own." `User` is keyed by `id`, its children
-        // by `userId`; resolveOwnerKey throws rather than silently widening
-        // to an unconditional rule.
-        can(permission.action, permission.subject, {
-          [resolveOwnerKey(permission.subject)]: userId,
-        });
-      } else {
-        // Platform staff: unrestricted over the subject. `manage all` lands
-        // here and, because CASL OR-composes rules, supersedes every narrower
-        // rule the user also holds.
-        can(permission.action, permission.subject);
-      }
+      this.grant(can, permission, userId);
     }
 
     // Only ACTIVE memberships confer authority — a suspended owner still holds
@@ -120,6 +107,17 @@ export class AbilityFactory {
     // be checked before it becomes a permission.
     for (const membership of grants.businessMemberships) {
       if (membership.status !== BusinessMembershipStatus.ACTIVE) continue;
+
+      // A tenant rule whose tenant is `undefined` is not a narrow rule, it is
+      // NO rule: `{ businessId: undefined }` reaches Prisma as "no filter", and
+      // `accessibleBy` then yields `{ OR: [{}] }` — which the empty-`OR` guard
+      // in AbilityScopedQueryService does not catch, because the array is not
+      // empty. Every row of the table would come back to a single-tenant
+      // caller. Grants arrive here deserialized from Redis, so the field is not
+      // guaranteed present just because the type says it is.
+      if (typeof membership.businessId !== 'string' || !membership.businessId) {
+        continue;
+      }
 
       for (const permission of membership.permissions) {
         // The mirror of the guard above, closing the other direction: a
@@ -140,5 +138,37 @@ export class AbilityFactory {
     }
 
     return build();
+  }
+
+  /**
+   * Compiles one PLATFORM-scope permission into a rule.
+   *
+   * `ownership` is matched against `OWN` and `ANY` **explicitly**, and anything
+   * else is dropped. The obvious `if (OWN) … else unconditional` reads the same
+   * for valid input and is wrong for invalid input: it treats an absent or
+   * unrecognised ownership as the WIDEST possible grant. Grants reach this
+   * method deserialized from Redis, where the type annotation guarantees
+   * nothing, so the default has to be "no rule" rather than "all rows".
+   */
+  private grant(
+    can: AbilityBuilder<AppAbility>['can'],
+    permission: PermissionGrant,
+    userId: string,
+  ): void {
+    if (permission.ownership === PermissionOwnership.OWN) {
+      // "…but only the rows you own." `User` is keyed by `id`, its children by
+      // `userId`; `resolveOwnerKey` throws rather than silently widening to an
+      // unconditional rule.
+      can(permission.action, permission.subject, {
+        [resolveOwnerKey(permission.subject)]: userId,
+      });
+      return;
+    }
+    if (permission.ownership === PermissionOwnership.ANY) {
+      // Platform staff: unrestricted over the subject. `manage all` lands here
+      // and, because CASL OR-composes rules, supersedes every narrower rule the
+      // user also holds.
+      can(permission.action, permission.subject);
+    }
   }
 }

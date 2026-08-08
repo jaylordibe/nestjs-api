@@ -120,6 +120,60 @@ describe('AbilityFactory', () => {
       ).toBe(false);
     });
 
+    it('drops a membership whose businessId is missing', () => {
+      // A tenant rule with no tenant is not narrow, it is absent:
+      // `{ businessId: undefined }` reaches Prisma as "no filter", and
+      // `accessibleBy` then yields `{ OR: [{}] }` — which the empty-OR guard
+      // does NOT catch, because the array is not empty. Every row of the table
+      // would come back to a single-tenant caller.
+      const ability = build({
+        platformPermissions: [],
+        businessMemberships: [
+          {
+            ...membership([
+              {
+                action: 'read',
+                subject: 'Business',
+                scope: RoleScope.BUSINESS,
+                ownership: PermissionOwnership.ANY,
+              },
+            ]),
+            businessId: undefined as unknown as string,
+          },
+        ],
+      });
+
+      expect(
+        ability.can('read', taggedSubject('Business', { id: BUSINESS_ID })),
+      ).toBe(false);
+      expect(
+        ability.can(
+          'read',
+          taggedSubject('Business', { id: OTHER_BUSINESS_ID }),
+        ),
+      ).toBe(false);
+    });
+
+    it('drops a platform grant whose ownership is unrecognised', () => {
+      // The old `if (OWN) … else unconditional` shape read the same for valid
+      // input and treated an absent ownership as the WIDEST possible grant.
+      // Grants arrive deserialized from Redis, where the type guarantees
+      // nothing, so the default has to be "no rule".
+      const ability = build({
+        platformPermissions: [
+          {
+            action: 'read',
+            subject: 'AuditLog',
+            scope: RoleScope.PLATFORM,
+            ownership: undefined as unknown as PermissionOwnership,
+          },
+        ],
+        businessMemberships: [],
+      });
+
+      expect(ability.can('read', 'AuditLog')).toBe(false);
+    });
+
     it('does not throw on a mis-scoped grant — it drops the rule', () => {
       // Failing the whole ability build would turn one bad row into an outage
       // for that account. Dropping the rule fails closed without doing that.

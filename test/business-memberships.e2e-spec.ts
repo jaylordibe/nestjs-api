@@ -629,6 +629,37 @@ describe('Business memberships (e2e)', () => {
         .expect(403);
     });
 
+    it('demotes the INCUMBENT owner when a platform admin transfers', async () => {
+      // Regression: the demotion used to key off the ACTOR's own membership.
+      // A platform admin holds `manage all` and no membership, so nothing was
+      // demoted and the business came out of a "transfer" with TWO owners —
+      // while the audit line claimed ownership had moved.
+      const platformAdmin = await createPlatformAdmin(app);
+      const successor = await createRegularUser(app, 'successor@example.com');
+      const membershipId = await addMembership(
+        app,
+        business.id,
+        successor.id,
+        SeededRoleName.BUSINESS_MEMBER,
+      );
+
+      await request(app.getHttpServer())
+        .post(`${membershipsUrl()}/${membershipId}/transfer-ownership`)
+        .set('Authorization', `Bearer ${platformAdmin.token}`)
+        .expect(200);
+
+      const prisma = app.get(PrismaService);
+      const owners = await prisma.businessMembership.findMany({
+        where: {
+          businessId: business.id,
+          status: BusinessMembershipStatus.ACTIVE,
+          role: { name: SeededRoleName.BUSINESS_OWNER },
+        },
+      });
+      expect(owners).toHaveLength(1);
+      expect(owners[0].userId).toBe(successor.id);
+    });
+
     it('refuses to transfer to a non-active membership', async () => {
       const successor = await createRegularUser(app, 'successor@example.com');
       const membershipId = await addMembership(
@@ -647,6 +678,38 @@ describe('Business memberships (e2e)', () => {
       expect((response.body as ErrorBody).errorCode).toBe(
         'MEMBERSHIP_NOT_ACTIVE',
       );
+    });
+  });
+
+  describe('removing an INVITED membership cancels it', () => {
+    it('deletes the placeholder rather than 500ing on the joined_at CHECK', async () => {
+      // Regression: `remove()` routed every status through the same transition,
+      // writing status='left' with `joinedAt` still NULL. That violates
+      // `business_memberships_joined_at_check`, and Postgres 23514 is not one
+      // of the Prisma codes the global filter translates — so a routine roster
+      // action answered 500 INTERNAL_ERROR and wrote no audit row.
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      const membershipId = await addMembership(
+        app,
+        business.id,
+        invitee.id,
+        SeededRoleName.BUSINESS_MEMBER,
+        BusinessMembershipStatus.INVITED,
+      );
+
+      await request(app.getHttpServer())
+        .delete(`${membershipsUrl()}/${membershipId}`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .expect(204);
+
+      // An INVITED row is a reservation, not history — cancelling frees the
+      // slot so the address can be invited again.
+      const prisma = app.get(PrismaService);
+      expect(
+        await prisma.businessMembership.count({
+          where: { businessId: business.id, userId: invitee.id },
+        }),
+      ).toBe(0);
     });
   });
 

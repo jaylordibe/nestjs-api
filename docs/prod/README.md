@@ -263,6 +263,44 @@ its own service — pushing to the api repo's `main` branch does NOT build
 or start the SPA containers. Each SPA deploys when its own repo's `main`
 branch is pushed.
 
+### When a release is NOT backwards-compatible
+
+Note the ordering above: migrations run **before** the new container starts, so
+the **old** build serves traffic against the **new** schema for the whole
+build-and-swap window. That is why migrations must normally be expand-only — add
+nullable, backfill separately, tighten in a later release — and it is what the
+`migration-safety` CI job proves by booting the released build against the
+proposed schema.
+
+A release that cannot satisfy that (a dropped or renamed table, a tightened
+constraint the running code violates) needs a **maintenance window**, and the
+automated deploy will not give you one. Take the API down first:
+
+```bash
+cd /srv/<service>
+
+# 1. Stop serving. Requests fail fast rather than hitting a schema the running
+#    build cannot read.
+docker compose stop api
+
+# 2. Migrate against a database nothing is reading.
+docker compose --profile migrate run --rm --build migrate
+
+# 3. Bring the NEW build up. `--wait` blocks on the healthcheck.
+docker compose up -d --force-recreate --wait api
+```
+
+CI tells you when this applies: the `migration-safety` job fails the
+released-build check, or — for a deliberate baseline rewrite — prints a warning
+naming exactly which assertions it skipped and why. **Do not merge past either
+without reading it.** Both mean the same thing: the running build cannot serve
+traffic on the new schema.
+
+Rolling back a schema change means restoring a backup, not redeploying — so
+confirm you have a **verified** one before starting. See
+[`../operations.md`](../operations.md), which is candid about the fact that the
+shipped backup script is neither scheduled nor verified by default.
+
 ## Manual operations
 
 ```bash

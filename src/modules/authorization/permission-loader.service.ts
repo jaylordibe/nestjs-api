@@ -94,8 +94,14 @@ export class PermissionLoaderService {
   // (Contrast JwtStrategy's logout blocklist, which fails *open* by design.)
   async loadGrants(userId: string): Promise<AuthorizationGrants> {
     const epoch = await this.readEpoch();
-    const cacheKey = this.buildCacheKey(epoch, userId);
+    // Epoch unknown: bypass the cache entirely rather than guess. Reading or
+    // writing under a guessed epoch is worse than not caching, because a wrong
+    // epoch names a namespace that still holds LIVE entries — see `readEpoch`.
+    if (epoch === null) {
+      return this.loadGrantsFromDatabase(userId);
+    }
 
+    const cacheKey = this.buildCacheKey(epoch, userId);
     const cached = await this.readCachedGrants(cacheKey);
     if (cached) return cached;
 
@@ -110,6 +116,12 @@ export class PermissionLoaderService {
   async invalidateUser(userId: string): Promise<void> {
     try {
       const epoch = await this.readEpoch();
+      if (epoch === null) {
+        // Deleting under a guessed epoch would report success while leaving the
+        // real key untouched — a revoked role staying effective for the full
+        // TTL, with nothing logged. Fail loudly instead.
+        throw new Error('authorization epoch is unreadable');
+      }
       await this.redis.client.del(this.buildCacheKey(epoch, userId));
     } catch (error) {
       // A failed invalidation means the user keeps stale grants until the TTL
@@ -141,13 +153,23 @@ export class PermissionLoaderService {
     return `${GRANTS_KEY_PREFIX}:${epoch}:${userId}`;
   }
 
-  private async readEpoch(): Promise<string> {
+  /**
+   * The current epoch, or `null` when Redis could not answer.
+   *
+   * `null` rather than a default, because there is no safe default. Falling
+   * back to `'0'` looks harmless — it is only a cache key — but `'0'` is a REAL
+   * namespace that still holds live entries (stale keys are never deleted, they
+   * age out), and `writeCachedGrants` would repopulate it. A single failed GET
+   * during a failover would then serve pre-`invalidateAllUsers` grants, and
+   * worse, make `invalidateUser` delete `…:0:<userId>` while the live key at
+   * epoch N survived — a revoked role staying effective with nothing logged,
+   * because the DEL itself succeeded.
+   */
+  private async readEpoch(): Promise<string | null> {
     try {
       return (await this.redis.client.get(AUTHORIZATION_EPOCH_KEY)) ?? '0';
     } catch {
-      // Redis down: use a stable epoch so the key we then fail to read is at
-      // least consistent. Everything falls through to the database anyway.
-      return '0';
+      return null;
     }
   }
 

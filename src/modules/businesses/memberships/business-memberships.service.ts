@@ -7,6 +7,7 @@ import {
 } from '../../../common/authorization/app-ability';
 import { buildOrderBy } from '../../../common/dto/meta-query.dto';
 import { PaginationMeta } from '../../../common/dto/paginated-response.dto';
+import { BusinessInvitationStatus } from '../../../common/enums/business-invitation-status.enum';
 import { BusinessMembershipStatus } from '../../../common/enums/business-membership-status.enum';
 import { RoleScope } from '../../../common/enums/role-scope.enum';
 import { SeededRoleName } from '../../../common/enums/seeded-role-name.enum';
@@ -109,6 +110,11 @@ export class BusinessMembershipsService {
     if (dto.notes !== undefined && !mayAnnotate) {
       throw Errors.permissionDenied('update', 'BusinessMembership');
     }
+    // Past this point `dto.notes` is undefined whenever `mayAnnotate` is false,
+    // so the writes below could pass it through unguarded. They keep the
+    // `mayAnnotate ?` ternary anyway: it is one token of defence-in-depth
+    // against the throw above being weakened later, and it states the rule at
+    // the place the value is written rather than only where it is validated.
 
     const now = new Date();
     const membership = await this.prisma.$transaction(async (transaction) => {
@@ -399,15 +405,85 @@ export class BusinessMembershipsService {
     ability: AppAbility,
     actorId: string,
   ): Promise<void> {
+    const existing = await this.findById(businessId, membershipId, ability);
+    this.assertMayActOn(ability, 'delete', existing);
+
+    // An INVITED membership is a RESERVATION, not a relationship — the person
+    // was invited and never joined. Removing it is a cancellation, so the row
+    // is deleted outright and the pending invitation withdrawn with it,
+    // freeing the address to be invited again.
+    //
+    // It cannot go through `transition()`: that writes `status = 'left'` while
+    // leaving `joined_at` null, which the `business_memberships_joined_at_check`
+    // CHECK refuses — surfacing as a 500 rather than any domain error, since
+    // 23514 is not one of the Prisma codes the global filter translates.
+    if (
+      (existing.status as BusinessMembershipStatus) ===
+      BusinessMembershipStatus.INVITED
+    ) {
+      await this.cancelInvitedMembership(businessId, existing, actorId);
+      return;
+    }
+
     await this.transition(businessId, membershipId, ability, actorId, {
       auditAction: 'business_membership.ended',
       requiredAction: 'delete',
-      // Ending is reachable from every live state, so no `from` is asserted —
-      // only that it is not ALREADY ended, which `assertTransitionable` covers.
+      // Reachable from every remaining live state; `transition` still refuses
+      // a membership that has already ended.
       from: null,
       to: BusinessMembershipStatus.LEFT,
       protectsLastOwner: true,
       data: { endedAt: new Date() },
+    });
+  }
+
+  /**
+   * Withdraws an invitation that reserved a roster slot.
+   *
+   * Deletes the placeholder membership and revokes the pending invitation in
+   * one transaction, so the roster and the invitation list cannot disagree
+   * about whether the person is still expected.
+   *
+   * An INVITED membership carries no authority and no history worth keeping —
+   * it exists only to hold the `(businessId, userId)` slot — so deleting it is
+   * correct where ending an ACTIVE membership would destroy real history.
+   */
+  private async cancelInvitedMembership(
+    businessId: string,
+    membership: BusinessMembershipRow,
+    actorId: string,
+  ): Promise<void> {
+    await this.prisma.$transaction(async (transaction) => {
+      await this.lockBusiness(transaction, businessId);
+
+      await transaction.businessMembership.deleteMany({
+        where: {
+          id: membership.id,
+          businessId,
+          status: BusinessMembershipStatus.INVITED,
+        },
+      });
+
+      await transaction.businessInvitation.updateMany({
+        where: {
+          businessId,
+          email: membership.user.email,
+          status: BusinessInvitationStatus.PENDING,
+        },
+        data: {
+          status: BusinessInvitationStatus.REVOKED,
+          revokedAt: new Date(),
+          revokedBy: actorId,
+          updatedBy: actorId,
+        },
+      });
+    });
+
+    await this.auditService.record({
+      action: 'business_membership.invitation_cancelled',
+      actorId,
+      targetUserId: membership.userId,
+      metadata: { businessId, membershipId: membership.id },
     });
   }
 
@@ -440,7 +516,12 @@ export class BusinessMembershipsService {
       await this.lockBusiness(transaction, businessId);
 
       const target = await transaction.businessMembership.findFirst({
-        where: { id: membershipId, businessId, ...MEMBERSHIP_OF_LIVE_USER },
+        where: {
+          id: membershipId,
+          businessId,
+          ...MEMBERSHIP_OF_LIVE_USER,
+          ...MEMBERSHIP_OF_LIVE_BUSINESS,
+        },
         select: { id: true, userId: true, status: true },
       });
       if (!target) {
@@ -450,45 +531,64 @@ export class BusinessMembershipsService {
       if (targetStatus !== BusinessMembershipStatus.ACTIVE) {
         throw Errors.membershipNotActive(targetStatus);
       }
-
-      // The acting owner's own membership. A platform admin acting on someone
-      // else's business has none, and legitimately transfers without being
-      // demoted — there is nothing to demote.
-      const actorMembership = await transaction.businessMembership.findUnique({
-        where: { businessId_userId: { businessId, userId: actorId } },
-        select: { id: true, roleId: true },
-      });
-
       if (target.userId === actorId) {
         throw Errors.resourceConflict(
           'You already own this business; transfer it to somebody else',
         );
       }
 
-      if (actorMembership && actorMembership.roleId === ownerRole.id) {
-        await transaction.businessMembership.update({
-          where: { id: actorMembership.id },
+      // Demote every CURRENT active owner, not merely the caller's own row.
+      //
+      // Keying the demotion off the actor was wrong for the one case where the
+      // actor is not the owner: a platform admin holds `manage all` and no
+      // membership, so nothing was demoted and the business came out of a
+      // "transfer" with TWO owners — while the audit line claimed ownership had
+      // moved. Demoting the incumbent makes the actor-is-owner case fall out as
+      // a special case of the same rule rather than being the only one handled.
+      const outgoingOwners = await transaction.businessMembership.findMany({
+        where: {
+          businessId,
+          status: BusinessMembershipStatus.ACTIVE,
+          roleId: ownerRole.id,
+          id: { not: target.id },
+        },
+        select: { id: true, userId: true },
+      });
+      if (outgoingOwners.length > 0) {
+        await transaction.businessMembership.updateMany({
+          where: { id: { in: outgoingOwners.map((owner) => owner.id) } },
           data: { roleId: adminRole.id, updatedBy: actorId },
         });
       }
 
-      return transaction.businessMembership.update({
+      const promoted = await transaction.businessMembership.update({
         where: { id: target.id },
         data: { roleId: ownerRole.id, updatedBy: actorId },
         include: MEMBERSHIP_INCLUDE,
       });
+      return {
+        promoted,
+        demotedUserIds: outgoingOwners.map((outgoing) => outgoing.userId),
+      };
     });
 
-    // Both parties' authority changed.
-    await this.permissionLoaderService.invalidateUser(membership.userId);
-    await this.permissionLoaderService.invalidateUser(actorId);
+    // Everyone whose authority changed: the new owner, every demoted owner, and
+    // the actor (who may be neither, when a platform admin performs it).
+    const { promoted, demotedUserIds } = membership;
+    for (const affectedUserId of new Set([
+      promoted.userId,
+      actorId,
+      ...demotedUserIds,
+    ])) {
+      await this.permissionLoaderService.invalidateUser(affectedUserId);
+    }
     await this.auditService.record({
       action: 'business_membership.ownership_transferred',
       actorId,
-      targetUserId: membership.userId,
-      metadata: { businessId, membershipId },
+      targetUserId: promoted.userId,
+      metadata: { businessId, membershipId, demotedUserIds },
     });
-    return membership;
+    return promoted;
   }
 
   // ── shared lifecycle machinery ─────────────────────────────────────────
@@ -535,10 +635,17 @@ export class BusinessMembershipsService {
       this.assertRankPermits(actorRank, existing.role.rank);
 
       const currentStatus = existing.status as BusinessMembershipStatus;
-      if (options.from !== null && currentStatus !== options.from) {
-        throw Errors.membershipNotActive(currentStatus);
-      }
+      // Already in the target state. Reported as a plain conflict rather than
+      // MEMBERSHIP_NOT_ACTIVE, because that code carries `details.status` and
+      // would otherwise say "not active: active" — a machine-readable code
+      // contradicting its own payload, which a client branching on `errorCode`
+      // cannot make sense of.
       if (currentStatus === options.to) {
+        throw Errors.resourceConflict(
+          `That membership is already "${currentStatus}"`,
+        );
+      }
+      if (options.from !== null && currentStatus !== options.from) {
         throw Errors.membershipNotActive(currentStatus);
       }
 

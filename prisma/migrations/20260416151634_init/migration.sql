@@ -238,6 +238,9 @@ CREATE UNIQUE INDEX "role_permissions_role_id_permission_id_key" ON "role_permis
 CREATE INDEX "user_roles_user_id_idx" ON "user_roles"("user_id");
 
 -- CreateIndex
+CREATE INDEX "user_roles_role_id_idx" ON "user_roles"("role_id");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "user_roles_user_id_role_id_key" ON "user_roles"("user_id", "role_id");
 
 -- CreateIndex
@@ -260,6 +263,9 @@ CREATE INDEX "business_invitations_business_id_status_idx" ON "business_invitati
 
 -- CreateIndex
 CREATE INDEX "business_invitations_expires_at_idx" ON "business_invitations"("expires_at");
+
+-- CreateIndex
+CREATE INDEX "business_invitations_role_id_idx" ON "business_invitations"("role_id");
 
 -- CreateIndex
 CREATE INDEX "audit_logs_actor_id_created_at_idx" ON "audit_logs"("actor_id", "created_at");
@@ -410,8 +416,11 @@ CREATE UNIQUE INDEX business_invitations_business_id_email_pending_key
 
 -- Membership lifecycle integrity.
 --
--- `joined_at` records when someone first became ACTIVE here, so it must be set
--- for every state that has ever been active, and absent while merely INVITED.
+-- `joined_at` must be set for any status other than `invited`. Stated in ONE
+-- direction on purpose: an `invited` row MAY carry a `joined_at` left over from
+-- an earlier stint, because a former member who is re-invited reuses the same
+-- row. A stricter `status = 'invited' -> joined_at IS NULL` would reject that.
+--
 -- Expressed as a CHECK rather than trusted to the service layer because a
 -- membership with no join date is indistinguishable from a corrupt row later,
 -- and by then the code that wrote it is long gone.
