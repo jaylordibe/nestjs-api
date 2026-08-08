@@ -7,6 +7,11 @@ import type { Prisma } from '@prisma/client';
  *
  * …and within each of those, **ascending by id**.
  *
+ * Those are the tables with explicit lock primitives. Two more child tables are
+ * write-locked inside the same transactions and belong in the middle of that
+ * chain — see *The full order* at the bottom of this block before adding a
+ * transaction that writes `business_invitations` or `business_memberships`.
+ *
  * Two invariants need row locks, they overlap on the same rows, and before this
  * file they disagreed about the order. Session revocation locked `users` and
  * then a refresh-token family; account deletion locked the businesses a user
@@ -31,6 +36,63 @@ import type { Prisma } from '@prisma/client';
  * taken on an implicit single-statement transaction is released immediately.
  * Always pass the `transaction` argument of a `prisma.$transaction(...)`
  * callback.
+ *
+ * ## These locks are only sufficient under READ COMMITTED
+ *
+ * **Do not pass `isolationLevel` to a `$transaction` that takes one of these
+ * locks.** No `$transaction` in this codebase passes one, so every caller runs
+ * at PostgreSQL's default READ COMMITTED — and the pattern these primitives
+ * exist to support depends on it:
+ *
+ *     await lockBusinessRow(transaction, businessId);
+ *     const count = await transaction.businessMembership.count({ … });
+ *
+ * Under READ COMMITTED each statement takes a **fresh** snapshot, so the `count`
+ * observes whatever the transaction that just released the lock committed. That
+ * is the whole point: the lock orders the writers, and the fresh snapshot lets
+ * the winner see the loser's work.
+ *
+ * Under **REPEATABLE READ** the snapshot is fixed at the transaction's first
+ * statement. `SELECT … FOR UPDATE` against a row the other transaction did not
+ * *modify* — and a lock-only rendezvous on `businesses` modifies nothing —
+ * raises no serialization error, so the waiter acquires the lock and then reads
+ * **pre-lock state**, believing it has synchronised. Nothing fails, nothing
+ * logs, and the count is silently stale. This is the dangerous level.
+ *
+ * **SERIALIZABLE** fails the other way. SSI takes predicate locks on the rows
+ * the count reads, the other transaction's write creates the rw-conflict pair,
+ * and one transaction aborts with `40001 could not serialize access`. The
+ * invariant survives — but nothing in this codebase retries `40001`, so it would
+ * surface as a 500 on ordinary membership and invitation writes. Safe but
+ * unsupported, and it needs a retry loop before it could be adopted.
+ *
+ * If a stricter level is ever genuinely required, the count-after-lock pattern
+ * must be replaced at the same time — by a conditional write
+ * (`UPDATE … WHERE used < limit`) or by an `UPDATE` on the rendezvous row itself,
+ * so that a real write conflict is raised instead of being assumed away.
+ *
+ * ## The full order, including tables nothing here locks explicitly
+ *
+ * The three tables above are the ones with `FOR UPDATE` primitives in this file.
+ * Two more are **write-locked** inside the same transactions — an ordinary
+ * `UPDATE`/`INSERT` takes a row lock just as surely as `FOR UPDATE` does — so
+ * the order that actually has to hold is:
+ *
+ *     users → businesses → business_invitations → business_memberships → refresh_tokens
+ *
+ * `BusinessInvitationsService.accept` is the path that fixes the relative order
+ * of the middle three: it locks the user, then the business, then retires or
+ * consumes the invitation, then upserts the membership. `create` writes
+ * `business_invitations` under the business lock. The membership paths
+ * (`add`, `changeRole`, `transferOwnership`, `transition`) write
+ * `business_memberships` under the business lock and never touch invitations.
+ *
+ * The rule for anything new: take the business lock first, and if you touch both
+ * child tables, invitations before memberships. `revoke` and `resend` are safe
+ * today only because they are single-statement implicit transactions that hold
+ * an invitation row lock and never go on to request `businesses` — wrapping
+ * either in a `$transaction` without taking the business lock first is exactly
+ * how a deadlock gets introduced.
  */
 
 /**

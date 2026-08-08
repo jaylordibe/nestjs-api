@@ -196,6 +196,7 @@ describe('Business invitations (e2e)', () => {
     });
 
     it('refuses a second pending invitation to the same address', async () => {
+      const prisma = app.get(PrismaService);
       await inviteAndCaptureToken('invitee@example.com');
 
       const response = await request(app.getHttpServer())
@@ -208,6 +209,135 @@ describe('Business invitations (e2e)', () => {
         .expect(409);
 
       expect((response.body as ErrorBody).errorCode).toBe('RESOURCE_CONFLICT');
+
+      // The live invitation must survive untouched. `create` retires lapsed
+      // rows before inserting; if that retirement ever loses its `expiresAt`
+      // scope, this row would be flipped to EXPIRED and the 409 above would
+      // still pass — so the status assertion, not the status code, is what
+      // pins the rule.
+      const invitations = await prisma.businessInvitation.findMany({
+        where: { businessId: business.id, email: 'invitee@example.com' },
+        select: { status: true },
+      });
+      expect(invitations).toHaveLength(1);
+      expect(invitations[0].status as BusinessInvitationStatus).toBe(
+        BusinessInvitationStatus.PENDING,
+      );
+    });
+
+    it('allows re-inviting an address whose earlier invitation EXPIRED', async () => {
+      // Regression. Expiry is a timestamp, not a status, so an unattended
+      // invitation stays `pending` for ever — and the partial unique index on
+      // `(business_id, email) WHERE status = 'pending'` counted that dead row as
+      // an outstanding invitation. The second POST failed with 409 forever, and
+      // the message claimed a pending invitation existed when the only one had
+      // expired weeks earlier. `create` now retires expired rows under the
+      // business lock it already holds.
+      const prisma = app.get(PrismaService);
+      await inviteAndCaptureToken('invitee@example.com');
+
+      await prisma.businessInvitation.updateMany({
+        where: { businessId: business.id, email: 'invitee@example.com' },
+        data: { expiresAt: new Date(Date.now() - 60_000) },
+      });
+
+      await request(app.getHttpServer())
+        .post(invitationsUrl())
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({
+          email: 'invitee@example.com',
+          roleId: await roleIdFor(app, SeededRoleName.BUSINESS_MEMBER),
+        })
+        .expect(201);
+
+      const invitations = await prisma.businessInvitation.findMany({
+        where: { businessId: business.id, email: 'invitee@example.com' },
+        select: { status: true },
+      });
+      // `status` is a String column constrained by the TS enum, so cast at the
+      // DB boundary before comparing (see CLAUDE.md, TypeScript gotchas).
+      const statuses = invitations.map(
+        (invitation) => invitation.status as BusinessInvitationStatus,
+      );
+      // Two rows: the retired one and the live one. Exactly one may be pending,
+      // which is the property the partial unique index actually protects.
+      expect(statuses).toHaveLength(2);
+      expect(
+        statuses.filter(
+          (status) => status === BusinessInvitationStatus.PENDING,
+        ),
+      ).toHaveLength(1);
+      expect(
+        statuses.filter(
+          (status) => status === BusinessInvitationStatus.EXPIRED,
+        ),
+      ).toHaveLength(1);
+    });
+
+    it('retires only the expired invitation for this business AND this address', async () => {
+      // The retirement is a write over `business_invitations` scoped by
+      // `businessId` AND `email`. Both halves need a witness or they are
+      // untested: dropping `businessId` turns one tenant's invite into a
+      // cross-tenant write, and dropping `email` retires every lapsed
+      // invitation in the business. Neither is observable without a second
+      // business and a second address, so this test seeds both.
+      const prisma = app.get(PrismaService);
+      const otherOwner = await createRegularUser(app, 'other@example.com');
+      const otherBusiness = await createBusinessWithOwner(
+        app,
+        otherOwner.id,
+        'other-business',
+      );
+
+      await inviteAndCaptureToken('shared@example.com');
+      // Same business, DIFFERENT address — the witness for the `email` half.
+      await inviteAndCaptureToken('bystander@example.com');
+      await request(app.getHttpServer())
+        .post(`/api/businesses/${otherBusiness.id}/invitations`)
+        .set('Authorization', `Bearer ${otherOwner.token}`)
+        .send({
+          email: 'shared@example.com',
+          roleId: await roleIdFor(app, SeededRoleName.BUSINESS_MEMBER),
+        })
+        .expect(201);
+
+      // Every invitation in play is now lapsed, so only the scoping of the
+      // retirement decides which ones get retired.
+      await prisma.businessInvitation.updateMany({
+        where: {},
+        data: { expiresAt: new Date(Date.now() - 60_000) },
+      });
+
+      // Re-inviting in OUR business must retire ours and leave theirs alone.
+      await request(app.getHttpServer())
+        .post(invitationsUrl())
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({
+          email: 'shared@example.com',
+          roleId: await roleIdFor(app, SeededRoleName.BUSINESS_MEMBER),
+        })
+        .expect(201);
+
+      // The other business's invitation is untouched — pins the `businessId` half.
+      const theirInvitations = await prisma.businessInvitation.findMany({
+        where: { businessId: otherBusiness.id, email: 'shared@example.com' },
+        select: { status: true },
+      });
+      expect(theirInvitations).toHaveLength(1);
+      expect(theirInvitations[0].status as BusinessInvitationStatus).toBe(
+        BusinessInvitationStatus.PENDING,
+      );
+
+      // Our own other address is untouched — pins the `email` half. Without
+      // this, deleting `email` from the retirement's `where` passes the suite.
+      const bystanderInvitations = await prisma.businessInvitation.findMany({
+        where: { businessId: business.id, email: 'bystander@example.com' },
+        select: { status: true },
+      });
+      expect(bystanderInvitations).toHaveLength(1);
+      expect(bystanderInvitations[0].status as BusinessInvitationStatus).toBe(
+        BusinessInvitationStatus.PENDING,
+      );
     });
 
     it('enforces the rank ceiling at INVITE time, not just at acceptance', async () => {
@@ -397,6 +527,47 @@ describe('Business invitations (e2e)', () => {
         where: { id: invitationId },
         data: { expiresAt: new Date(Date.now() - 1_000) },
       });
+
+      const response = await acceptAs(invitee, token).expect(400);
+      expect((response.body as ErrorBody).errorCode).toBe('INVITATION_EXPIRED');
+    });
+
+    it('still reports EXPIRED after the row was retired by a re-invitation', async () => {
+      // Regression. `create` retires lapsed rows to EXPIRED to free the pending
+      // partial index. `accept` checks `status !== PENDING` BEFORE it checks
+      // `expiresAt`, so without an explicit carve-out the retirement silently
+      // downgraded this answer from INVITATION_EXPIRED to INVITATION_INVALID —
+      // the least actionable message, delivered at the exact moment a fresh
+      // invitation was sitting in the recipient's inbox, and varying by whether
+      // some unrelated actor happened to re-invite.
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      const { token, invitationId } = await inviteAndCaptureToken(
+        invitee.email,
+      );
+
+      const prisma = app.get(PrismaService);
+      await prisma.businessInvitation.update({
+        where: { id: invitationId },
+        data: { expiresAt: new Date(Date.now() - 1_000) },
+      });
+
+      // Re-invite the same address — this retires the row above to EXPIRED.
+      await request(app.getHttpServer())
+        .post(invitationsUrl())
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({
+          email: invitee.email,
+          roleId: await roleIdFor(app, SeededRoleName.BUSINESS_MEMBER),
+        })
+        .expect(201);
+
+      const retired = await prisma.businessInvitation.findUniqueOrThrow({
+        where: { id: invitationId },
+        select: { status: true },
+      });
+      expect(retired.status as BusinessInvitationStatus).toBe(
+        BusinessInvitationStatus.EXPIRED,
+      );
 
       const response = await acceptAs(invitee, token).expect(400);
       expect((response.body as ErrorBody).errorCode).toBe('INVITATION_EXPIRED');

@@ -103,10 +103,15 @@ export default tseslint.config(
       'no-restricted-syntax': [
         'error',
         {
+          // `HttpException` itself is on this list, not only its subclasses.
+          // Nest ships no subclass for several statuses this API can emit (429
+          // and 402 among them), so the escape hatch from the envelope was never
+          // a subclass — it was `new HttpException(body, status)`, which the
+          // subclass-only selector let through silently.
           selector:
-            "NewExpression[callee.name=/^(BadRequestException|UnauthorizedException|ForbiddenException|NotFoundException|ConflictException|ServiceUnavailableException)$/]",
+            "NewExpression[callee.name=/^(HttpException|BadRequestException|UnauthorizedException|ForbiddenException|NotFoundException|ConflictException|ServiceUnavailableException)$/]",
           message:
-            'Do not construct HttpException subclasses directly. Use the `Errors.*` factory in src/common/errors/errors.ts so the response carries a stable errorCode. See src/common/errors/README.md.',
+            'Do not construct HttpException or its subclasses directly. Use the `Errors.*` factory in src/common/errors/errors.ts so the response carries a stable errorCode. If no factory fits, add one there rather than throwing a raw status. See src/common/errors/README.md.',
         },
         // Soft-delete guardrail.
         //

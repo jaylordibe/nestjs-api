@@ -114,21 +114,21 @@ soft-deletes the solely-owned businesses instead. That asymmetry with
 
 | Code | Trigger |
 |---|---|
-| `RATE_LIMITED` | `@nestjs/throttler` rejected. |
+| `RATE_LIMITED` | Too many requests. Emitted by the global `@nestjs/throttler` guard, and by application code via `Errors.rateLimited()`. A client cannot tell the two apart, and does not need to — the remedy is the same. Note only the throttler sets `Retry-After`; a factory-thrown 429 carries no such header, so a client must have its own backoff and not depend on one being present. |
 | `EXTERNAL_SERVICE_UNAVAILABLE` | Third-party integration unavailable (SMS / email / storage providers, etc.). |
 | `INTERNAL_ERROR` | Catch-all 500 for unexpected runtime errors. Real exception logged server-side; response never leaks internals. |
 
 ## Adding a new error scenario
 
 1. Add a new code to `error-code.enum.ts` with JSDoc explaining the trigger. **Additive only — never repurpose an existing code.**
-2. Add a factory in `errors.ts` returning the correct `HttpException` subclass with the typed payload.
+2. Add a factory in `errors.ts` returning the payload wrapped in the Nest exception class for that status — a semantic subclass (`ConflictException`, `NotFoundException`, …) wherever one exists. Nest ships no subclass for a few statuses this API can emit (429 among them); those construct `HttpException` directly, which is allowed **only inside `src/common/errors/`**. `Errors.rateLimited()` is the worked example.
 3. Use it: `throw Errors.myNewCode();` at the call site.
 4. Document it in the catalog above.
 5. If clients need to special-case it, update the "Client logout rule" section.
 
 ## Internal — for contributors
 
-- **Never construct `BadRequestException` / `NotFoundException` / `ConflictException` / `UnauthorizedException` / `ForbiddenException` / `ServiceUnavailableException` directly** outside `src/common/errors/`. ESLint enforces this (`no-restricted-syntax`). Use `Errors.*` so every throw flows through the standard envelope with a meaningful code.
+- **Never construct `HttpException` — or `BadRequestException` / `NotFoundException` / `ConflictException` / `UnauthorizedException` / `ForbiddenException` / `ServiceUnavailableException` — directly** outside `src/common/errors/`. ESLint enforces this (`no-restricted-syntax`). Use `Errors.*` so every throw flows through the standard envelope with a meaningful code. `HttpException` is on that list for a specific reason: Nest has no subclass for several statuses this API can emit, so the raw base class — not a subclass — was always the way a throw would quietly escape the envelope. If no factory fits your case, add one rather than throwing a raw status.
 - The default status→code fallback in `GlobalExceptionFilter` keeps framework throws safe (a bare 403, the throttler 429, the default ValidationPipe 400 all still get a programmable `errorCode`), but application code should always go through the factory.
 - Tests should assert `body.errorCode`, not `body.message`. Messages are free to rotate; codes are the contract.
 

@@ -57,6 +57,16 @@ export class BusinessOwnershipPolicy {
    * invariant is a property of the business as a whole: two transactions
    * demoting two DIFFERENT owners would never contend on a per-membership lock,
    * and both would observe a count of two.
+   *
+   * **Never pass an `isolationLevel` to a `$transaction` that calls this.** The
+   * reads that follow this lock — the owner count this lock exists to support,
+   * and the roster and invitation reads in the paths that reuse it — are correct
+   * only under READ COMMITTED, where each statement re-snapshots and therefore
+   * sees what the previous lock holder committed. Under REPEATABLE READ the
+   * snapshot is fixed at the first statement and this lock raises no
+   * serialization error, so the waiter reads pre-lock state and believes it
+   * synchronised. The full explanation, including why SERIALIZABLE fails
+   * differently, is in `src/common/util/row-lock.util.ts`.
    */
   async lockBusiness(
     transaction: Prisma.TransactionClient,

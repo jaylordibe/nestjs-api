@@ -119,7 +119,10 @@ export enum ErrorCode {
   INVITATION_EXPIRED = 'INVITATION_EXPIRED',
 
   // ── Infrastructure (429, 500, 503) ───────────────────────────────────
-  /** @nestjs/throttler rejected — too many requests. */
+  /** Too many requests. Emitted by the global @nestjs/throttler guard AND by
+   *  application code via `Errors.rateLimited()` — one code on purpose, since
+   *  the remedy is identical. Only the throttler sets `Retry-After`, so a
+   *  client must own its backoff rather than rely on the header. */
   RATE_LIMITED = 'RATE_LIMITED',
   /** Third-party integration is unavailable or returned an error
    *  (SMS / email / storage providers, etc.). */

@@ -2,6 +2,8 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   NotFoundException,
   ServiceUnavailableException,
   UnauthorizedException,
@@ -217,6 +219,30 @@ export const Errors = {
       errorCode: ErrorCode.RESOURCE_CONFLICT,
       message,
     }),
+
+  // ── 429 ────────────────────────────────────────────────────────────
+  // Nest ships no `TooManyRequestsException`, so this is the one place that
+  // constructs a raw `HttpException` for 429 — which is exactly why the factory
+  // needs to exist. Without it, every caller wanting a 429 reaches for
+  // `new HttpException(...)` themselves and silently leaves the envelope behind.
+  //
+  // The global `ThrottlerGuard` does NOT come through here: it throws its own
+  // `ThrottlerException`, which the filter maps to this same `RATE_LIMITED` code
+  // by status. Sharing the code is deliberate — the remedy ("slow down and
+  // retry") is identical, so splitting it would give clients a distinction they
+  // cannot act on.
+  //
+  // One asymmetry worth knowing: the throttler sets `Retry-After` before
+  // throwing, and this factory cannot — it returns an exception, and the global
+  // filter has no way to attach a header on its behalf. A caller that can
+  // compute a meaningful retry delay should set the header at the throw site.
+  rateLimited: (
+    message = 'Too many requests. Please retry later.',
+  ): HttpException =>
+    new HttpException(
+      { errorCode: ErrorCode.RATE_LIMITED, message },
+      HttpStatus.TOO_MANY_REQUESTS,
+    ),
 
   // ── 503 ────────────────────────────────────────────────────────────
   externalServiceUnavailable: (message: string): ServiceUnavailableException =>

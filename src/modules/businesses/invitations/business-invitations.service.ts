@@ -106,68 +106,114 @@ export class BusinessInvitationsService {
     const token = generateOpaqueToken();
     const expiresAt = this.expiryFromNow();
 
-    const invitation = await this.prisma.$transaction(async (transaction) => {
-      // The same business-row lock every membership mutation takes. An invite
-      // does not change the roster, but it reads it to decide whether the
-      // person is already on it, and that read must not race a concurrent
-      // removal or role change.
-      await this.businessOwnershipPolicy.lockBusiness(transaction, businessId);
+    const { created: invitation, supersededCount } =
+      await this.prisma.$transaction(async (transaction) => {
+        // The same business-row lock every membership mutation takes. An invite
+        // does not change the roster, but it reads it to decide whether the
+        // person is already on it, and that read must not race a concurrent
+        // removal or role change.
+        //
+        // The reads after this lock are correct only because this transaction
+        // runs at READ COMMITTED. Do NOT add an `isolationLevel` here — see the
+        // isolation section in `src/common/util/row-lock.util.ts`, which explains
+        // why REPEATABLE READ breaks it silently, and why SERIALIZABLE breaks it
+        // loudly enough to need a retry loop this codebase does not have.
+        await this.businessOwnershipPolicy.lockBusiness(
+          transaction,
+          businessId,
+        );
 
-      if (existingUser) {
-        const membership = await transaction.businessMembership.findUnique({
-          where: {
-            businessId_userId: { businessId, userId: existingUser.id },
-          },
-          select: { status: true },
-        });
-        // A former member may be invited back; anyone currently attached —
-        // active or suspended — is already here.
-        if (
-          membership &&
-          (membership.status as BusinessMembershipStatus) !==
-            BusinessMembershipStatus.LEFT
-        ) {
-          throw Errors.resourceConflict(
-            'That person already has a membership in this business',
-          );
-        }
-      }
+        // Release the partial unique index on `(business_id, email) WHERE status
+        // = 'pending'` from invitations that are already dead.
+        //
+        // Expiry is a timestamp, not a status, so an unattended invitation stays
+        // `pending` for ever. `accept` correctly refuses it on `expiresAt`, but
+        // the index does not know that — it counts the row as an outstanding
+        // invitation, so the INSERT below fails with P2002 and the address can
+        // never be invited to this business again. Retiring it here, under the
+        // lock we already hold, is what makes re-invitation possible. Done lazily
+        // rather than in a sweep: a row stays `pending` after it lapses, but there
+        // is no window in which `create` FAILS because of that staleness, which is
+        // the only symptom that ever mattered.
+        //
+        // Scoped to already-lapsed rows on purpose: a LIVE pending invitation must
+        // still collide, because "one outstanding invitation per address" is a
+        // real rule and the P2002 handler below is what reports it. `lte` matches
+        // `accept`'s definition of expired (`expiresAt <= now`) so the two cannot
+        // disagree about a row on the boundary.
+        const supersededExpiredInvitations =
+          await transaction.businessInvitation.updateMany({
+            where: {
+              businessId,
+              email: dto.email,
+              status: BusinessInvitationStatus.PENDING,
+              expiresAt: { lte: new Date() },
+            },
+            data: {
+              status: BusinessInvitationStatus.EXPIRED,
+              updatedBy: actorId,
+            },
+          });
 
-      try {
-        return await transaction.businessInvitation.create({
-          data: {
-            businessId,
-            email: dto.email,
-            invitedUserId: existingUser?.id ?? null,
-            roleId: role.id,
-            tokenHash: hashOpaqueToken(token),
-            status: BusinessInvitationStatus.PENDING,
-            invitedBy: actorId,
-            expiresAt,
-            createdBy: actorId,
-            updatedBy: actorId,
-          },
-          include: INVITATION_INCLUDE,
-        });
-      } catch (error) {
-        // The partial unique index on (business_id, email) WHERE status =
-        // 'pending' is what makes "one outstanding invitation per address"
-        // true under concurrency — and, now that no placeholder membership
-        // exists, it is the ONLY thing that makes it true. Translate it rather
-        // than letting the global filter report a raw
-        // UNIQUE_CONSTRAINT_VIOLATION on a column pair the client never sent
-        // as a pair.
-        if (
-          error instanceof Prisma.PrismaClientKnownRequestError &&
-          error.code === 'P2002'
-        ) {
-          throw Errors.resourceConflict(
-            'That address already has a pending invitation to this business',
-          );
+        if (existingUser) {
+          const membership = await transaction.businessMembership.findUnique({
+            where: {
+              businessId_userId: { businessId, userId: existingUser.id },
+            },
+            select: { status: true },
+          });
+          // A former member may be invited back; anyone currently attached —
+          // active or suspended — is already here.
+          if (
+            membership &&
+            (membership.status as BusinessMembershipStatus) !==
+              BusinessMembershipStatus.LEFT
+          ) {
+            throw Errors.resourceConflict(
+              'That person already has a membership in this business',
+            );
+          }
         }
-        throw error;
-      }
-    });
+
+        try {
+          const created = await transaction.businessInvitation.create({
+            data: {
+              businessId,
+              email: dto.email,
+              invitedUserId: existingUser?.id ?? null,
+              roleId: role.id,
+              tokenHash: hashOpaqueToken(token),
+              status: BusinessInvitationStatus.PENDING,
+              invitedBy: actorId,
+              expiresAt,
+              createdBy: actorId,
+              updatedBy: actorId,
+            },
+            include: INVITATION_INCLUDE,
+          });
+          return {
+            created,
+            supersededCount: supersededExpiredInvitations.count,
+          };
+        } catch (error) {
+          // The partial unique index on (business_id, email) WHERE status =
+          // 'pending' is what makes "one outstanding invitation per address"
+          // true under concurrency — and, now that no placeholder membership
+          // exists, it is the ONLY thing that makes it true. Translate it rather
+          // than letting the global filter report a raw
+          // UNIQUE_CONSTRAINT_VIOLATION on a column pair the client never sent
+          // as a pair.
+          if (
+            error instanceof Prisma.PrismaClientKnownRequestError &&
+            error.code === 'P2002'
+          ) {
+            throw Errors.resourceConflict(
+              'That address already has a pending invitation to this business',
+            );
+          }
+          throw error;
+        }
+      });
 
     await this.sendInvitationEmail(
       dto.email,
@@ -187,6 +233,17 @@ export class BusinessInvitationsService {
         invitationId: invitation.id,
         roleId: role.id,
         roleName: role.name,
+        // How many already-lapsed invitations to this address this call retired
+        // to make room. Normally 0.
+        //
+        // Who retired them and when is already durable on the rows themselves
+        // (`updated_by` / `updated_at`, written by the `updateMany` above), so a
+        // second audit write inside the transaction would add nothing an
+        // investigator cannot already reach. What the row cannot say is that a
+        // retirement happened at all without knowing to go looking — this count
+        // is what puts that in the log, and it answers "why can I no longer
+        // resend the invitation I sent three weeks ago?".
+        supersededExpiredInvitations: supersededCount,
       },
     });
 
@@ -405,10 +462,23 @@ export class BusinessInvitationsService {
 
     // Unknown, consumed, or revoked — one indistinguishable answer, so a token
     // cannot be probed for existence.
+    //
+    // `EXPIRED` is deliberately NOT collapsed in here. It is only ever written
+    // by `create` retiring a row that had already lapsed, so it means exactly
+    // what a past `expiresAt` means — and that case is reported separately
+    // below, on purpose, because the remedy differs. Folding it in here would
+    // make the answer depend on whether some unrelated actor happened to
+    // re-invite the same address: the same lapsed token would say "expired"
+    // before the re-invite and "invalid" after it, and the *less* actionable
+    // message would be the one sent at the exact moment a fresh invitation was
+    // sitting in the recipient's inbox.
+    const invitationStatus = invitation?.status as
+      | BusinessInvitationStatus
+      | undefined;
     if (
       !invitation ||
-      (invitation.status as BusinessInvitationStatus) !==
-        BusinessInvitationStatus.PENDING
+      (invitationStatus !== BusinessInvitationStatus.PENDING &&
+        invitationStatus !== BusinessInvitationStatus.EXPIRED)
     ) {
       throw Errors.invitationInvalid();
     }
@@ -418,8 +488,14 @@ export class BusinessInvitationsService {
     }
     await this.assertIsInvitee(invitation, actor);
     // Distinguishable on purpose: the holder already proved possession of a
-    // real token, so this leaks nothing, and their remedy differs.
-    if (invitation.expiresAt.getTime() <= Date.now()) {
+    // real token AND that they are the invitee, so this leaks nothing, and
+    // their remedy differs. Reached only after `assertIsInvitee`, which is what
+    // keeps "expired" from being observable by a mere token holder — so the
+    // `EXPIRED` status is answered here rather than in the gate above.
+    if (
+      invitationStatus === BusinessInvitationStatus.EXPIRED ||
+      invitation.expiresAt.getTime() <= Date.now()
+    ) {
       throw Errors.invitationExpired();
     }
 
