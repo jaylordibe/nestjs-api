@@ -14,7 +14,7 @@ import {
   burnPasswordHashingTime,
   hashPassword,
 } from '../../common/util/password-hashing.util';
-import { nextWholeSecond } from '../../common/util/session-cutoff.util';
+import { waitForSessionCutoff } from '../../common/util/session-cutoff.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UserResponseDto } from '../users/dto/user-response.dto';
 import { UsersService } from '../users/users.service';
@@ -193,7 +193,11 @@ export class AuthService {
       });
     }
 
-    return this.buildLoginResponse(user, context);
+    // The cutoff as it stood when the password was verified. Everything from
+    // here to the issuing transaction is a window in which a logout-all, a
+    // password change, a support revocation, or a deletion can commit — so this
+    // value, not the fact that bcrypt succeeded, is what authorises the session.
+    return this.buildLoginResponse(user, user.passwordChangedAt, context);
   }
 
   /**
@@ -208,23 +212,25 @@ export class AuthService {
    * deletion, or a password rotation should end a session — without this, a
    * disabled account would keep minting valid access tokens until its refresh
    * token expired weeks later.
+   *
+   * That re-read happens INSIDE `rotate`'s transaction, under the user lock, and
+   * the user it returns is the row that authorised the exchange. Checking
+   * eligibility here afterwards — as this used to — meant the row that was
+   * checked and the row that authorised the new session were two different
+   * reads with a commit window between them.
    */
   async refresh(
     presentedToken: string,
     context: RefreshTokenContext = {},
   ): Promise<LoginResponseDto> {
-    const { userId, refreshToken } = await this.refreshTokenService.rotate(
+    const { user, refreshToken } = await this.refreshTokenService.rotate(
       presentedToken,
       context,
     );
 
-    const user = await this.usersService.findByIdOrNull(userId);
-    if (!user || !user.isActive || !user.emailVerifiedAt) {
-      // The session is real but the account is no longer eligible. Close the
-      // whole chain rather than leaving a token that will fail on every use.
-      await this.refreshTokenService.revokeAllForUser(userId);
-      throw Errors.refreshTokenInvalid();
-    }
+    // Same reason as in `buildLoginResponse`: an access token signed inside the
+    // second a cutoff landed in is born rejected.
+    await waitForSessionCutoff(user.passwordChangedAt);
 
     return {
       accessToken: this.signAccessToken(user.id),
@@ -303,24 +309,23 @@ export class AuthService {
     });
   }
 
-  // Logout-everywhere. Bumps passwordChangedAt to the next whole second;
-  // JwtStrategy rejects every token with iat earlier than that. Same mechanism
-  // used by password change — all the user's active sessions die on the next
-  // request. No Redis writes needed; scales to however many devices the user
-  // has logged in on. The rounding is what makes "everywhere" literal: a raw
-  // timestamp spares any token minted in the same second (see
-  // `nextWholeSecond`).
+  /**
+   * Logout-everywhere.
+   *
+   * One atomic security mutation: the session cutoff moves and every refresh
+   * family is revoked in a single transaction, under the user lock. The two used
+   * to be separate statements, which is two chances for a concurrent login or
+   * rotation to land between them and two chances for a future edit to keep one
+   * and drop the other.
+   *
+   * Both halves are needed and neither is sufficient. The cutoff bump kills
+   * ACCESS tokens, which are stateless and compare `iat` against it. Refresh
+   * tokens are rows carrying no `iat`, so they have to be revoked explicitly —
+   * otherwise "sign me out everywhere" leaves every device able to mint a fresh
+   * access token on its next refresh.
+   */
   async logoutAll(userId: string): Promise<void> {
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { passwordChangedAt: nextWholeSecond() },
-    });
-    // The `passwordChangedAt` bump only invalidates ACCESS tokens, which are
-    // stateless and check `iat` against it. Refresh tokens are rows and carry
-    // no `iat` to compare, so they have to be revoked explicitly — otherwise
-    // "sign me out everywhere" would leave every device able to mint new
-    // access tokens on its next refresh.
-    await this.refreshTokenService.revokeAllForUser(userId);
+    await this.refreshTokenService.endAllSessions(userId, userId);
     await this.auditService.record({
       action: 'auth.logout_all',
       actorId: userId,
@@ -330,12 +335,37 @@ export class AuthService {
 
   private async buildLoginResponse(
     user: Awaited<ReturnType<UsersService['findById']>>,
+    expectedSessionCutoff: Date | null,
     context: RefreshTokenContext,
   ): Promise<LoginResponseDto> {
     // A login starts a NEW session chain — never continues an existing one.
     // Reusing a family here would mean a fresh sign-in could be killed by a
     // replay on a session the user had already abandoned.
-    const refreshToken = await this.refreshTokenService.issue(user.id, context);
+    //
+    // Under the user lock, and refused if the cutoff moved since the password
+    // was verified. The access token is signed only AFTER that transaction
+    // commits, so any revocation that lands later writes a cutoff strictly
+    // greater than this token's `iat` and kills it — which is not true if the
+    // token is signed first.
+    // BEFORE issuing, not after, and it has to be both tokens or neither.
+    //
+    // The cutoff is rounded UP to the next whole second, which sacrifices the
+    // second it lands in: `JwtStrategy` rejects an access token whose `iat`
+    // floors into it, and `rotate` rejects a refresh row whose `createdAt`
+    // precedes it. A login happening inside that second is caught by both, so
+    // signing in immediately after a password change — or right after
+    // registering, which stamps the column too — would hand back a pair that is
+    // dead on arrival. Waiting first puts the whole session past the cutoff.
+    //
+    // Under 1s, and only inside that window; see `waitForSessionCutoff`. The
+    // precondition below still runs afterwards, so anything that commits DURING
+    // the wait is caught rather than waved through.
+    await waitForSessionCutoff(expectedSessionCutoff);
+    const refreshToken = await this.refreshTokenService.issueForNewSession(
+      user.id,
+      expectedSessionCutoff,
+      context,
+    );
     return {
       accessToken: this.signAccessToken(user.id),
       refreshToken: refreshToken.token,

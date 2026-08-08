@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Prisma } from '@prisma/client';
+import { Prisma, User } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { AuditService } from '../../common/audit/audit.service';
 import { Errors } from '../../common/errors/errors';
@@ -8,6 +8,11 @@ import {
   generateOpaqueToken,
   hashOpaqueToken,
 } from '../../common/util/opaque-token.util';
+import {
+  lockRefreshTokenFamily,
+  lockUserRow,
+} from '../../common/util/row-lock.util';
+import { nextWholeSecond } from '../../common/util/session-cutoff.util';
 import { PrismaService } from '../../prisma/prisma.service';
 
 // Where a refresh token came from, captured at issue for the audit trail.
@@ -27,7 +32,7 @@ export interface IssuedRefreshToken {
 }
 
 /**
- * Issues, rotates, and revokes refresh tokens.
+ * The authority on session state: refresh-token rows AND the session cutoff.
  *
  * The model is OAuth 2.0's, and the reason is worth stating because it is the
  * whole justification for this file's existence: an access token is a signed
@@ -43,6 +48,27 @@ export interface IssuedRefreshToken {
  * the attacker and the legitimate holder. That is the intended outcome: the
  * alternative is letting a thief ride a stolen token indefinitely while the
  * real user notices nothing.
+ *
+ * ## Why `users.passwordChangedAt` is written here
+ *
+ * That column is the SESSION CUTOFF: `JwtStrategy` rejects any access token
+ * whose `iat` predates it, and `rotate` rejects any refresh row created before
+ * it. Ending every session therefore means two writes — bump the cutoff, revoke
+ * the rows — and doing only one of them is a silent half-measure. Revoking rows
+ * alone leaves a 30-day access token alive; bumping the cutoff alone leaves a
+ * refresh row that can mint a fresh one.
+ *
+ * So the two are welded into {@link endAllSessionsInTransaction}, and the
+ * row-only revocation is **private**. There is deliberately no public way to
+ * revoke a user's tokens without moving the cutoff: the previous hardening pass
+ * proved that a step callers must remember is a step callers forget.
+ *
+ * ## Lock protocol
+ *
+ * Every mutation here takes `lockUserRow` FIRST and `lockRefreshTokenFamily`
+ * second, per the order documented in `src/common/util/row-lock.util.ts`. Every
+ * one of them also re-reads the user under that lock — a decision made from a
+ * row read before the lock is a decision made on stale data.
  */
 @Injectable()
 export class RefreshTokenService {
@@ -59,24 +85,61 @@ export class RefreshTokenService {
     );
   }
 
-  /** Starts a NEW session chain. Use at login, never at rotation. */
-  async issue(
+  /**
+   * Starts a NEW session chain, under the same lock every revocation takes.
+   *
+   * `expectedSessionCutoff` is the `passwordChangedAt` the caller read when it
+   * verified the password, and it is the whole point of this method. Password
+   * verification happens outside any transaction — bcrypt must never run with
+   * one open — so between the compare and this call, a logout-all, a password
+   * change, a support revocation, or an account deletion can commit. Without the
+   * precondition, that login inserts a live refresh row the revocation's
+   * `updateMany` had already passed over, and mints an access token whose `iat`
+   * is NEWER than the cutoff the revocation wrote. "Sign me out everywhere" then
+   * leaves a fully usable 30-day session behind, which is the exact opposite of
+   * what the user asked for.
+   *
+   * Checked under the user lock, so a revocation is either entirely before this
+   * (cutoff moved → refused) or entirely after it (its cutoff strictly exceeds
+   * the `iat` of the access token the caller signs on return → killed).
+   *
+   * A stale login raises the ordinary `INVALID_CREDENTIALS`, not a new code: the
+   * caller's password may well have been correct a moment ago, and telling them
+   * *which* concurrent security event beat them is a disclosure with no benefit.
+   */
+  async issueForNewSession(
     userId: string,
+    expectedSessionCutoff: Date | null,
     context: RefreshTokenContext = {},
   ): Promise<IssuedRefreshToken> {
-    return this.persist(userId, randomUUID(), context);
+    return this.prisma.$transaction(async (transaction) => {
+      await lockUserRow(transaction, userId);
+
+      const owner = await this.loadEligibleSessionOwner(transaction, userId);
+      if (
+        !owner ||
+        !sameInstant(owner.passwordChangedAt, expectedSessionCutoff)
+      ) {
+        throw Errors.invalidCredentials();
+      }
+
+      return this.persist(userId, randomUUID(), context, transaction);
+    });
   }
 
   /**
    * Exchanges a refresh token for a fresh one in the same family.
    *
-   * Returns the owning user id alongside the new token so the caller can mint a
-   * matching access token without a second lookup.
+   * Returns the owning user alongside the new token so the caller can mint a
+   * matching access token and render its response without a second lookup — and,
+   * more importantly, so the eligibility decision and the token write are ONE
+   * decision. Re-reading the user afterwards (as this used to) means the row
+   * that authorised the new session is not the row that was checked.
    */
   async rotate(
     presentedToken: string,
     context: RefreshTokenContext = {},
-  ): Promise<{ userId: string; refreshToken: IssuedRefreshToken }> {
+  ): Promise<{ user: User; refreshToken: IssuedRefreshToken }> {
     const existing = await this.prisma.refreshToken.findUnique({
       where: { tokenHash: hashOpaqueToken(presentedToken) },
       select: {
@@ -118,84 +181,105 @@ export class RefreshTokenService {
     // confirmed theft evidence would leave one live token behind. Taking the
     // same lock in both places makes rotation and revocation mutually
     // exclusive.
-    let lostTheConsumeRace = false;
     try {
-      const refreshToken = await this.prisma.$transaction(
-        async (transaction) => {
-          // User first, then family — the same order every revocation path
-          // takes, so the two can never deadlock against each other.
-          await lockUserSessions(transaction, existing.userId);
-          await lockFamily(transaction, existing.familyId);
+      return await this.prisma.$transaction(async (transaction) => {
+        // User first, then family — the order in `row-lock.util.ts`, which
+        // every revocation path also takes, so the two can never deadlock.
+        await lockUserRow(transaction, existing.userId);
+        await lockRefreshTokenFamily(transaction, existing.familyId);
 
-          // A credential change ends every session that predates it. Checked
-          // HERE, inside the lock, rather than trusting the caller: this is the
-          // backstop that holds even if some future code path writes a password
-          // without going through `UsersService.applyPasswordChange`.
-          const owner = await transaction.user.findUnique({
-            where: { id: existing.userId },
-            select: { passwordChangedAt: true },
-          });
-          if (
-            owner?.passwordChangedAt &&
-            existing.createdAt.getTime() < owner.passwordChangedAt.getTime()
-          ) {
-            lostTheConsumeRace = true;
-            throw new LostConsumeRaceError();
-          }
+        // Deleted, deactivated, or unverified since this session began. Decided
+        // HERE rather than after the transaction: a check that runs on a row
+        // read outside the lock cannot bind the write that follows it. Nothing
+        // has been written yet, so the rollback costs nothing and the sessions
+        // are ended outside, where the revocation cannot roll back with it.
+        const owner = await this.loadEligibleSessionOwner(
+          transaction,
+          existing.userId,
+        );
+        if (!owner) {
+          throw new SessionOwnerIneligibleError();
+        }
 
-          // `revokedAt` and `expiresAt` are re-checked INSIDE the transaction.
-          // The equivalent checks above read the row fetched before it, so a
-          // revocation committing in between would otherwise still let this
-          // rotation issue a live child into a revoked family — and the family
-          // lock made that MORE likely, by parking the rotation until the
-          // revocation committed and then resuming on stale data.
-          const consumed = await transaction.refreshToken.updateMany({
-            where: {
-              id: existing.id,
-              consumedAt: null,
-              revokedAt: null,
-              expiresAt: { gt: new Date() },
-            },
-            data: { consumedAt: new Date() },
-          });
-          if (consumed.count !== 1) {
-            // ── the CONCURRENT replay branch ───────────────────────────
-            // Both racers read `existing` OUTSIDE this transaction, so both
-            // saw `consumedAt: null` and both skipped the branch above. From
-            // the server's side this is indistinguishable from a sequential
-            // replay and must be treated identically.
-            //
-            // It previously returned a bare 401 here. That silently defeated
-            // RFC 9700 §4.14.2 reuse detection about half the time: an
-            // attacker racing the legitimate client won often enough to keep a
-            // live renewable family, while the real user — told only "your
-            // session has expired" — simply signed in again, and no audit row,
-            // log line, or revocation ever recorded that a token had been
-            // presented twice.
-            lostTheConsumeRace = true;
-            throw new LostConsumeRaceError();
-          }
-          return this.persist(
-            existing.userId,
-            existing.familyId,
-            context,
-            transaction,
-          );
-        },
-      );
-      return { userId: existing.userId, refreshToken };
+        // A credential change ends every session that predates it. Checked
+        // inside the lock rather than trusting the caller: this is the backstop
+        // that holds even if some future code path writes a password without
+        // going through `UsersService.applyPasswordChange`.
+        //
+        // NOT reported as a replay, and NOT escalated into a fresh revocation.
+        // The credential change already revoked this family, so reaching here
+        // means some future path wrote a password without going through
+        // `endAllSessionsInTransaction` — a backstop whose job is to refuse this
+        // exchange, nothing more. Ending every session from here would let a
+        // stale token held by anyone log the account's CURRENT sessions out,
+        // turning a backstop into a denial-of-service primitive.
+        if (
+          owner.passwordChangedAt &&
+          existing.createdAt.getTime() < owner.passwordChangedAt.getTime()
+        ) {
+          throw new SessionPredatesCutoffError();
+        }
+
+        // `revokedAt` and `expiresAt` are re-checked INSIDE the transaction.
+        // The equivalent checks above read the row fetched before it, so a
+        // revocation committing in between would otherwise still let this
+        // rotation issue a live child into a revoked family — and the family
+        // lock made that MORE likely, by parking the rotation until the
+        // revocation committed and then resuming on stale data.
+        const consumed = await transaction.refreshToken.updateMany({
+          where: {
+            id: existing.id,
+            consumedAt: null,
+            revokedAt: null,
+            expiresAt: { gt: new Date() },
+          },
+          data: { consumedAt: new Date() },
+        });
+        if (consumed.count !== 1) {
+          // ── the CONCURRENT replay branch ───────────────────────────
+          // Both racers read `existing` OUTSIDE this transaction, so both
+          // saw `consumedAt: null` and both skipped the branch above. From
+          // the server's side this is indistinguishable from a sequential
+          // replay and must be treated identically.
+          //
+          // It previously returned a bare 401 here. That silently defeated
+          // RFC 9700 §4.14.2 reuse detection about half the time: an
+          // attacker racing the legitimate client won often enough to keep a
+          // live renewable family, while the real user — told only "your
+          // session has expired" — simply signed in again, and no audit row,
+          // log line, or revocation ever recorded that a token had been
+          // presented twice.
+          throw new ReplayDetectedError();
+        }
+
+        const refreshToken = await this.persist(
+          existing.userId,
+          existing.familyId,
+          context,
+          transaction,
+        );
+        return { user: owner, refreshToken };
+      });
     } catch (error) {
-      if (!lostTheConsumeRace) throw error;
+      // Everything below runs OUTSIDE the transaction, which has now rolled
+      // back. Ending the sessions inside it would roll that back along with the
+      // failed rotation — the family would stay alive on the very evidence that
+      // should have closed it.
+      if (error instanceof ReplayDetectedError) {
+        await this.handleReplay(existing.userId, existing.familyId, context);
+      }
+      if (error instanceof SessionOwnerIneligibleError) {
+        // The session is real but the account is no longer eligible. Close the
+        // whole chain rather than leaving tokens that fail on every use, and
+        // leave nothing behind for a restore to resurrect.
+        await this.endAllSessions(existing.userId, null);
+        throw Errors.refreshTokenInvalid();
+      }
+      if (error instanceof SessionPredatesCutoffError) {
+        throw Errors.refreshTokenInvalid();
+      }
+      throw error;
     }
-
-    // Deliberately OUTSIDE the transaction, which has now rolled back. Revoking
-    // the family inside it would roll the revocation back along with the failed
-    // rotation — the family would stay alive on the very evidence that should
-    // have ended it.
-    await this.handleReplay(existing.userId, existing.familyId, context);
-    // `handleReplay` always throws; this is unreachable and exists only to
-    // satisfy the compiler's return analysis.
-    throw Errors.refreshTokenInvalid();
   }
 
   /**
@@ -240,6 +324,10 @@ export class RefreshTokenService {
    * over exactly what the client holds. An unknown token is a no-op, not an
    * error: logout must never be the endpoint that reveals whether a token is
    * genuine, and a client trying to sign out has already got what it wanted.
+   *
+   * Deliberately does NOT move the session cutoff — that would sign the user out
+   * of every OTHER device too. Per-device logout blocklists its own access token
+   * by `jti` instead (see `AuthService.logout`).
    */
   async revokeByToken(presentedToken: string): Promise<void> {
     const existing = await this.prisma.refreshToken.findUnique({
@@ -270,8 +358,8 @@ export class RefreshTokenService {
       });
       if (!anyTokenInFamily) return;
 
-      await lockUserSessions(transaction, anyTokenInFamily.userId);
-      await lockFamily(transaction, familyId);
+      await lockUserRow(transaction, anyTokenInFamily.userId);
+      await lockRefreshTokenFamily(transaction, familyId);
       await transaction.refreshToken.updateMany({
         where: { familyId, revokedAt: null },
         data: { revokedAt: new Date() },
@@ -280,46 +368,61 @@ export class RefreshTokenService {
   }
 
   /**
-   * Every session this user has anywhere. Pairs with logout-all, support-driven
-   * revocation, and every credential change.
+   * THE security mutation: end every session this account holds, everywhere.
    *
-   * Transactional and under the user lock, which is what makes "every" true. As
-   * a bare `updateMany` it raced rotation and lost: a rotation that had inserted
-   * its replacement row but not committed sat outside the revoking statement's
-   * snapshot, so the sweep matched the parent, blocked on the rotation's row
-   * lock, and then committed — leaving the freshly-inserted child alive with
-   * `revokedAt: null`. "Sign me out everywhere" left one live renewable token,
-   * and bumping `passwordChangedAt` did not compensate, because the rotation had
-   * already minted an access token with a fresh `iat`.
-   */
-  async revokeAllForUser(userId: string): Promise<void> {
-    await this.prisma.$transaction(async (transaction) => {
-      await lockUserSessions(transaction, userId);
-      await transaction.refreshToken.updateMany({
-        where: { userId, revokedAt: null },
-        data: { revokedAt: new Date() },
-      });
-    });
-  }
-
-  /**
-   * Revokes every session as part of a caller-supplied transaction.
+   * Moves the session cutoff and revokes every family in one statement pair, so
+   * neither access tokens nor refresh tokens survive. Pairs with logout-all,
+   * support-driven revocation, every credential change, deactivation, deletion,
+   * and erasure — all of which previously did some subset of this by hand.
    *
-   * Exists so a credential change can write the new password and end every
-   * session atomically — a password write that commits without the revocation
-   * is precisely the gap this hardening pass closed.
+   * `userData` is folded into the SAME `users` update, so the reason for the
+   * revocation and the revocation itself are one row version. That is what makes
+   * "a password change always ends sessions" a structural property rather than a
+   * rule five call sites happened to remember: there is no way to write the new
+   * password without also writing the cutoff.
    *
    * The caller must already hold the user lock. It is not taken here, because
    * taking it twice in one transaction is harmless but taking it in the wrong
    * ORDER is not, and the caller is the only one who knows what else it holds.
    */
-  async revokeAllForUserInTransaction(
+  async endAllSessionsInTransaction(
     transaction: Prisma.TransactionClient,
     userId: string,
-  ): Promise<void> {
+    actorId: string | null,
+    userData: Prisma.UserUpdateInput = {},
+  ): Promise<User> {
+    const updated = await transaction.user.update({
+      where: { id: userId },
+      data: {
+        ...userData,
+        // Rounded up to the next whole second — see `nextWholeSecond`. A raw
+        // timestamp leaves a token minted in the same second as the change
+        // valid, because `iat` has no sub-second precision to compare against.
+        passwordChangedAt: nextWholeSecond(),
+        updatedBy: actorId,
+      },
+    });
     await transaction.refreshToken.updateMany({
       where: { userId, revokedAt: null },
       data: { revokedAt: new Date() },
+    });
+    return updated;
+  }
+
+  /** {@link endAllSessionsInTransaction} under its own transaction and lock. */
+  async endAllSessions(
+    userId: string,
+    actorId: string | null,
+    userData: Prisma.UserUpdateInput = {},
+  ): Promise<User> {
+    return this.prisma.$transaction(async (transaction) => {
+      await lockUserRow(transaction, userId);
+      return this.endAllSessionsInTransaction(
+        transaction,
+        userId,
+        actorId,
+        userData,
+      );
     });
   }
 
@@ -328,7 +431,7 @@ export class RefreshTokenService {
     transaction: Prisma.TransactionClient,
     userId: string,
   ): Promise<void> {
-    await lockUserSessions(transaction, userId);
+    await lockUserRow(transaction, userId);
   }
 
   /**
@@ -344,17 +447,38 @@ export class RefreshTokenService {
     return count;
   }
 
+  /**
+   * The account behind a session, or null if it may no longer hold one.
+   *
+   * Read through the raw client with an explicit `deletedAt: null`, not through
+   * `prisma.scoped`: a `$transaction` callback is the unscoped client, so the
+   * soft-delete filter does not apply to it and omitting the clause would let a
+   * deleted account keep rotating.
+   */
+  private async loadEligibleSessionOwner(
+    transaction: Prisma.TransactionClient,
+    userId: string,
+  ): Promise<User | null> {
+    const owner = await transaction.user.findFirst({
+      where: { id: userId, deletedAt: null },
+    });
+    if (!owner || !owner.isActive || !owner.emailVerifiedAt) {
+      return null;
+    }
+    return owner;
+  }
+
   private async persist(
     userId: string,
     familyId: string,
     context: RefreshTokenContext,
-    transaction?: Pick<PrismaService, 'refreshToken'>,
+    transaction: Pick<PrismaService, 'refreshToken'>,
   ): Promise<IssuedRefreshToken> {
     const token = generateOpaqueToken();
     const expiresAt = new Date(
       Date.now() + this.lifetimeDays * 24 * 60 * 60 * 1000,
     );
-    await (transaction ?? this.prisma).refreshToken.create({
+    await transaction.refreshToken.create({
       data: {
         userId,
         familyId,
@@ -368,45 +492,33 @@ export class RefreshTokenService {
   }
 }
 
-// Serialises every operation touching one session family.
-//
-// The lock is taken on the family's EXISTING rows rather than on a single
-// token, because the invariant being protected spans the chain: "a revoked
-// family gains no new children". Two transactions touching different tokens in
-// the same family would never contend on a per-row lock.
-async function lockFamily(
-  transaction: Prisma.TransactionClient,
-  familyId: string,
-): Promise<void> {
-  await transaction.$queryRaw`SELECT id FROM refresh_tokens WHERE family_id = ${familyId}::uuid FOR UPDATE`;
-}
-
 /**
- * THE ordering primitive for every session operation on one account.
+ * Two nullable timestamps describe the same instant.
  *
- * A family lock cannot serialize `revokeAllForUser`, because that spans families
- * — and a bare `updateMany` cannot see a replacement row a concurrent, still-open
- * rotation has inserted, so the replacement commits afterwards with
- * `revokedAt: null` and survives "sign me out everywhere".
- *
- * Locking the USER row fixes that and fixes the deadlock question in the same
- * move: every path here takes this lock FIRST and the family lock second, so two
- * transactions can never hold one and wait on the other in opposite orders.
- *
- * It locks `users`, not `refresh_tokens`, deliberately: a user with no tokens
- * still needs a lockable row, or a revoke racing a first login has nothing to
- * serialize against.
+ * `Date` equality is reference equality, and `null` is a legitimate cutoff (an
+ * account that has never had one), so neither `===` nor a bare `getTime()`
+ * comparison is safe on its own.
  */
-async function lockUserSessions(
-  transaction: Prisma.TransactionClient,
-  userId: string,
-): Promise<void> {
-  await transaction.$queryRaw`SELECT id FROM users WHERE id = ${userId}::uuid FOR UPDATE`;
+function sameInstant(left: Date | null, right: Date | null): boolean {
+  if (left === null || right === null) return left === right;
+  return left.getTime() === right.getTime();
 }
 
-// Thrown out of the rotation transaction when the conditional consume finds no
-// unconsumed row — i.e. a concurrent request won the race. A private sentinel,
-// so the transaction rolls back cleanly and the caller-facing outcome is
-// decided once, outside it, where the family revocation cannot be rolled back
-// with it.
-class LostConsumeRaceError extends Error {}
+// Private sentinels thrown out of the rotation transaction when it must not
+// commit. Distinct classes rather than one flag, because the three outcomes call
+// for three different responses — revoke the family and audit a theft, end every
+// session, or simply refuse — and a single sentinel is how two of them end up
+// sharing the wrong one.
+//
+// They roll the transaction back cleanly, so the caller-facing outcome is
+// decided once, outside it, where the revocation that follows cannot be rolled
+// back with it.
+
+/** The presented token had already been consumed — RFC 9700 §4.14.2 reuse. */
+class ReplayDetectedError extends Error {}
+
+/** The account was deleted, deactivated, or unverified since the session began. */
+class SessionOwnerIneligibleError extends Error {}
+
+/** The session predates the account's current session cutoff. */
+class SessionPredatesCutoffError extends Error {}

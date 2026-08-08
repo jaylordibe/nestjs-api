@@ -54,32 +54,51 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # SSH config is set up once at the start of the job so every later
-      # step can ssh without re-doing the keyscan. ~/.ssh persists across
-      # `run` blocks within the same job; the runner is ephemeral so
-      # there's no cleanup needed. The ssh-agent socket is exported to
-      # $GITHUB_ENV so it persists too — without that, the deploy step
-      # couldn't `git fetch` from GitHub on the staging box (no key
-      # forwarded → Permission denied (publickey)).
+      # SSH material is written once at the start of the job; ~/.ssh persists
+      # across `run` blocks within the same job and the runner is ephemeral, so
+      # there is no cleanup to do.
+      #
+      # Host trust comes from a PINNED secret, never from the network. This step
+      # used to run `ssh-keyscan` against the deploy host and trust whatever
+      # answered — which is not host verification, it is a fresh
+      # trust-on-first-use decision on every single run, made by a machine with
+      # nobody watching. Anyone able to intercept the runner's first packet gets
+      # the deploy: the private key is offered to them, and the deploy script
+      # runs on their box.
+      #
+      # Agent forwarding is gone too. It existed so the VM could reuse the
+      # runner's key to `git fetch` from GitHub, which meant ONE credential
+      # authenticated the runner to the VM *and* the VM to source control, and
+      # anyone with root on the VM could borrow it for the length of the deploy.
+      # The VM now uses its own read-only deploy key — see docs/staging/README.md.
       - name: Configure SSH
+        env:
+          # Read through `env:` rather than interpolated into the script.
+          # `${{ }}` is substituted before bash ever sees the line, so a secret
+          # containing shell metacharacters would be executed, not quoted.
+          SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+          SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_KEY }}
         run: |
+          set -euo pipefail
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          ssh-keyscan -H "${{ secrets.STAGING_HOST }}" >> ~/.ssh/known_hosts
-          (umask 077; echo "${{ secrets.STAGING_SSH_KEY }}" > ~/.ssh/id_rsa)
-          # ForwardAgent makes the staging box reuse the runner's loaded key
-          # for outbound SSH (e.g. fetching from github.com). Scoped to the
-          # staging host only — agent forwarding to untrusted hosts is a
-          # hijack vector, but our staging box is trusted.
-          cat >> ~/.ssh/config <<EOL
-          Host ${{ secrets.STAGING_HOST }}
-            ForwardAgent yes
-          EOL
-          eval "$(ssh-agent -s)"
-          ssh-add ~/.ssh/id_rsa
-          # Persist the agent socket + pid for later steps in this job.
-          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
-          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+
+          (umask 077; printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts)
+          (umask 077; printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key)
+
+          # Validate both, and say which one is wrong without printing either.
+          # An empty or malformed known_hosts is the dangerous failure: ssh would
+          # simply find no matching host key and refuse, which reads like a
+          # network problem and invites somebody to "fix" it with a keyscan.
+          if ! ssh-keygen -l -f ~/.ssh/known_hosts > /dev/null 2>&1; then
+            echo "::error::STAGING_SSH_KNOWN_HOSTS is empty or not a valid known_hosts entry. Generate it on a trusted network with: ssh-keyscan -t ed25519 <host>"
+            exit 1
+          fi
+          if ! ssh-keygen -y -P '' -f ~/.ssh/deploy_key > /dev/null 2>&1; then
+            echo "::error::STAGING_SSH_KEY is not a valid unencrypted private key"
+            exit 1
+          fi
+          echo "Pinned $(ssh-keygen -l -f ~/.ssh/known_hosts | wc -l) host key(s)"
 
       # Docker Compose deploy. Migrations run BEFORE `up -d` so the new code
       # never starts against an old schema; this assumes migrations are
@@ -93,9 +112,37 @@ jobs:
       # Auth; prod hides it. The two are kept fully separate to avoid drift.
       - name: Deploy api to staging
         env:
+          SSH_HOST: ${{ secrets.STAGING_HOST }}
+          SSH_USER: ${{ secrets.STAGING_USER }}
           SERVICE_DIR: ${{ env.SERVICE_DIR }}
         run: |
-          ssh "${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }}" \
+          set -euo pipefail
+
+          # SERVICE_DIR is a repository VARIABLE, not a secret: it is not masked,
+          # and anyone who can edit repository settings can set it. It is then
+          # embedded in a command that runs as the deploy user on the VM, so a
+          # value containing a quote closes the quoting and appends whatever
+          # follows. Validated as an absolute path of boring characters — which
+          # excludes every shell metacharacter — rather than trusted.
+          if ! printf '%s' "$SERVICE_DIR" | grep -Eq '^/[A-Za-z0-9._/-]+$'; then
+            echo "::error::STAGING_SERVICE_DIR must be an absolute path made of [A-Za-z0-9._/-]"
+            exit 1
+          fi
+          case "$SERVICE_DIR" in
+            *..*) echo "::error::STAGING_SERVICE_DIR must not contain '..'"; exit 1 ;;
+          esac
+
+          # No ssh config file and no agent: every option stated here, where it
+          # can be read alongside the command it governs.
+          #   IdentitiesOnly  — offer this key and nothing the agent might hold
+          #   StrictHostKey…  — refuse an unrecognised host rather than learn it
+          #   ForwardAgent=no — explicit, so re-adding it has to be deliberate
+          ssh -i ~/.ssh/deploy_key \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ForwardAgent=no \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "${SSH_USER}@${SSH_HOST}" \
             "SERVICE_DIR='${SERVICE_DIR}'" bash -s <<'EOF'
             set -euo pipefail
 
@@ -106,8 +153,16 @@ jobs:
 
             # Pull the latest API source. Hard-reset is safer than `git pull`
             # for unattended deploys — survives force-pushes and any drift.
+            #
+            # Authenticated by the VM'S OWN read-only deploy key, not by an
+            # agent forwarded from the runner. If this fails with
+            # "Permission denied (publickey)", that key is missing or not
+            # registered on the repo — see docs/staging/README.md.
             cd "$API_DIR"
-            git fetch --prune origin staging
+            if ! git fetch --prune origin staging; then
+              echo "::error::git fetch failed on the server. The VM needs its own read-only deploy key (docs/staging/README.md); agent forwarding is deliberately disabled."
+              exit 1
+            fi
             git reset --hard origin/staging
 
             # Capture the deploy SHA and export it. GIT_SHA is forwarded as
@@ -169,17 +224,22 @@ jobs:
       # (Settings → Environments → staging). Logs only on status-code
       # transitions so a stream of identical 502s doesn't flood the log.
       - name: Smoke test
+        # Read through `env:`, not interpolated: STAGING_URL is a repository
+        # variable and would otherwise be substituted into the shell before bash
+        # parses the line.
+        env:
+          STAGING_URL: ${{ vars.STAGING_URL }}
         run: |
           last_code=""
-          for i in $(seq 1 30); do
+          for attempt in $(seq 1 30); do
             code=$(curl -s -o /dev/null -w "%{http_code}" \
-              "${{ vars.STAGING_URL }}/api/health/liveness" || echo curl_err)
+              "${STAGING_URL}/api/health/liveness" || echo curl_err)
             if [ "$code" = "200" ]; then
-              echo "Healthy after ${i} attempt(s)"
+              echo "Healthy after ${attempt} attempt(s)"
               exit 0
             fi
             if [ "$code" != "$last_code" ]; then
-              echo "attempt ${i}: HTTP ${code}"
+              echo "attempt ${attempt}: HTTP ${code}"
               last_code=$code
             fi
             sleep 2

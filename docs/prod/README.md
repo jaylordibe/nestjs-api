@@ -217,9 +217,65 @@ In the api repo under **Settings → Environments → production**:
 |---|---|---|
 | Secret | `PRODUCTION_HOST` | server public IP or DNS |
 | Secret | `PRODUCTION_USER` | SSH user (in docker group, owns `/srv/<service>`) |
-| Secret | `PRODUCTION_SSH_KEY` | private key for that user |
-| Variable | `PRODUCTION_SERVICE_DIR` | `/srv/<service>` (the on-server project dir) |
+| Secret | `PRODUCTION_SSH_KEY` | private key for that user — **unencrypted**, runner→VM only |
+| Secret | `PRODUCTION_SSH_KNOWN_HOSTS` | the server's `known_hosts` line(s). See below. |
+| Variable | `PRODUCTION_SERVICE_DIR` | `/srv/<service>` (the on-server project dir) — must match `^/[A-Za-z0-9._/-]+$` |
 | Variable | `PRODUCTION_URL` | `https://api.example.com` |
+
+#### Pin the host key (`PRODUCTION_SSH_KNOWN_HOSTS`)
+
+The workflow will **not** run `ssh-keyscan`. Trusting whatever answers on port 22
+is a fresh trust-on-first-use decision on every run, made unattended — anyone who
+can intercept that first packet is handed the deploy key and runs the deploy
+script on their own box. The expected key is pinned instead.
+
+Generate it **once, from a network you trust** (ideally on the server itself):
+
+```bash
+# On the server — no network in the path at all:
+ssh-keyscan -t ed25519 localhost | sed "s/^localhost/<host-or-ip>/"
+
+# Or from your laptop, then verify the fingerprint out of band against
+# `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` run on the server:
+ssh-keyscan -t ed25519 <host-or-ip>
+```
+
+Paste the full line(s) into the secret. The workflow validates it with
+`ssh-keygen -l -f` and fails loudly if it is empty or malformed, so a bad paste
+surfaces as a clear error rather than as an "unknown host" that looks like a
+network blip.
+
+**Rotate it whenever the server is rebuilt** — a new VM has a new host key, and
+the deploy will correctly refuse until this secret is updated.
+
+#### Give the server its own deploy key
+
+Agent forwarding is disabled. The runner's key authenticates the runner to the
+VM and nothing else; it is never available to processes on the VM. The VM
+therefore needs its own credential to `git fetch`:
+
+```bash
+# On the server, as the deploy user:
+ssh-keygen -t ed25519 -N '' -C "prod-deploy@$(hostname)" -f ~/.ssh/github_deploy
+cat ~/.ssh/github_deploy.pub
+
+cat >> ~/.ssh/config <<'EOF'
+Host github.com
+  IdentityFile ~/.ssh/github_deploy
+  IdentitiesOnly yes
+EOF
+
+# Trust GitHub's host key from their published list, not from a keyscan:
+curl -fsS https://api.github.com/meta | jq -r '.ssh_keys[] | "github.com \(.)"' \
+  >> ~/.ssh/known_hosts
+
+ssh -T git@github.com   # expect "successfully authenticated"
+```
+
+Add the printed **public** key to the api repo under **Settings → Deploy keys**,
+with **"Allow write access" left OFF**. Two separate credentials, each doing one
+job: compromising the VM yields a read-only key to one repository, not the key
+that opens the VM.
 
 **Enable deploys.** The deploy job ships gated, so the template (and any
 fresh clone) runs CI but never deploys. To turn on CD in a real project,

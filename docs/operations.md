@@ -73,7 +73,8 @@ path, and the dump script is a stopgap for a single-box deployment.
 | Audit-log **retention** | ❌ Operator-owned | `audit_logs` grows without bound. It holds IPs, user agents, and (behind Cloudflare) geolocation, so it is itself personal data with a retention obligation. |
 | Soft-delete **hard purge** | ⚙️ Scaffolded | `src/common/scheduled-jobs/example-retention-sweep.service.ts` is a worked pattern, not an installed policy. Soft-deleted users are retained indefinitely by default. |
 | Refresh-token purge | ✅ Implemented | `RefreshTokenService.purgeExpired` — expired rows carry a user id and a device fingerprint, so they are deleted rather than kept |
-| Membership history | ✅ **By design, never purged** | A `BusinessMembership` moves to `left` rather than being deleted. That is what lets `@@unique([businessId, userId])` be unconditional. Erasure anonymises the *user*, which is what carries the personal data. |
+| Membership rows | ✅ **By design, never purged** | A `BusinessMembership` moves to `left` rather than being deleted. That is what lets `@@unique([businessId, userId])` be unconditional. Erasure anonymises the *user*, which is what carries the personal data. |
+| Membership **history** | ⚙️ Scaffolded | The row is **current state, not a ledger** — a re-join overwrites `joinedAt`, `endedAt`, `status`, and `roleId` in place. Tenure history lives in `audit_logs` (`business_membership.*`, `business_invitation.accepted`), which has **no retention policy** — see the audit-log row above. Reporting on past tenure means reading those events, and it stops working the day you add one. |
 
 **Note the asymmetry.** Erasure is implemented; retention is not. A subject
 access request can be answered today; "delete everything older than N days"

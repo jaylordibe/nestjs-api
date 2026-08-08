@@ -12,6 +12,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AbilityScopedQueryService } from '../authorization/ability-scoped-query.service';
 import { PermissionCheckService } from '../authorization/permission-check.service';
 import { PermissionLoaderService } from '../authorization/permission-loader.service';
+import { BusinessOwnershipPolicy } from './business-ownership.policy';
 import { CreateBusinessDto } from './dto/create-business.dto';
 import { UpdateBusinessDto } from './dto/update-business.dto';
 
@@ -23,6 +24,7 @@ export class BusinessesService {
     private readonly abilityScopedQueryService: AbilityScopedQueryService,
     private readonly permissionCheckService: PermissionCheckService,
     private readonly permissionLoaderService: PermissionLoaderService,
+    private readonly businessOwnershipPolicy: BusinessOwnershipPolicy,
   ) {}
 
   /**
@@ -45,38 +47,50 @@ export class BusinessesService {
       throw Errors.uniqueConstraintViolation('slug');
     }
 
-    const business = await this.prisma.$transaction(async (transaction) => {
-      const created = await transaction.business.create({
-        data: {
-          name: dto.name,
-          slug: dto.slug,
-          description: dto.description,
-          isActive: dto.isActive,
-          createdBy: actorId,
-          updatedBy: actorId,
-        },
-      });
+    const { business, membershipId } = await this.prisma.$transaction(
+      async (transaction) => {
+        // The founding owner's user row. No business row exists yet to lock, so
+        // this is the only rendezvous point — and it is the one that matters: an
+        // account being deleted concurrently must not come out of the race owning
+        // a brand-new business nobody can administer.
+        await this.businessOwnershipPolicy.assertUserMayHoldActiveMembership(
+          transaction,
+          actorId,
+        );
 
-      const ownerRole = await transaction.role.findUniqueOrThrow({
-        where: { name: SeededRoleName.BUSINESS_OWNER },
-        select: { id: true },
-      });
-      await transaction.businessMembership.create({
-        data: {
-          businessId: created.id,
-          userId: actorId,
-          roleId: ownerRole.id,
-          status: BusinessMembershipStatus.ACTIVE,
-          // `joined_at` is NOT NULL, and the creator joins the instant the
-          // business exists.
-          joinedAt: new Date(),
-          createdBy: actorId,
-          updatedBy: actorId,
-        },
-      });
+        const created = await transaction.business.create({
+          data: {
+            name: dto.name,
+            slug: dto.slug,
+            description: dto.description,
+            isActive: dto.isActive,
+            createdBy: actorId,
+            updatedBy: actorId,
+          },
+        });
 
-      return created;
-    });
+        const ownerRole = await transaction.role.findUniqueOrThrow({
+          where: { name: SeededRoleName.BUSINESS_OWNER },
+          select: { id: true },
+        });
+        const membership = await transaction.businessMembership.create({
+          data: {
+            businessId: created.id,
+            userId: actorId,
+            roleId: ownerRole.id,
+            status: BusinessMembershipStatus.ACTIVE,
+            // `joined_at` is NOT NULL, and the creator joins the instant the
+            // business exists.
+            joinedAt: new Date(),
+            createdBy: actorId,
+            updatedBy: actorId,
+          },
+          select: { id: true },
+        });
+
+        return { business: created, membershipId: membership.id };
+      },
+    );
 
     // The creator's authorization just changed — they now hold BUSINESS_OWNER
     // in a business that did not exist a moment ago. Drop their cached grants
@@ -87,6 +101,22 @@ export class BusinessesService {
       action: 'business.created',
       actorId,
       metadata: { businessId: business.id, slug: business.slug },
+    });
+    // The founding membership is a JOIN, and audit events are this template's
+    // membership history (see `BusinessMembership` in schema.prisma). Without
+    // this row the one tenure that every business starts with — its owner's —
+    // would be the only one with no recorded beginning.
+    await this.auditService.record({
+      action: 'business_membership.added',
+      actorId,
+      targetUserId: actorId,
+      metadata: {
+        businessId: business.id,
+        membershipId,
+        roleName: SeededRoleName.BUSINESS_OWNER,
+        isFoundingOwner: true,
+        isRejoin: false,
+      },
     });
     return business;
   }

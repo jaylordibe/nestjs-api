@@ -18,7 +18,6 @@ import {
   hashPassword,
 } from '../../common/util/password-hashing.util';
 import { RedisService } from '../../common/redis/redis.service';
-import { nextWholeSecond } from '../../common/util/session-cutoff.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RefreshTokenService } from '../auth/refresh-token.service';
 import { PermissionLoaderService } from '../authorization/permission-loader.service';
@@ -386,7 +385,7 @@ export class UsersService {
     dto: UpdateUserDto,
     actorId: string | null,
   ): Promise<User> {
-    await this.findById(id);
+    const existing = await this.findById(id);
 
     const updateData: Prisma.UserUpdateInput = {
       email: dto.email?.toLowerCase(),
@@ -403,10 +402,17 @@ export class UsersService {
       updatedBy: actorId,
     };
 
-    const updated = await this.prisma.user.update({
-      where: { id },
-      data: updateData,
-    });
+    // Deactivation is not an ordinary field write. An inactive account cannot
+    // authenticate — `JwtStrategy` refuses it on every request — so a business
+    // whose only owner is deactivated is exactly as unadministrable as one whose
+    // owner was deleted, and it needs the same refusal. It also has to end the
+    // account's sessions: leaving live refresh rows behind means a later
+    // reactivation silently resurrects every session that existed before.
+    const updated =
+      dto.isActive === false && existing.isActive
+        ? await this.deactivate(id, updateData, actorId)
+        : await this.prisma.user.update({ where: { id }, data: updateData });
+
     if (actorId && actorId !== id) {
       await this.auditService.record({
         action: 'user.updated.by_admin',
@@ -420,6 +426,39 @@ export class UsersService {
       });
     }
     return updated;
+  }
+
+  /**
+   * Active → inactive, with the ownership invariant and the session end that a
+   * bare field write would skip.
+   *
+   * Refused when the account is somebody's last owner. A platform admin is not
+   * exempt: `manage all` bypasses AUTHORIZATION, not data integrity, and the
+   * unadministrable business it would leave behind is invisible to every roster
+   * read — so nobody would find it to repair it.
+   */
+  private async deactivate(
+    userId: string,
+    updateData: Prisma.UserUpdateInput,
+    actorId: string | null,
+  ): Promise<User> {
+    const deactivated = await this.prisma.$transaction(async (transaction) => {
+      // User row first, then businesses — the order in `row-lock.util.ts`.
+      await this.refreshTokenService.lockSessions(transaction, userId);
+      await this.businessOwnershipPolicy.assertUserIsNotASoleOwner(
+        transaction,
+        userId,
+      );
+      return this.refreshTokenService.endAllSessionsInTransaction(
+        transaction,
+        userId,
+        actorId,
+        updateData,
+      );
+    });
+    // Their business-scoped grants are gone the instant the row says inactive.
+    await this.invalidateGrantsFor([userId]);
+    return deactivated;
   }
 
   async remove(id: string, actorId: string | null): Promise<void> {
@@ -468,6 +507,11 @@ export class UsersService {
     // never left ownerless, never left live.
     const { businesses: closedBusinesses, affectedUserIds } =
       await this.prisma.$transaction(async (transaction) => {
+        // User row first, then the businesses — the order documented in
+        // `row-lock.util.ts`. Taking the businesses first (as this used to) is
+        // the opposite of what every membership mutation takes, so the two sides
+        // of the ownership invariant could deadlock against each other.
+        await this.refreshTokenService.lockSessions(transaction, userId);
         const closed =
           await this.businessOwnershipPolicy.closeSolelyOwnedBusinesses(
             transaction,
@@ -475,14 +519,17 @@ export class UsersService {
             userId,
           );
 
-        await this.refreshTokenService.lockSessions(transaction, userId);
-        await transaction.user.update({
-          where: { id: userId },
-          data: {
+        // The anonymisation rides INSIDE the session-ending mutation, so the
+        // erased row and the dead sessions are one row version. There is no
+        // ordering in which the account is wiped but its sessions still work.
+        await this.refreshTokenService.endAllSessionsInTransaction(
+          transaction,
+          userId,
+          userId,
+          {
             email: `deleted-${userId}@deleted.invalid`,
             username: null,
             password: erasedPasswordHash,
-            passwordChangedAt: nextWholeSecond(now),
             firstName: 'Deleted',
             middleName: null,
             lastName: 'User',
@@ -497,12 +544,7 @@ export class UsersService {
             emailVerifiedAt: null,
             deletedAt: now,
             deletedBy: userId,
-            updatedBy: userId,
           },
-        });
-        await this.refreshTokenService.revokeAllForUserInTransaction(
-          transaction,
-          userId,
         );
         return closed;
       });
@@ -538,26 +580,24 @@ export class UsersService {
     actorId: string | null,
   ): Promise<void> {
     await this.prisma.$transaction(async (transaction) => {
-      await this.businessOwnershipPolicy.assertUserMayBeDeleted(
+      // User row first, then businesses — see `row-lock.util.ts`. This is also
+      // what makes the check below binding: a promotion racing this deletion
+      // contends on the SAME user row, so it either loses and finds the account
+      // gone, or wins and is counted here.
+      await this.refreshTokenService.lockSessions(transaction, userId);
+      await this.businessOwnershipPolicy.assertUserIsNotASoleOwner(
         transaction,
         userId,
       );
-      await this.refreshTokenService.lockSessions(transaction, userId);
-      await transaction.user.update({
-        where: { id: userId },
-        data: {
-          deletedAt: new Date(),
-          deletedBy: actorId,
-          updatedBy: actorId,
-        },
-      });
       // A deleted account must not keep minting access tokens off a refresh
       // token. `JwtStrategy` already rejects the user through the scoped
       // client, but leaving live rows behind means a restore silently
       // resurrects every session that existed before the deletion.
-      await this.refreshTokenService.revokeAllForUserInTransaction(
+      await this.refreshTokenService.endAllSessionsInTransaction(
         transaction,
         userId,
+        actorId,
+        { deletedAt: new Date(), deletedBy: actorId },
       );
     });
     await this.invalidateGrantsFor([userId]);
@@ -625,6 +665,17 @@ export class UsersService {
     });
   }
 
+  /**
+   * Moves the account to a new address, and ends every session doing so.
+   *
+   * The address is the account's primary identifier and its recovery channel, so
+   * changing it is a credential change in everything but name — which is why
+   * `src/common/errors/README.md` has always listed "email changed" among the
+   * triggers for `SESSION_INVALIDATED`. The code did not do it: the new address
+   * was unverified (login refuses those) while every access token issued against
+   * the OLD one kept working, so an attacker who had taken the account could
+   * move it out of the owner's reach and keep their own session alive.
+   */
   async updateEmail(
     userId: string,
     dto: UpdateAuthUserEmailDto,
@@ -638,13 +689,9 @@ export class UsersService {
     if (!passwordMatches) {
       throw Errors.currentPasswordIncorrect();
     }
-    return this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        email: dto.newEmail.toLowerCase(),
-        emailVerifiedAt: null,
-        updatedBy: actorId,
-      },
+    return this.refreshTokenService.endAllSessions(userId, actorId, {
+      email: dto.newEmail.toLowerCase(),
+      emailVerifiedAt: null,
     });
   }
 
@@ -673,33 +720,22 @@ export class UsersService {
     actorId: string | null,
     extraData: Prisma.UserUpdateInput = {},
   ): Promise<User> {
+    // Hashed BEFORE the transaction opens. bcrypt at 12 rounds costs ~250ms, and
+    // holding a row lock across it would serialise every concurrent session
+    // operation on this account behind a deliberately slow function.
     const passwordHash = await hashPassword(plaintextPassword);
-    // Rounded up to the next whole second — see `nextWholeSecond`. A raw
-    // timestamp leaves a token minted in the same second as the change valid,
-    // because `iat` has no sub-second precision to compare against.
-    const changedAt = nextWholeSecond();
 
     return this.prisma.$transaction(async (transaction) => {
       // User lock first — the same order every session path uses, so a
       // credential change and a concurrent rotation cannot deadlock, and a
       // rotation in flight cannot slip a replacement token past the revocation.
       await this.refreshTokenService.lockSessions(transaction, userId);
-
-      const updated = await transaction.user.update({
-        where: { id: userId },
-        data: {
-          ...extraData,
-          password: passwordHash,
-          passwordChangedAt: changedAt,
-          updatedBy: actorId,
-        },
-      });
-
-      await this.refreshTokenService.revokeAllForUserInTransaction(
+      return this.refreshTokenService.endAllSessionsInTransaction(
         transaction,
         userId,
+        actorId,
+        { ...extraData, password: passwordHash },
       );
-      return updated;
     });
   }
 
@@ -968,14 +1004,16 @@ export class UsersService {
   /**
    * Ends every session the account holds, on every device.
    *
-   * The access token is a stateless JWT and cannot be withdrawn before it
-   * expires, so this revokes the refresh chains: the account survives until its
-   * current access token lapses and cannot mint another. That residual window
-   * is inherent to stateless tokens and is why they are short-lived.
+   * Moves the session cutoff as well as revoking the refresh chains, so access
+   * tokens die too. Revoking the chains alone was very nearly a no-op against
+   * the attacker this exists for: `jwt.expiresIn` is 30 days in this template,
+   * so "we have revoked their sessions" left a stolen access token working for
+   * up to a month. The old docstring called that window "inherent … which is why
+   * they are short-lived"; the reasoning is sound and the premise was false.
    */
   async revokeAllSessions(userId: string, actorId: string): Promise<void> {
     const user = await this.findById(userId);
-    await this.refreshTokenService.revokeAllForUser(user.id);
+    await this.refreshTokenService.endAllSessions(user.id, actorId);
     await this.auditService.record({
       action: 'user.sessions_revoked_by_support',
       actorId,

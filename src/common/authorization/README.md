@@ -341,6 +341,47 @@ subject:
 The template ships no booking or order module, because inventing one to
 demonstrate this would be product surface masquerading as infrastructure.
 
+## Membership history
+
+`BusinessMembership` holds exactly one row per (business, user) pair, forever.
+That is what makes "one current role per person per business" a database
+constraint (`@@unique([businessId, userId])`) instead of an application
+convention, and it is worth the trade — but the trade is real and worth stating
+plainly:
+
+**The row is current state. It is not a ledger.** Somebody who leaves and later
+re-joins reuses the row they already have, so `status`, `roleId`, `joinedAt`, and
+`endedAt` are overwritten and the previous tenure is gone from the table.
+`joinedAt` means "when the current tenure began", never "when they first joined".
+
+**`audit_logs` is the history.** Every transition writes an immutable event:
+
+| Event | Written by |
+|---|---|
+| `business_membership.added` | `BusinessMembershipsService.add`, and `BusinessesService.create` for the founding owner (`metadata.isFoundingOwner`) |
+| `business_invitation.accepted` | `BusinessInvitationsService.accept` |
+| `business_membership.ended` | `remove` — carries a full row snapshot |
+| `business_membership.suspended` / `.reactivated` | `suspend` / `reactivate` — full row snapshot |
+| `business_membership.role_changed` | `changeRole` |
+| `business_membership.ownership_transferred` | `transferOwnership` — carries `demotedUserIds` |
+
+The two events that overwrite a tenure (`added` and `invitation.accepted`) carry
+`metadata.isRejoin` and `metadata.previousTenure` — the replaced `status`,
+`roleName`, `joinedAt`, and `endedAt` — so nothing is actually lost, it just
+lives somewhere else.
+
+**Report on tenure from those events**, not from `joinedAt`. If a project needs
+real tenure reporting — overlapping periods, per-period billing, "how many months
+has this person been staff" — add a project-specific append-only period model
+then, with its query patterns known. This template deliberately does not ship
+one: a second history mechanism alongside the audit trail is two sources of truth
+for the same question, and the audit trail is the one that already exists and is
+already written on every path.
+
+One consequence to plan for: `audit_logs` has **no retention policy** here (see
+`docs/operations.md`). The day somebody adds one, membership history acquires the
+same horizon.
+
 ## Invitations
 
 An invited email need not belong to a user yet, which is the entire reason

@@ -22,3 +22,35 @@
 export function nextWholeSecond(from: Date = new Date()): Date {
   return new Date(Math.ceil(from.getTime() / 1000) * 1000);
 }
+
+/**
+ * Waits until a session cutoff is in the past, so a token minted next survives.
+ *
+ * The counterpart to {@link nextWholeSecond}, and the price of it. Rounding the
+ * cutoff up sacrifices the whole second it lands in: every token whose `iat`
+ * floors into that second is treated as older than the change. That is correct
+ * for tokens issued BEFORE the change — it is the hole being closed — but a
+ * brand-new login lands in the same second too, and would be handed an access
+ * token that is already dead. "Change your password, then sign in, then get a
+ * 401 on your first request" is a real and thoroughly confusing bug.
+ *
+ * So issuance waits out the remainder of that second. Bounded by construction:
+ * the cutoff is at most one second ahead of the moment it was written, so this
+ * sleeps for under 1s and only when a credential change happened in the very
+ * same second as the sign-in. Every other call returns immediately.
+ *
+ * The alternative — signing the token with an `iat` forced past the cutoff —
+ * looks cheaper and is wrong: it would also carry the token past the NEXT
+ * revocation written in that same second, which is the exact failure the
+ * rounding exists to prevent. Delaying is the only direction that does not trade
+ * the guarantee away.
+ */
+export async function waitForSessionCutoff(
+  cutoff: Date | null,
+  now: Date = new Date(),
+): Promise<void> {
+  if (!cutoff) return;
+  const remainingMs = cutoff.getTime() - now.getTime();
+  if (remainingMs <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, remainingMs));
+}

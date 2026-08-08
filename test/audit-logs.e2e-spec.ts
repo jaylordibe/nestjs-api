@@ -53,7 +53,23 @@ describe('Audit logs (e2e)', () => {
     await app.close();
   });
 
-  // Exercises the real write path: creating a business records `business.created`.
+  /**
+   * How many audit rows one `POST /businesses` writes.
+   *
+   * Two, deliberately: `business.created`, and the `business_membership.added`
+   * event for the founding owner. The membership row is the business's first
+   * tenure, and audit events are this template's membership history — see the
+   * note on `BusinessMembership` in `schema.prisma` — so a founding owner with
+   * no recorded join would be a hole in it.
+   *
+   * Named rather than inlined because several assertions below count "every row
+   * this fixture produced", and a bare `2` in each of them says nothing about
+   * why.
+   */
+  const AUDIT_ROWS_PER_BUSINESS_CREATION = 2;
+
+  // Exercises the real write path: creating a business records `business.created`
+  // plus the founding owner's join.
   const generateAuditRow = async (owner: SeededUser): Promise<void> => {
     await request(app.getHttpServer())
       .post('/api/businesses')
@@ -136,7 +152,10 @@ describe('Audit logs (e2e)', () => {
       .get(`/api/audit-logs?actorId=${owner.id}`)
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(200);
-    expect((byActor.body as PageBody<AuditLogBody>).meta.total).toBe(1);
+    // Every row this actor produced, which is both of the creation's events.
+    expect((byActor.body as PageBody<AuditLogBody>).meta.total).toBe(
+      AUDIT_ROWS_PER_BUSINESS_CREATION,
+    );
 
     const noMatch = await request(app.getHttpServer())
       .get('/api/audit-logs?action=does.not.exist')
@@ -206,8 +225,10 @@ describe('Audit logs (e2e)', () => {
         .set('Authorization', `Bearer ${admin.token}`)
         .expect(200);
       const body = response.body as PageBody<AuditLogBody>;
-      expect(body.meta.total).toBe(1);
-      expect(body.data[0].actorId).toBe(owner.id);
+      // The address matches on BOTH of the creation's events, since this person
+      // is the actor on each.
+      expect(body.meta.total).toBe(AUDIT_ROWS_PER_BUSINESS_CREATION);
+      expect(body.data.every((row) => row.actorId === owner.id)).toBe(true);
     });
 
     it('returns nothing for a term that matches no signal', async () => {
@@ -247,9 +268,14 @@ describe('Audit logs (e2e)', () => {
       const before = new Date(row.createdAt.getTime() - 60_000).toISOString();
       const after = new Date(row.createdAt.getTime() + 60_000).toISOString();
 
+      // Pinned to ONE action, so this measures the range filter rather than how
+      // many events a business creation happens to write. Without the pin, the
+      // founding owner's join event lands microseconds after `row.createdAt` and
+      // the exact-instant bound below becomes a coin flip on millisecond
+      // rounding.
       const totalFor = async (queryString: string): Promise<number> => {
         const response = await request(app.getHttpServer())
-          .get(`/api/audit-logs?${queryString}`)
+          .get(`/api/audit-logs?action=business.created&${queryString}`)
           .set('Authorization', `Bearer ${admin.token}`)
           .expect(200);
         return (response.body as PageBody<AuditLogBody>).meta.total;

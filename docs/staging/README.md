@@ -223,9 +223,47 @@ In the api repo under **Settings → Environments → staging**:
 |---|---|---|
 | Secret | `STAGING_HOST` | server public IP or DNS |
 | Secret | `STAGING_USER` | SSH user (in docker group, owns `/srv/<service>`) |
-| Secret | `STAGING_SSH_KEY` | private key for that user |
-| Variable | `STAGING_SERVICE_DIR` | `/srv/<service>` (the on-server project dir) |
+| Secret | `STAGING_SSH_KEY` | private key for that user — **unencrypted**, runner→VM only |
+| Secret | `STAGING_SSH_KNOWN_HOSTS` | the server's `known_hosts` line(s). See below. |
+| Variable | `STAGING_SERVICE_DIR` | `/srv/<service>` (the on-server project dir) — must match `^/[A-Za-z0-9._/-]+$` |
 | Variable | `STAGING_URL` | `https://api.staging.example.com` |
+
+#### Pin the host key (`STAGING_SSH_KNOWN_HOSTS`)
+
+The workflow will **not** run `ssh-keyscan`. Trusting whatever answers on port 22
+is a fresh trust-on-first-use decision on every run, made unattended — anyone who
+can intercept that first packet is handed the deploy key and runs the deploy
+script on their own box. The expected key is pinned instead.
+
+Generate it **once, from a network you trust** (ideally on the server itself):
+
+```bash
+# On the server — no network in the path at all:
+ssh-keyscan -t ed25519 localhost | sed "s/^localhost/<host-or-ip>/"
+
+# Or from your laptop, then verify the fingerprint out of band against
+# `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` run on the server:
+ssh-keyscan -t ed25519 <host-or-ip>
+```
+
+Paste the full line(s) into the secret. The workflow validates it with
+`ssh-keygen -l -f` and fails loudly if it is empty or malformed.
+
+**Rotate it whenever the server is rebuilt** — a new VM has a new host key, and
+the deploy will correctly refuse until this secret is updated.
+
+#### Give the server its own deploy key
+
+Agent forwarding is disabled, so the runner's key never reaches processes on the
+VM. The VM needs its own credential to `git fetch` — same procedure as
+production, in `docs/prod/README.md` § *Give the server its own deploy key*.
+Generate a **separate** key on the staging box rather than reusing production's,
+and register it as its own read-only deploy key.
+
+> A repository accepts a given deploy key **once**. If staging and production
+> both need read access to the same repo, either use two distinct keys (one per
+> box, which is what you want anyway) or a machine user — GitHub will reject the
+> second registration of an identical key.
 
 **Enable deploys.** The deploy job ships gated, so the template (and fresh
 clones) run CI but never deploy. To enable CD in a real project, **either**

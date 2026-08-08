@@ -28,6 +28,46 @@ const MEMBERSHIP_INCLUDE = {
   role: { select: { id: true, name: true, description: true, rank: true } },
 } as const;
 
+/**
+ * What the membership row said about a tenure, just before it was overwritten.
+ *
+ * The index signature is what makes this assignable to Prisma's
+ * `InputJsonObject` — an interface without one is not, and this value's only
+ * destination is `audit_logs.metadata`.
+ */
+export interface MembershipTenureSnapshot {
+  [field: string]: string | null;
+  status: string;
+  roleName: string;
+  joinedAt: string;
+  endedAt: string | null;
+}
+
+/**
+ * Freezes the tenure a re-join is about to overwrite, for the audit trail.
+ *
+ * `BusinessMembership` holds ONE row per (business, user) forever, so re-joining
+ * rewrites `joinedAt`, `endedAt`, `status`, and `roleId` in place. That is the
+ * deliberate model — see the note on the model in `schema.prisma` — and it means
+ * the row is current state, never a ledger. `audit_logs` is the ledger, and this
+ * is what it needs from the row before the update lands.
+ *
+ * Dates become ISO strings because the value goes into a `Json` column.
+ */
+export function describeTenure(previous: {
+  status: string;
+  joinedAt: Date;
+  endedAt: Date | null;
+  role: { name: string };
+}): MembershipTenureSnapshot {
+  return {
+    status: previous.status,
+    roleName: previous.role.name,
+    joinedAt: previous.joinedAt.toISOString(),
+    endedAt: previous.endedAt?.toISOString() ?? null,
+  };
+}
+
 // `User` is soft-deletable, and the `prisma.scoped` extension only filters
 // TOP-LEVEL reads — a nested `include` of a soft-deleted user would still
 // return it. Prisma offers no `where` on a to-one include, so the deleted user
@@ -121,53 +161,80 @@ export class BusinessMembershipsService {
     // the place the value is written rather than only where it is validated.
 
     const now = new Date();
-    const membership = await this.prisma.$transaction(async (transaction) => {
-      await this.businessOwnershipPolicy.lockBusiness(transaction, businessId);
+    const { membership, previousTenure } = await this.prisma.$transaction(
+      async (transaction) => {
+        // User row, then business row — the order in `row-lock.util.ts`. The
+        // target was resolved by email OUTSIDE this transaction, so without the
+        // re-read a deletion or deactivation committing in between would leave an
+        // ACTIVE membership — possibly an owner one — pointing at an account that
+        // can never use it.
+        await this.businessOwnershipPolicy.assertUserMayHoldActiveMembership(
+          transaction,
+          targetUser.id,
+        );
+        await this.businessOwnershipPolicy.lockBusiness(
+          transaction,
+          businessId,
+        );
 
-      const existing = await transaction.businessMembership.findUnique({
-        where: { businessId_userId: { businessId, userId: targetUser.id } },
-        select: { id: true, status: true },
-      });
+        const existing = await transaction.businessMembership.findUnique({
+          where: { businessId_userId: { businessId, userId: targetUser.id } },
+          select: {
+            id: true,
+            status: true,
+            joinedAt: true,
+            endedAt: true,
+            role: { select: { name: true } },
+          },
+        });
 
-      if (existing) {
-        const existingStatus = existing.status as BusinessMembershipStatus;
-        if (existingStatus !== BusinessMembershipStatus.LEFT) {
-          throw Errors.resourceConflict(
-            'That person already has a membership in this business',
-          );
+        if (existing) {
+          const existingStatus = existing.status as BusinessMembershipStatus;
+          if (existingStatus !== BusinessMembershipStatus.LEFT) {
+            throw Errors.resourceConflict(
+              'That person already has a membership in this business',
+            );
+          }
+          // Re-joining after leaving. `joinedAt` is reset because it records the
+          // start of the CURRENT tenure — preserving the original would claim a
+          // continuity of membership that did not happen. The tenure being
+          // overwritten is captured below and audited, because the audit trail is
+          // where this template keeps membership history.
+          const rejoined = await transaction.businessMembership.update({
+            where: { id: existing.id },
+            data: {
+              roleId: targetRole.id,
+              status: BusinessMembershipStatus.ACTIVE,
+              joinedAt: now,
+              endedAt: null,
+              notes: mayAnnotate ? dto.notes : undefined,
+              updatedBy: actorId,
+            },
+            include: MEMBERSHIP_INCLUDE,
+          });
+          return {
+            membership: rejoined,
+            previousTenure: describeTenure(existing),
+          };
         }
-        // Re-joining after leaving. `joinedAt` is reset because it records the
-        // start of the CURRENT stint — preserving the original would claim a
-        // continuity of membership that did not happen.
-        return transaction.businessMembership.update({
-          where: { id: existing.id },
+
+        const created = await transaction.businessMembership.create({
           data: {
+            businessId,
+            userId: targetUser.id,
             roleId: targetRole.id,
             status: BusinessMembershipStatus.ACTIVE,
             joinedAt: now,
-            endedAt: null,
+            invitedBy: actorId,
             notes: mayAnnotate ? dto.notes : undefined,
+            createdBy: actorId,
             updatedBy: actorId,
           },
           include: MEMBERSHIP_INCLUDE,
         });
-      }
-
-      return transaction.businessMembership.create({
-        data: {
-          businessId,
-          userId: targetUser.id,
-          roleId: targetRole.id,
-          status: BusinessMembershipStatus.ACTIVE,
-          joinedAt: now,
-          invitedBy: actorId,
-          notes: mayAnnotate ? dto.notes : undefined,
-          createdBy: actorId,
-          updatedBy: actorId,
-        },
-        include: MEMBERSHIP_INCLUDE,
-      });
-    });
+        return { membership: created, previousTenure: null };
+      },
+    );
 
     await this.permissionLoaderService.invalidateUser(targetUser.id);
     await this.auditService.record({
@@ -179,6 +246,11 @@ export class BusinessMembershipsService {
         membershipId: membership.id,
         roleId: targetRole.id,
         roleName: targetRole.name,
+        // The membership ROW only ever describes the current tenure, so a
+        // re-join silently overwrites the previous one. This is where the
+        // overwritten tenure survives.
+        isRejoin: previousTenure !== null,
+        previousTenure,
       },
     });
     return membership;
@@ -315,6 +387,13 @@ export class BusinessMembershipsService {
     );
 
     const membership = await this.prisma.$transaction(async (transaction) => {
+      // A role change is an owner-creation path whenever the new role is
+      // BUSINESS_OWNER, so it takes the target's user lock like every other one.
+      // `visible` was read before this transaction opened.
+      await this.businessOwnershipPolicy.assertUserMayHoldActiveMembership(
+        transaction,
+        visible.userId,
+      );
       await this.businessOwnershipPolicy.lockBusiness(transaction, businessId);
 
       const existing = await transaction.businessMembership.findFirst({
@@ -406,10 +485,15 @@ export class BusinessMembershipsService {
   /**
    * Ends a membership.
    *
-   * The row survives — `@@unique([businessId, userId])` depends on it, and the
-   * relationship is history worth keeping. `DELETE` is the HTTP verb because
-   * that is what the operation means to a client; the storage decision is ours,
-   * not theirs.
+   * The row survives — `@@unique([businessId, userId])` depends on it — moving
+   * to LEFT with `endedAt` stamped. `DELETE` is the HTTP verb because that is
+   * what the operation means to a client; the storage decision is ours, not
+   * theirs.
+   *
+   * The surviving row records the tenure that just ended, and keeps doing so
+   * only until the person re-joins on it. The durable record of this transition
+   * is the `business_membership.ended` audit event, which carries a full
+   * snapshot — see the note on `BusinessMembership` in `schema.prisma`.
    */
   async remove(
     businessId: string,
@@ -457,7 +541,27 @@ export class BusinessMembershipsService {
       this.loadSeededBusinessRole(SeededRoleName.BUSINESS_ADMIN),
     ]);
 
+    // Whose user row to lock, resolved before the transaction so the locks can
+    // be taken in the documented order. Safe to read early precisely because it
+    // is the one field of a membership that never changes: `userId` IS the row's
+    // identity, so a concurrent write cannot move this membership to somebody
+    // else. Everything else about the row is re-read under the lock below.
+    const visibleTarget = await this.findById(
+      businessId,
+      membershipId,
+      ability,
+    );
+    const incomingOwnerUserId = visibleTarget.userId;
+
     const membership = await this.prisma.$transaction(async (transaction) => {
+      // The incoming owner's user row, then the business row. The target is
+      // read below with a live-user filter, but a filter is not a lock: without
+      // this, a deletion committing between that read and the promotion hands
+      // the business its only owner on a dead account.
+      await this.businessOwnershipPolicy.assertUserMayHoldActiveMembership(
+        transaction,
+        incomingOwnerUserId,
+      );
       await this.businessOwnershipPolicy.lockBusiness(transaction, businessId);
 
       const target = await transaction.businessMembership.findFirst({
@@ -570,6 +674,16 @@ export class BusinessMembershipsService {
     );
 
     const membership = await this.prisma.$transaction(async (transaction) => {
+      // Only when the transition ENDS in ACTIVE. Reactivating a suspended owner
+      // re-creates an owner, so it races account deletion exactly the way a
+      // promotion does; suspending or ending a membership removes authority and
+      // cannot strand anything on a dead account.
+      if (options.to === BusinessMembershipStatus.ACTIVE) {
+        await this.businessOwnershipPolicy.assertUserMayHoldActiveMembership(
+          transaction,
+          visible.userId,
+        );
+      }
       await this.businessOwnershipPolicy.lockBusiness(transaction, businessId);
 
       const existing = await transaction.businessMembership.findFirst({

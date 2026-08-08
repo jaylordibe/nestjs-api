@@ -18,6 +18,10 @@ import { AbilityScopedQueryService } from '../../authorization/ability-scoped-qu
 import { PermissionLoaderService } from '../../authorization/permission-loader.service';
 import { BusinessOwnershipPolicy } from '../business-ownership.policy';
 import { BusinessRoleAssignmentPolicy } from '../business-role-assignment.policy';
+import {
+  describeTenure,
+  type MembershipTenureSnapshot,
+} from '../memberships/business-memberships.service';
 import { CreateBusinessInvitationDto } from './dto/create-business-invitation.dto';
 import type { BusinessInvitationRow } from './dto/business-invitation-response.dto';
 
@@ -420,9 +424,30 @@ export class BusinessInvitationsService {
     }
 
     const now = new Date();
-    let membershipId: string;
+    let accepted: {
+      membershipId: string;
+      previousTenure: MembershipTenureSnapshot | null;
+    };
     try {
-      membershipId = await this.prisma.$transaction(async (transaction) => {
+      accepted = await this.prisma.$transaction(async (transaction) => {
+        // An invitation carries a `roleId`, so acceptance is an owner-creation
+        // path like any other. The caller's account was checked by `JwtStrategy`
+        // one request ago and by `assertIsInvitee` a moment ago — neither under a
+        // lock, so a deletion or deactivation committing in between would leave
+        // an ACTIVE membership on an account that can never use it.
+        //
+        // User row, then business row: the order in `row-lock.util.ts`. The
+        // business lock is what serialises this against every roster mutation;
+        // acceptance previously took no lock at all.
+        await this.businessOwnershipPolicy.assertUserMayHoldActiveMembership(
+          transaction,
+          actor.id,
+        );
+        await this.businessOwnershipPolicy.lockBusiness(
+          transaction,
+          invitation.businessId,
+        );
+
         const consumed = await transaction.businessInvitation.updateMany({
           where: {
             id: invitation.id,
@@ -439,6 +464,24 @@ export class BusinessInvitationsService {
         if (consumed.count !== 1) {
           throw new InvitationAlreadyConsumedError();
         }
+
+        // Read BEFORE the upsert: this is the last moment the tenure about to be
+        // overwritten is still readable, and `audit_logs` is where this template
+        // keeps membership history.
+        const previous = await transaction.businessMembership.findUnique({
+          where: {
+            businessId_userId: {
+              businessId: invitation.businessId,
+              userId: actor.id,
+            },
+          },
+          select: {
+            status: true,
+            joinedAt: true,
+            endedAt: true,
+            role: { select: { name: true } },
+          },
+        });
 
         // Upsert, because someone who previously LEFT still owns the only row
         // `@@unique([businessId, userId])` will ever allow. `joinedAt` is
@@ -470,7 +513,10 @@ export class BusinessInvitationsService {
           },
           select: { id: true },
         });
-        return membership.id;
+        return {
+          membershipId: membership.id,
+          previousTenure: previous ? describeTenure(previous) : null,
+        };
       });
     } catch (error) {
       if (error instanceof InvitationAlreadyConsumedError) {
@@ -488,11 +534,21 @@ export class BusinessInvitationsService {
       metadata: {
         businessId: invitation.businessId,
         invitationId: invitation.id,
-        membershipId,
+        membershipId: accepted.membershipId,
+        roleId: invitation.roleId,
+        // Accepting an invitation is a JOIN, and a former member accepting one
+        // re-uses their existing row. Same reasoning as
+        // `business_membership.added`: the row is current state, so the tenure
+        // it replaces only survives here.
+        isRejoin: accepted.previousTenure !== null,
+        previousTenure: accepted.previousTenure,
       },
     });
 
-    return { businessId: invitation.businessId, membershipId };
+    return {
+      businessId: invitation.businessId,
+      membershipId: accepted.membershipId,
+    };
   }
 
   // ── helpers ────────────────────────────────────────────────────────────

@@ -65,7 +65,7 @@ The `TOKEN_*` / `SESSION_INVALIDATED` / `USER_INACTIVE` cluster is the only set 
 | `TOKEN_INVALID` | Token malformed / bad signature / `iss` or `aud` mismatch / has a `purpose` claim. | ✅ |
 | `TOKEN_EXPIRED` | Token `exp` claim is in the past. | ✅ |
 | `TOKEN_REVOKED` | Token `jti` is in the Redis logout blocklist (the user explicitly logged this session out). | ✅ |
-| `SESSION_INVALIDATED` | Token `iat` predates `passwordChangedAt` — password rotated, email changed, or `/auth/logout-all` was called. | ✅ |
+| `SESSION_INVALIDATED` | Token `iat` predates `passwordChangedAt`, the session cutoff. Every path that ends sessions moves it: password change or reset, email change, `/auth/logout-all`, support-initiated `POST /users/:id/revoke-sessions`, account deactivation, soft deletion, and GDPR erasure. | ✅ |
 | `USER_INACTIVE` | User row missing / `isActive=false` / soft-deleted. Collapsed to one code to avoid enumeration leaks. | ✅ |
 | `INVALID_CREDENTIALS` | `/auth/login` wrong email/password or account locked (timing-equalized). | ❌ |
 | `EMAIL_NOT_VERIFIED` | Login blocked: `emailVerifiedAt` is null. | ❌ |
@@ -99,7 +99,7 @@ The `TOKEN_*` / `SESSION_INVALIDATED` / `USER_INACTIVE` cluster is the only set 
 
 | Code | Status | Trigger | `details` shape |
 |---|---|---|---|
-| `LAST_OWNER_PROTECTED` | 409 | The operation would leave a live business with no active owner: removing, demoting, or suspending the last one — or **deleting the account of somebody who solely owns a business** (`DELETE /users/me`, `DELETE /users/:id`). Fires for **every** caller, platform admins included: it is a data-integrity invariant, not an authorization rule. | `{ businesses: { id, name }[] }` on the account-deletion paths, so the caller can act; `null` on the membership paths, where they already named the business. |
+| `LAST_OWNER_PROTECTED` | 409 | The operation would leave a live business with no owner who can act: removing, demoting, or suspending the last one — or **taking the account of somebody who solely owns a business out of service**, which means `DELETE /users/me`, `DELETE /users/:id`, and `PATCH /users/:id` with `{ "isActive": false }`. Deactivation counts because an inactive account cannot authenticate, so the business is just as unadministrable as if the owner had been deleted. Fires for **every** caller, platform admins included: it is a data-integrity invariant, not an authorization rule. | `{ businesses: { id, name }[] }` on the account paths, so the caller can act; `null` on the membership paths, where they already named the business. |
 | `MEMBERSHIP_NOT_ACTIVE` | 409 | The membership exists but is not in a state that permits this operation. | `{ status: string }` |
 | `ROLE_NOT_ASSIGNABLE` | 403 | The role is out of scope, above the caller's rank ceiling, or privileged while the caller holds no `assignRole BusinessMembership`. **One code for all three**, so a caller probing for escalation cannot learn which wall they hit; the remedy is the same either way. | `null` |
 | `INVITATION_INVALID` | 400 | Unknown, consumed, revoked, rotated by a resend, addressed to a different account, or presented by a caller who has not verified control of the invited address. **Deliberately indistinguishable**, so a token cannot be probed. | `null` |

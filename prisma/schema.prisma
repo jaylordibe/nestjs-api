@@ -264,6 +264,21 @@ model UserRole {
 /// `@@unique([businessId, userId])` is an UNCONDITIONAL database constraint —
 /// see `BusinessMembershipStatus` for why soft deletion cannot express it.
 ///
+/// **This row is CURRENT STATE, not a ledger.** One row per pair means a former
+/// member who re-joins reuses the row they already have: `status`, `roleId`,
+/// `joinedAt`, and `endedAt` are all overwritten, and the tenure that was there
+/// before is gone from the table. That is the deliberate trade for "exactly one
+/// current role per person per business" being a database constraint rather than
+/// an application convention.
+///
+/// The HISTORY lives in `audit_logs`. Every transition — join, re-join,
+/// invitation accepted, leave, suspend, reactivate, role change, ownership
+/// transfer — writes an immutable event, and the two paths that overwrite a
+/// tenure (`BusinessMembershipsService.add` and
+/// `BusinessInvitationsService.accept`) carry the replaced tenure in
+/// `metadata.previousTenure`. Report on tenure from those events, never by
+/// reading `joinedAt` and assuming it is the first one.
+///
 /// ONLY `status = 'active'` grants authority. That filter lives in
 /// `PermissionLoaderService`'s grant query, not in a guard: a guard runs before
 /// the row is loaded and therefore cannot see a status at all.
@@ -286,12 +301,18 @@ model BusinessMembership {
   /// constrained by the TS enum and `@IsEnum`, so widening the lifecycle needs
   /// no migration.
   status     String    @default("active")
-  /// When they first became active here. NOT NULL: a membership row now exists
-  /// only once somebody has actually joined, and it is preserved across a
-  /// suspend/reactivate cycle so "member since" stays true.
+  /// When the CURRENT tenure began. NOT NULL: a membership row exists only once
+  /// somebody has actually joined.
+  ///
+  /// Preserved across a suspend/reactivate cycle, so "member since" stays true
+  /// for the tenure in progress — but REWRITTEN when somebody who left re-joins,
+  /// because the row describes the relationship as it stands now. It is not
+  /// "first joined", and reporting that would be wrong for anyone on their
+  /// second stint. The replaced value is audited; see the note on this model.
   joinedAt   DateTime  @map("joined_at")
-  /// When the relationship ended. Set alongside `status = 'left'`, cleared if
-  /// they re-join on the same row.
+  /// When the current tenure ended. Set alongside `status = 'left'`, and cleared
+  /// when they re-join on the same row — at which point the closed tenure exists
+  /// only in `audit_logs`.
   endedAt    DateTime? @map("ended_at")
   invitedBy  String?   @map("invited_by") @db.Uuid
   /// Staff-visible annotation on the relationship (preferences, allergies…).

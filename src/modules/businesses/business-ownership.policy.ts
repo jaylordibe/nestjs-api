@@ -3,6 +3,11 @@ import { Prisma } from '@prisma/client';
 import { BusinessMembershipStatus } from '../../common/enums/business-membership-status.enum';
 import { SeededRoleName } from '../../common/enums/seeded-role-name.enum';
 import { Errors } from '../../common/errors/errors';
+import {
+  lockBusinessRow,
+  lockBusinessRows,
+  lockUserRow,
+} from '../../common/util/row-lock.util';
 
 /** A live business whose only remaining active owner is the user in question. */
 export interface SolelyOwnedBusiness {
@@ -35,6 +40,13 @@ export interface ClosedBusinessesResult {
  *
  * Every method takes a `Prisma.TransactionClient`. Checking the invariant
  * outside the transaction that acts on it is the same as not checking it.
+ *
+ * **Lock order: the user row, then the business row.** Both are taken from
+ * `src/common/util/row-lock.util.ts`, which is where the order is documented and
+ * why. Any mutation that can leave somebody holding — or no longer holding — an
+ * ACTIVE owner membership must take BOTH, in that order: the business lock alone
+ * cannot serialise against an account deletion, because a deletion only knows to
+ * lock the businesses the account ALREADY owns.
  */
 @Injectable()
 export class BusinessOwnershipPolicy {
@@ -50,28 +62,41 @@ export class BusinessOwnershipPolicy {
     transaction: Prisma.TransactionClient,
     businessId: string,
   ): Promise<void> {
-    await transaction.$queryRaw`SELECT id FROM businesses WHERE id = ${businessId}::uuid FOR UPDATE`;
+    await lockBusinessRow(transaction, businessId);
   }
 
   /**
-   * Lock several businesses, always in ascending id order.
+   * The gate on every write that leaves someone with an ACTIVE membership.
    *
-   * Two users who co-own the same two businesses can be deleted concurrently;
-   * without a total order on the locks, one transaction takes A then B while the
-   * other takes B then A, and Postgres resolves it by killing one with a
-   * deadlock error the caller never asked for.
+   * Locks the target's user row and RE-READS it. Both halves matter, and the
+   * re-read is the one that is easy to leave out: a target resolved before the
+   * transaction — by email in `add`, by `invitedUserId` in `accept`, by the
+   * membership row in `changeRole` — was read without the lock held, so a
+   * deletion or deactivation can commit between that read and the write.
    *
-   * Locked one statement at a time on purpose. `... WHERE id IN (…) ORDER BY id
-   * FOR UPDATE` looks equivalent and is not: the row locks are taken during the
-   * scan, which is free to run in physical order, and the sort happens
-   * afterwards — so the ORDER BY does not order the locking.
+   * Any path accepting a `roleId` is a potential owner-creation path, so this is
+   * applied to all of them rather than to the ones named "transfer ownership".
+   * Getting an ACTIVE owner membership onto a dead account is the failure this
+   * prevents, and that row is invisible to every roster read — nobody would find
+   * it to repair it.
+   *
+   * Reports the SAME 404 an unknown user gets. A caller who may add members is
+   * not thereby entitled to learn that a particular address belongs to a
+   * deactivated account.
    */
-  async lockBusinesses(
+  async assertUserMayHoldActiveMembership(
     transaction: Prisma.TransactionClient,
-    businessIds: readonly string[],
+    userId: string,
   ): Promise<void> {
-    for (const businessId of [...businessIds].sort()) {
-      await this.lockBusiness(transaction, businessId);
+    await lockUserRow(transaction, userId);
+    // The raw client: a `$transaction` callback is unscoped, so the soft-delete
+    // filter does not apply and `deletedAt` has to be named explicitly.
+    const user = await transaction.user.findFirst({
+      where: { id: userId, deletedAt: null, isActive: true },
+      select: { id: true },
+    });
+    if (!user) {
+      throw Errors.resourceNotFound('User');
     }
   }
 
@@ -91,7 +116,7 @@ export class BusinessOwnershipPolicy {
       where: {
         businessId,
         id: { not: excludingMembershipId },
-        ...ACTIVE_OWNER_OF_LIVE_ACCOUNT,
+        ...ACTIVE_OWNER_OF_USABLE_ACCOUNT,
       },
     });
     if (remainingOwners === 0) {
@@ -128,16 +153,17 @@ export class BusinessOwnershipPolicy {
     }
 
     const ownedBusinessIds = ownedBusinesses.map(({ business }) => business.id);
-    await this.lockBusinesses(transaction, ownedBusinessIds);
+    await lockBusinessRows(transaction, ownedBusinessIds);
 
     const businessesWithCoOwner = await transaction.businessMembership.groupBy({
       by: ['businessId'],
       where: {
         businessId: { in: ownedBusinessIds },
-        // Somebody OTHER than the user being removed, and holding a live
-        // account. An owner whose account is gone is not an owner.
+        // Somebody OTHER than the user being removed, and holding an account
+        // that can still sign in. An owner whose account is gone — or switched
+        // off — is not an owner.
         userId: { not: userId },
-        ...ACTIVE_OWNER_OF_LIVE_ACCOUNT,
+        ...ACTIVE_OWNER_OF_USABLE_ACCOUNT,
       },
     });
     const stillOwnedByAnother = new Set(
@@ -150,14 +176,21 @@ export class BusinessOwnershipPolicy {
   }
 
   /**
-   * Deletion path: refuse to strand a business.
+   * Deletion and deactivation path: refuse to strand a business.
    *
-   * Closing an account must not silently destroy a tenant's administrability, so
-   * this is a hard refusal rather than a cascade. The remedy is in the caller's
-   * own hands — transfer ownership, or delete the business first — which is why
-   * the response names the businesses instead of asking them to guess.
+   * Taking an account out of service must not silently destroy a tenant's
+   * administrability, so this is a hard refusal rather than a cascade. The remedy
+   * is in the caller's own hands — transfer ownership, or delete the business
+   * first — which is why the response names the businesses instead of asking
+   * them to guess.
+   *
+   * Deletion and deactivation share it because they share the outcome: an
+   * inactive account cannot authenticate, so a business whose only owner is
+   * deactivated is exactly as unadministrable as one whose owner was deleted.
+   * Erasure is the one path that does NOT call this — see
+   * {@link closeSolelyOwnedBusinesses}.
    */
-  async assertUserMayBeDeleted(
+  async assertUserIsNotASoleOwner(
     transaction: Prisma.TransactionClient,
     userId: string,
   ): Promise<void> {
@@ -173,7 +206,7 @@ export class BusinessOwnershipPolicy {
   /**
    * Erasure path: close the businesses instead of refusing.
    *
-   * The asymmetry with `assertUserMayBeDeleted` is deliberate. Erasure answers a
+   * The asymmetry with `assertUserIsNotASoleOwner` is deliberate. Erasure answers a
    * legal obligation and cannot be declined because of a commercial
    * relationship, so the businesses are soft-deleted in the same transaction —
    * never left ownerless, never left live.
@@ -223,13 +256,20 @@ const ACTIVE_OWNER = {
 } as const;
 
 /**
- * …and whose account still exists.
+ * …and whose account can still sign in.
  *
- * Every ownership COUNT must compose this. Omitting it was the phantom-owner
- * defect: a business with one live owner and one soft-deleted owner counted two,
- * so the live one could remove or demote themselves and leave nobody behind.
+ * Every ownership COUNT must compose this. Omitting `deletedAt` was the
+ * phantom-owner defect: a business with one live owner and one soft-deleted
+ * owner counted two, so the live one could remove or demote themselves and leave
+ * nobody behind.
+ *
+ * `isActive` is here for the identical reason. `JwtStrategy` refuses an inactive
+ * account on every request, so an owner who has been deactivated administers
+ * nothing — counting them keeps the arithmetic tidy while the business is just
+ * as stranded. The predicate is "an owner who can actually act", not "an owner
+ * row that still exists".
  */
-const ACTIVE_OWNER_OF_LIVE_ACCOUNT = {
+const ACTIVE_OWNER_OF_USABLE_ACCOUNT = {
   ...ACTIVE_OWNER,
-  user: { deletedAt: null },
+  user: { deletedAt: null, isActive: true },
 } as const;

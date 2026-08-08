@@ -754,4 +754,160 @@ describe('Business memberships (e2e)', () => {
       expect((response.body as MembershipBody).notes).toBe('Allergic to nuts');
     });
   });
+
+  /**
+   * The membership row is CURRENT STATE; `audit_logs` is the history.
+   *
+   * One row per (business, user) forever is what makes "exactly one current role
+   * per person per business" a database constraint. The trade is that re-joining
+   * overwrites `joinedAt`, `endedAt`, `status`, and `roleId` in place — so the
+   * previous tenure has to survive somewhere else, or it is simply lost. These
+   * assert both halves: still one row, and the overwritten tenure recorded.
+   */
+  describe('membership history lives in the audit trail', () => {
+    it('re-joining reuses the one row and records the tenure it replaced', async () => {
+      const prisma = app.get(PrismaService);
+      const returner = await createRegularUser(app, 'returner@example.com');
+      const membershipId = await addMembership(
+        app,
+        business.id,
+        returner.id,
+        SeededRoleName.BUSINESS_MEMBER,
+      );
+      const firstTenure = await prisma.businessMembership.findUniqueOrThrow({
+        where: { id: membershipId },
+        select: { joinedAt: true },
+      });
+
+      await request(app.getHttpServer())
+        .delete(`${membershipsUrl()}/${membershipId}`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .expect(204);
+
+      const rejoined = await request(app.getHttpServer())
+        .post(membershipsUrl())
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({
+          email: returner.email,
+          roleId: await roleIdFor(app, SeededRoleName.BUSINESS_ADMIN),
+        })
+        .expect(201);
+
+      // Still exactly one CURRENT membership — no duplicate, and the same row.
+      expect((rejoined.body as MembershipBody).id).toBe(membershipId);
+      expect(
+        await prisma.businessMembership.count({
+          where: { businessId: business.id, userId: returner.id },
+        }),
+      ).toBe(1);
+
+      // The row now describes only the new tenure…
+      const currentTenure = await prisma.businessMembership.findUniqueOrThrow({
+        where: { id: membershipId },
+        select: {
+          joinedAt: true,
+          endedAt: true,
+          role: { select: { name: true } },
+        },
+      });
+      expect(currentTenure.endedAt).toBeNull();
+      expect(currentTenure.role.name).toBe(SeededRoleName.BUSINESS_ADMIN);
+      expect(currentTenure.joinedAt.getTime()).toBeGreaterThan(
+        firstTenure.joinedAt.getTime(),
+      );
+
+      // …and the one it replaced is in the audit trail, which is the ONLY place
+      // it still exists.
+      const rejoinEvent = await prisma.auditLog.findFirstOrThrow({
+        where: {
+          action: 'business_membership.added',
+          targetUserId: returner.id,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      const metadata = rejoinEvent.metadata as {
+        isRejoin?: boolean;
+        previousTenure?: {
+          status?: string;
+          roleName?: string;
+          endedAt?: string;
+        };
+      };
+      expect(metadata.isRejoin).toBe(true);
+      expect(metadata.previousTenure?.status).toBe(
+        BusinessMembershipStatus.LEFT,
+      );
+      expect(metadata.previousTenure?.roleName).toBe(
+        SeededRoleName.BUSINESS_MEMBER,
+      );
+      expect(metadata.previousTenure?.endedAt).not.toBeNull();
+
+      // The departure is recorded too, so the closed tenure is reconstructible
+      // from both ends.
+      const endedEvent = await prisma.auditLog.findFirst({
+        where: {
+          action: 'business_membership.ended',
+          targetUserId: returner.id,
+        },
+      });
+      expect(endedEvent).not.toBeNull();
+    });
+
+    it('a first join is recorded as a join, not a re-join', async () => {
+      const prisma = app.get(PrismaService);
+      const newcomer = await createRegularUser(app, 'newcomer@example.com');
+
+      await request(app.getHttpServer())
+        .post(membershipsUrl())
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({
+          email: newcomer.email,
+          roleId: await roleIdFor(app, SeededRoleName.BUSINESS_MEMBER),
+        })
+        .expect(201);
+
+      const event = await prisma.auditLog.findFirstOrThrow({
+        where: {
+          action: 'business_membership.added',
+          targetUserId: newcomer.id,
+        },
+      });
+      const metadata = event.metadata as {
+        isRejoin?: boolean;
+        previousTenure?: unknown;
+      };
+      expect(metadata.isRejoin).toBe(false);
+      expect(metadata.previousTenure).toBeNull();
+    });
+
+    it('the founding owner membership is audited as a join', async () => {
+      const prisma = app.get(PrismaService);
+      const founder = await createRegularUser(app, 'founder@example.com');
+
+      const created = await request(app.getHttpServer())
+        .post('/api/businesses')
+        .set('Authorization', `Bearer ${founder.token}`)
+        .send({ name: 'Founded Co', slug: 'founded-co' })
+        .expect(201);
+      const createdBusinessId = (created.body as { id: string }).id;
+
+      // Every business starts with exactly one tenure — its owner's. Without
+      // this event that one has no recorded beginning, which makes the audit
+      // trail an unreliable history precisely for the most important role.
+      const event = await prisma.auditLog.findFirstOrThrow({
+        where: {
+          action: 'business_membership.added',
+          targetUserId: founder.id,
+        },
+      });
+      const metadata = event.metadata as {
+        businessId?: string;
+        roleName?: string;
+        isFoundingOwner?: boolean;
+      };
+      expect(metadata.businessId).toBe(createdBusinessId);
+      expect(metadata.roleName).toBe(SeededRoleName.BUSINESS_OWNER);
+      expect(metadata.isFoundingOwner).toBe(true);
+    });
+  });
 });
