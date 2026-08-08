@@ -456,8 +456,24 @@ describe('Ownership promotion races (e2e)', () => {
       const statuses = outcomes.map((outcome) =>
         outcome.status === 'fulfilled' ? outcome.value.status : 0,
       );
+      // Exactly one succeeds; the other is refused. The refusal CODE is
+      // deliberately not pinned, because two different guards can catch the
+      // loser and which one does is genuinely racy:
+      //
+      //   409 LAST_OWNER_PROTECTED — the loser's own demotion is evaluated
+      //       while they are still an owner, and it would empty the business.
+      //   403 ROLE_NOT_ASSIGNABLE  — the winner's demotion committed first, so
+      //       the loser is now a rank-70 admin trying to act on a rank-100
+      //       owner, and the rank ceiling refuses them earlier.
+      //
+      // Both are correct refusals and both preserve the invariant. Asserting
+      // 409 specifically made this pass alone and fail under the parallel
+      // suite — the assertion was wrong, not the code.
       expect(statuses.filter((status) => status === 200)).toHaveLength(1);
-      expect(statuses.filter((status) => status === 409)).toHaveLength(1);
+      expect(
+        statuses.filter((status) => status === 403 || status === 409),
+      ).toHaveLength(1);
+      // What actually matters, asserted on the database.
       expect(await activeOwnerCount(business.id)).toBe(1);
       await assertEveryLiveBusinessHasAUsableOwner();
     });

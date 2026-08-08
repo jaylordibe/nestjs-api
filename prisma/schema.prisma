@@ -96,6 +96,14 @@ model User {
 /// truth is simpler than a signed token plus a store that can disagree with it.
 model RefreshToken {
   id         String    @id @default(uuid()) @db.Uuid
+  /// When the session decision was made — written EXPLICITLY by
+  /// `RefreshTokenService.persist`, not left to the default.
+  ///
+  /// The same instant is signed into the accompanying access token's `iat`, so
+  /// both halves of one session agree about when it began. Letting Postgres
+  /// evaluate `now()` at INSERT time instead would put the row a hair after the
+  /// value the token carries, and the two can straddle a second boundary. The
+  /// default remains for rows written outside that path.
   createdAt  DateTime  @default(now()) @map("created_at")
   userId     String    @map("user_id") @db.Uuid
   /// SHA-256 of the opaque token, hex-encoded. The token itself is returned to

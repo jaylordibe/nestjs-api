@@ -502,6 +502,18 @@ export class RefreshTokenService {
         userId,
         familyId,
         tokenHash: hashOpaqueToken(token),
+        // Written explicitly rather than left to `@default(now())`, so the row
+        // and the access token that accompanies it carry the SAME instant.
+        //
+        // The default is evaluated by Postgres when the INSERT executes, which
+        // is strictly after this value was captured — so the two can land on
+        // opposite sides of a second boundary. The skew is in the safe
+        // direction (`iat` would be one second older than the row it describes,
+        // making the access token die slightly sooner) but the two halves of
+        // one session disagreeing about when it began is a fact nobody should
+        // have to reason about, and `rotate` compares this column against the
+        // session cutoff.
+        createdAt: issuedAt,
         expiresAt,
         userAgent: context.userAgent ?? null,
         ipAddress: context.ipAddress ?? null,

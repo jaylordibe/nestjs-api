@@ -268,6 +268,14 @@ describe('Session issuance races (e2e)', () => {
     it('binds the access token iat to the refresh row, not to signing time', async () => {
       // The mechanism, asserted directly, so a future refactor that goes back
       // to reading the clock at signing time fails here rather than in a race.
+      //
+      // Exact by construction, not merely usually-true: `persist` writes
+      // `createdAt` from the same captured instant it returns as `issuedAt`,
+      // rather than letting Postgres evaluate `now()` at INSERT time. Left to
+      // the default, the row would be stamped a hair after the token and the
+      // two could straddle a second boundary — making this assertion flaky and,
+      // worse, making the row and the token disagree about when the session
+      // began.
       const user = await createRegularUser(app, 'stamped@example.com');
       const pair = await loginPair(user.email);
 
