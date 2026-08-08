@@ -92,6 +92,65 @@ export function pauseBefore<Target extends object>(
 }
 
 /**
+ * Blocks the first call to `target[method]` AFTER it has run, before returning.
+ *
+ * The counterpart to {@link pauseBefore}, for the other kind of gap: not "what
+ * this request read is now stale", but "this request has already committed
+ * something, and the rest of its work has not happened yet". Pausing here is
+ * safe for the same reason pausing before a lock is — the transaction inside the
+ * wrapped method has closed, so nothing is held while the racer runs.
+ *
+ * The case it exists for is session issuance: the refresh row commits inside the
+ * method, and the access token is signed by the caller afterwards. A revocation
+ * landing between those two is invisible to a `pauseBefore` test, because that
+ * one releases before either has happened.
+ */
+export function pauseAfter<Target extends object>(
+  target: Target,
+  method: keyof Target & string,
+): Pause {
+  const original = target[method];
+  if (typeof original !== 'function') {
+    throw new TypeError(`${String(method)} is not a method on the target`);
+  }
+
+  let announceReached: () => void;
+  const reached = new Promise<void>((resolve) => {
+    announceReached = resolve;
+  });
+  let openGate: () => void;
+  const gate = new Promise<void>((resolve) => {
+    openGate = resolve;
+  });
+
+  let isFirstCall = true;
+  const wrapped = async function pausedOnce(
+    this: unknown,
+    ...args: unknown[]
+  ): Promise<unknown> {
+    const result = await (
+      original as (...callArgs: unknown[]) => Promise<unknown>
+    ).apply(this, args);
+    if (isFirstCall) {
+      isFirstCall = false;
+      announceReached();
+      await gate;
+    }
+    return result;
+  };
+
+  (target as Record<string, unknown>)[method] = wrapped;
+
+  return {
+    reached,
+    release: () => openGate(),
+    restore: () => {
+      (target as Record<string, unknown>)[method] = original;
+    },
+  };
+}
+
+/**
  * Runs `racer` while `pausedRequest` is held at its seam, then releases it.
  *
  * The shape every race test wants: start the request that will be interrupted,

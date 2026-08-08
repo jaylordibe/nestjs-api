@@ -228,12 +228,13 @@ export class AuthService {
       context,
     );
 
-    // Same reason as in `buildLoginResponse`: an access token signed inside the
-    // second a cutoff landed in is born rejected.
-    await waitForSessionCutoff(user.passwordChangedAt);
-
     return {
-      accessToken: this.signAccessToken(user.id),
+      // Stamped with the instant the rotation committed, not the clock as it
+      // reads now — see `IssuedRefreshToken.issuedAt`. `rotate` has already
+      // proven the presented token postdates the current cutoff, so the child
+      // it minted does too, and this access token inherits that proof rather
+      // than re-deriving it from a later reading.
+      accessToken: this.signAccessToken(user.id, refreshToken.issuedAt),
       refreshToken: refreshToken.token,
       user: new UserResponseDto(user),
     };
@@ -367,17 +368,33 @@ export class AuthService {
       context,
     );
     return {
-      accessToken: this.signAccessToken(user.id),
+      accessToken: this.signAccessToken(user.id, refreshToken.issuedAt),
       refreshToken: refreshToken.token,
       user: new UserResponseDto(user),
     };
   }
 
-  // `jwtid` sets the `jti` claim: one per token, so `/auth/logout` can revoke
-  // this specific access token through the Redis blocklist without touching
-  // the user's other devices.
-  private signAccessToken(userId: string): string {
-    const payload: JwtPayload = { sub: userId };
+  /**
+   * `jwtid` sets the `jti` claim: one per token, so `/auth/logout` can revoke
+   * this specific access token through the Redis blocklist without touching the
+   * user's other devices.
+   *
+   * `iat` is the instant the session decision COMMITTED, passed in rather than
+   * read from the clock here. The two tokens of one session must carry one
+   * timestamp: signing from a fresh reading opens a window between the refresh
+   * row committing and this line running, and a revoke-all landing in that
+   * window writes a cutoff the access token can then be stamped past. The
+   * refresh token dies and the access token lives — precisely the split this
+   * whole protocol exists to prevent. Nothing bounds that window, because a GC
+   * pause or a starved event loop is enough to widen it past a second boundary.
+   */
+  private signAccessToken(userId: string, issuedAt: Date): string {
+    const payload: JwtPayload = {
+      sub: userId,
+      // Whole seconds, per RFC 7519 §4.1.6. `expiresIn` is computed from this
+      // value by `jsonwebtoken`, so `exp` stays consistent with it.
+      iat: Math.floor(issuedAt.getTime() / 1000),
+    };
     return this.jwtService.sign(payload, { jwtid: randomUUID() });
   }
 }

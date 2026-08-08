@@ -4,7 +4,7 @@ import { App } from 'supertest/types';
 import { hashOpaqueToken } from '../src/common/util/opaque-token.util';
 import { RefreshTokenService } from '../src/modules/auth/refresh-token.service';
 import { PrismaService } from '../src/prisma/prisma.service';
-import { pauseBefore, runRace } from './setup/barrier';
+import { pauseAfter, pauseBefore, runRace } from './setup/barrier';
 import { truncateAll } from './setup/db';
 import {
   createPlatformAdmin,
@@ -201,6 +201,86 @@ describe('Session issuance races (e2e)', () => {
         where: { id: user.id },
       });
       expect(deleted.deletedAt).not.toBeNull();
+    });
+  });
+
+  /**
+   * The gap BETWEEN the two halves of one session.
+   *
+   * Every race above pauses before `issueForNewSession`, so neither token
+   * exists yet when the revocation lands. That leaves a second, narrower window
+   * untested: the refresh row has COMMITTED and the access token has not been
+   * signed. A revocation landing there revokes the row it can see and writes a
+   * cutoff — and if the access token is then stamped from a fresh clock reading
+   * that has crossed a second boundary, its `iat` postdates that cutoff and it
+   * survives. The refresh token dies, the access token lives.
+   *
+   * Nothing in the request path bounds how long that window is: a GC pause or a
+   * starved event loop is enough. `pauseAfter` makes it arbitrarily wide and
+   * therefore deterministic.
+   *
+   * The fix under test is that `iat` comes from `IssuedRefreshToken.issuedAt` —
+   * the instant captured inside the locked transaction — rather than from the
+   * clock at signing time.
+   */
+  describe('the window between issuing the refresh row and signing the access token', () => {
+    it('leaves the access token dead when revoke-all lands in it', async () => {
+      const user = await createRegularUser(app, 'sliced@example.com');
+      const opener = await loginPair(user.email);
+
+      const paused = pauseAfter(refreshTokenService, 'issueForNewSession');
+      const outcome = await runRace(login(user.email), paused, async () => {
+        const revocation = await request(app.getHttpServer())
+          .post('/api/auth/logout-all')
+          .set('Authorization', `Bearer ${opener.accessToken}`)
+          .expect(204);
+        // Hold the login past the cutoff's SECOND BOUNDARY before releasing it.
+        //
+        // Not padding — without this the test cannot fail. The cutoff is
+        // rounded up to the next whole second, so a sub-second delay between
+        // the revocation and the signing is absorbed: `floor(now)` is still
+        // less than `ceil(revokedAt)` and even a clock-derived `iat` lands
+        // dead. The defect only appears once signing crosses into the next
+        // second, which is exactly what a GC pause or a starved event loop
+        // does in production and what this makes deterministic.
+        await new Promise((resolve) => setTimeout(resolve, 1_200));
+        return revocation;
+      });
+
+      // The login COMMITS — its refresh row was already written when the
+      // revocation ran — so unlike the races above it returns a 200 with a
+      // full token pair. That is expected, and it is exactly why asserting on
+      // the status code would prove nothing here.
+      expect(outcome.paused.status).toBe('fulfilled');
+      const response =
+        outcome.paused.status === 'fulfilled' ? outcome.paused.value : null;
+      expect(response?.status).toBe(200);
+      const issued = response?.body as TokenPair;
+
+      // Both halves must be dead. The refresh row was swept by the revocation;
+      // the access token must be stamped with the instant the row was created,
+      // which predates the cutoff the revocation wrote.
+      expect(await accessTokenWorks(issued.accessToken)).toBe(false);
+      expect(await refreshTokenWorks(issued.refreshToken)).toBe(false);
+      expect(await liveRefreshRowCount(user.id)).toBe(0);
+    });
+
+    it('binds the access token iat to the refresh row, not to signing time', async () => {
+      // The mechanism, asserted directly, so a future refactor that goes back
+      // to reading the clock at signing time fails here rather than in a race.
+      const user = await createRegularUser(app, 'stamped@example.com');
+      const pair = await loginPair(user.email);
+
+      const [, payloadSegment] = pair.accessToken.split('.');
+      const payload = JSON.parse(
+        Buffer.from(payloadSegment, 'base64url').toString('utf8'),
+      ) as { iat: number };
+      const row = await prisma.refreshToken.findUniqueOrThrow({
+        where: { tokenHash: hashOpaqueToken(pair.refreshToken) },
+        select: { createdAt: true },
+      });
+
+      expect(payload.iat).toBe(Math.floor(row.createdAt.getTime() / 1000));
     });
   });
 

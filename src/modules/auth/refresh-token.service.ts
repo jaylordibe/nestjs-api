@@ -29,6 +29,21 @@ export interface IssuedRefreshToken {
   // forgotten — the database holds a digest.
   readonly token: string;
   readonly expiresAt: Date;
+  /**
+   * When the session decision was made, INSIDE the lock.
+   *
+   * The caller signs its access token with this as `iat` rather than reading
+   * the clock again afterwards. Both halves of the session then carry the same
+   * instant, so a revocation that commits after the decision kills the access
+   * token as surely as it kills the refresh row.
+   *
+   * Signing from a later wall-clock reading leaves a gap: if the response is
+   * delayed past a second boundary — a GC pause, a starved event loop, a busy
+   * CPU — the token is stamped with an `iat` NEWER than the cutoff a
+   * revocation wrote in between, and survives it. Narrow, but not zero, and
+   * nothing about the request path bounds that delay.
+   */
+  readonly issuedAt: Date;
 }
 
 /**
@@ -475,8 +490,12 @@ export class RefreshTokenService {
     transaction: Pick<PrismaService, 'refreshToken'>,
   ): Promise<IssuedRefreshToken> {
     const token = generateOpaqueToken();
+    // The authoritative instant of the session decision. Captured here, under
+    // the lock and alongside the row it describes, so the access token the
+    // caller signs cannot drift later than the refresh token it accompanies.
+    const issuedAt = new Date();
     const expiresAt = new Date(
-      Date.now() + this.lifetimeDays * 24 * 60 * 60 * 1000,
+      issuedAt.getTime() + this.lifetimeDays * 24 * 60 * 60 * 1000,
     );
     await transaction.refreshToken.create({
       data: {
@@ -488,7 +507,7 @@ export class RefreshTokenService {
         ipAddress: context.ipAddress ?? null,
       },
     });
-    return { token, expiresAt };
+    return { token, expiresAt, issuedAt };
   }
 }
 

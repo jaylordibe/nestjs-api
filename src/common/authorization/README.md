@@ -367,20 +367,41 @@ re-joins reuses the row they already have, so `status`, `roleId`, `joinedAt`, an
 
 The two events that overwrite a tenure (`added` and `invitation.accepted`) carry
 `metadata.isRejoin` and `metadata.previousTenure` — the replaced `status`,
-`roleName`, `joinedAt`, and `endedAt` — so nothing is actually lost, it just
-lives somewhere else.
+`roleName`, `joinedAt`, and `endedAt`.
 
-**Report on tenure from those events**, not from `joinedAt`. If a project needs
-real tenure reporting — overlapping periods, per-period billing, "how many months
-has this person been staff" — add a project-specific append-only period model
-then, with its query patterns known. This template deliberately does not ship
-one: a second history mechanism alongside the audit trail is two sources of truth
-for the same question, and the audit trail is the one that already exists and is
-already written on every path.
+**Report on tenure from those events**, not from `joinedAt`.
 
-One consequence to plan for: `audit_logs` has **no retention policy** here (see
-`docs/operations.md`). The day somebody adds one, membership history acquires the
-same horizon.
+### …and this history is best-effort, not guaranteed
+
+State this plainly, because the obvious reading of the paragraph above is
+stronger than what the code delivers. `AuditService.record` catches and logs its
+own failures rather than throwing — deliberately, so a failed audit write can
+never fail the operation it describes — and it runs **after** the membership
+transaction has committed, not inside it. So a re-join can overwrite a tenure
+while the event recording it fails to persist. The window is small (the audit
+insert is a single statement against a table with no constraints to violate) but
+it is not closed, and no amount of care at the call sites closes it.
+
+The honest contract is therefore: **membership history is operationally useful
+and is not an authoritative record.** Good enough to answer "what happened to
+this person's membership?" during an investigation. Not good enough to be the
+system of record for anything with a legal or financial consequence.
+
+If a project needs guaranteed tenure — payroll, per-period billing, compliance
+reporting, anything someone can be sued over — the answer is **not** to make
+`AuditService` throw, which would let an audit outage take down membership
+management. It is an append-only membership-period table written **inside the
+same transaction** as the membership mutation, so the row and its history commit
+or fail together. Add that when a concrete requirement demands it, with its query
+patterns known.
+
+This template ships neither that table nor a second history mechanism, on
+purpose: two sources of truth for one question is worse than one imperfect source
+that says so.
+
+One more consequence to plan for: `audit_logs` has **no retention policy** here
+(see `docs/operations.md`). The day somebody adds one, membership history
+acquires the same horizon.
 
 ## Invitations
 

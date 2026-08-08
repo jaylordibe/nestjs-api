@@ -273,11 +273,17 @@ model UserRole {
 ///
 /// The HISTORY lives in `audit_logs`. Every transition — join, re-join,
 /// invitation accepted, leave, suspend, reactivate, role change, ownership
-/// transfer — writes an immutable event, and the two paths that overwrite a
-/// tenure (`BusinessMembershipsService.add` and
-/// `BusinessInvitationsService.accept`) carry the replaced tenure in
-/// `metadata.previousTenure`. Report on tenure from those events, never by
-/// reading `joinedAt` and assuming it is the first one.
+/// transfer — writes an event, and the two paths that overwrite a tenure
+/// (`BusinessMembershipsService.add` and `BusinessInvitationsService.accept`)
+/// carry the replaced tenure in `metadata.previousTenure`. Report on tenure from
+/// those events, never by reading `joinedAt` and assuming it is the first one.
+///
+/// That history is **best-effort, not authoritative**: `AuditService.record`
+/// swallows its own failures by design and runs after this transaction commits,
+/// so a re-join can overwrite a tenure whose event never lands. Fine for
+/// investigation; not a system of record. Guaranteed tenure needs an append-only
+/// period table written inside the same transaction — see
+/// `src/common/authorization/README.md`.
 ///
 /// ONLY `status = 'active'` grants authority. That filter lives in
 /// `PermissionLoaderService`'s grant query, not in a guard: a guard runs before
