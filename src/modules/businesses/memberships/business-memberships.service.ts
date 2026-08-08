@@ -7,14 +7,14 @@ import {
 } from '../../../common/authorization/app-ability';
 import { buildOrderBy } from '../../../common/dto/meta-query.dto';
 import { PaginationMeta } from '../../../common/dto/paginated-response.dto';
-import { BusinessInvitationStatus } from '../../../common/enums/business-invitation-status.enum';
 import { BusinessMembershipStatus } from '../../../common/enums/business-membership-status.enum';
-import { RoleScope } from '../../../common/enums/role-scope.enum';
 import { SeededRoleName } from '../../../common/enums/seeded-role-name.enum';
 import { Errors } from '../../../common/errors/errors';
 import { buildAuditSnapshot } from '../../../common/util/audit-snapshot.util';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AbilityScopedQueryService } from '../../authorization/ability-scoped-query.service';
+import { BusinessOwnershipPolicy } from '../business-ownership.policy';
+import { BusinessRoleAssignmentPolicy } from '../business-role-assignment.policy';
 import { PermissionCheckService } from '../../authorization/permission-check.service';
 import { PermissionLoaderService } from '../../authorization/permission-loader.service';
 import { AddBusinessMembershipDto } from './dto/add-business-membership.dto';
@@ -49,14 +49,6 @@ const MEMBERSHIP_OF_LIVE_BUSINESS = {
   business: { deletedAt: null },
 } as const;
 
-// A platform admin (`manage all`) has no rank to be bounded by.
-//
-// `null` rather than a sentinel number, so that "unbounded" and "rank not
-// found" can never be the same value. A numeric sentinel invites being used as
-// a FALLBACK — and a rank ceiling that defaults to infinity when the lookup
-// misses is not a ceiling.
-const UNBOUNDED_RANK = null;
-
 @Injectable()
 export class BusinessMembershipsService {
   constructor(
@@ -65,6 +57,8 @@ export class BusinessMembershipsService {
     private readonly abilityScopedQueryService: AbilityScopedQueryService,
     private readonly permissionCheckService: PermissionCheckService,
     private readonly permissionLoaderService: PermissionLoaderService,
+    private readonly businessOwnershipPolicy: BusinessOwnershipPolicy,
+    private readonly businessRoleAssignmentPolicy: BusinessRoleAssignmentPolicy,
   ) {}
 
   /**
@@ -93,9 +87,19 @@ export class BusinessMembershipsService {
       throw Errors.resourceNotFound('User');
     }
 
-    const targetRole = await this.loadAssignableBusinessRole(dto.roleId);
-    const actorRank = await this.resolveActorRank(businessId, actorId, ability);
-    this.assertRankPermits(actorRank, targetRole.rank);
+    const targetRole =
+      await this.businessRoleAssignmentPolicy.loadAssignableRole(dto.roleId);
+    // Both bounds: a caller without `assignRole` may only hand out a
+    // non-privileged role, and a caller WITH it is still capped at their own
+    // rank. The ceiling alone let a manager appoint a peer manager, because
+    // rank 40 is not greater than rank 40.
+    await this.businessRoleAssignmentPolicy.assertMayAssign(
+      businessId,
+      actorId,
+      targetRole,
+      ability,
+      targetUser.id,
+    );
 
     // `notes` is a staff annotation. Accepting it from a caller who may create
     // a membership but not update one would be a write they could not perform
@@ -118,7 +122,7 @@ export class BusinessMembershipsService {
 
     const now = new Date();
     const membership = await this.prisma.$transaction(async (transaction) => {
-      await this.lockBusiness(transaction, businessId);
+      await this.businessOwnershipPolicy.lockBusiness(transaction, businessId);
 
       const existing = await transaction.businessMembership.findUnique({
         where: { businessId_userId: { businessId, userId: targetUser.id } },
@@ -301,12 +305,17 @@ export class BusinessMembershipsService {
     const visible = await this.findById(businessId, membershipId, ability);
     this.assertMayActOn(ability, 'assignRole', visible);
 
-    const targetRole = await this.loadAssignableBusinessRole(dto.roleId);
-    const actorRank = await this.resolveActorRank(businessId, actorId, ability);
-    this.assertRankPermits(actorRank, targetRole.rank);
+    const targetRole =
+      await this.businessRoleAssignmentPolicy.loadAssignableRole(dto.roleId);
+    const actorRank = await this.businessRoleAssignmentPolicy.assertMayAssign(
+      businessId,
+      actorId,
+      targetRole,
+      ability,
+    );
 
     const membership = await this.prisma.$transaction(async (transaction) => {
-      await this.lockBusiness(transaction, businessId);
+      await this.businessOwnershipPolicy.lockBusiness(transaction, businessId);
 
       const existing = await transaction.businessMembership.findFirst({
         where: { id: membershipId, businessId },
@@ -318,7 +327,10 @@ export class BusinessMembershipsService {
 
       // You may not act upon someone who outranks you, either — otherwise an
       // admin could demote the owner by "assigning" them a lower role.
-      this.assertRankPermits(actorRank, existing.role.rank);
+      this.businessRoleAssignmentPolicy.assertRankPermits(
+        actorRank,
+        existing.role.rank,
+      );
 
       // DB columns are plain `String`; cast at the boundary before comparing
       // against the TS enum (`no-unsafe-enum-comparison`).
@@ -327,7 +339,7 @@ export class BusinessMembershipsService {
           SeededRoleName.BUSINESS_OWNER &&
         (targetRole.name as SeededRoleName) !== SeededRoleName.BUSINESS_OWNER;
       if (isDemotingAnOwner) {
-        await this.assertAnotherActiveOwnerExists(
+        await this.businessOwnershipPolicy.assertAnotherActiveOwnerExists(
           transaction,
           businessId,
           membershipId,
@@ -408,23 +420,6 @@ export class BusinessMembershipsService {
     const existing = await this.findById(businessId, membershipId, ability);
     this.assertMayActOn(ability, 'delete', existing);
 
-    // An INVITED membership is a RESERVATION, not a relationship — the person
-    // was invited and never joined. Removing it is a cancellation, so the row
-    // is deleted outright and the pending invitation withdrawn with it,
-    // freeing the address to be invited again.
-    //
-    // It cannot go through `transition()`: that writes `status = 'left'` while
-    // leaving `joined_at` null, which the `business_memberships_joined_at_check`
-    // CHECK refuses — surfacing as a 500 rather than any domain error, since
-    // 23514 is not one of the Prisma codes the global filter translates.
-    if (
-      (existing.status as BusinessMembershipStatus) ===
-      BusinessMembershipStatus.INVITED
-    ) {
-      await this.cancelInvitedMembership(businessId, existing, actorId);
-      return;
-    }
-
     await this.transition(businessId, membershipId, ability, actorId, {
       auditAction: 'business_membership.ended',
       requiredAction: 'delete',
@@ -434,56 +429,6 @@ export class BusinessMembershipsService {
       to: BusinessMembershipStatus.LEFT,
       protectsLastOwner: true,
       data: { endedAt: new Date() },
-    });
-  }
-
-  /**
-   * Withdraws an invitation that reserved a roster slot.
-   *
-   * Deletes the placeholder membership and revokes the pending invitation in
-   * one transaction, so the roster and the invitation list cannot disagree
-   * about whether the person is still expected.
-   *
-   * An INVITED membership carries no authority and no history worth keeping —
-   * it exists only to hold the `(businessId, userId)` slot — so deleting it is
-   * correct where ending an ACTIVE membership would destroy real history.
-   */
-  private async cancelInvitedMembership(
-    businessId: string,
-    membership: BusinessMembershipRow,
-    actorId: string,
-  ): Promise<void> {
-    await this.prisma.$transaction(async (transaction) => {
-      await this.lockBusiness(transaction, businessId);
-
-      await transaction.businessMembership.deleteMany({
-        where: {
-          id: membership.id,
-          businessId,
-          status: BusinessMembershipStatus.INVITED,
-        },
-      });
-
-      await transaction.businessInvitation.updateMany({
-        where: {
-          businessId,
-          email: membership.user.email,
-          status: BusinessInvitationStatus.PENDING,
-        },
-        data: {
-          status: BusinessInvitationStatus.REVOKED,
-          revokedAt: new Date(),
-          revokedBy: actorId,
-          updatedBy: actorId,
-        },
-      });
-    });
-
-    await this.auditService.record({
-      action: 'business_membership.invitation_cancelled',
-      actorId,
-      targetUserId: membership.userId,
-      metadata: { businessId, membershipId: membership.id },
     });
   }
 
@@ -513,7 +458,7 @@ export class BusinessMembershipsService {
     ]);
 
     const membership = await this.prisma.$transaction(async (transaction) => {
-      await this.lockBusiness(transaction, businessId);
+      await this.businessOwnershipPolicy.lockBusiness(transaction, businessId);
 
       const target = await transaction.businessMembership.findFirst({
         where: {
@@ -618,10 +563,14 @@ export class BusinessMembershipsService {
     const visible = await this.findById(businessId, membershipId, ability);
     this.assertMayActOn(ability, options.requiredAction, visible);
 
-    const actorRank = await this.resolveActorRank(businessId, actorId, ability);
+    const actorRank = await this.businessRoleAssignmentPolicy.resolveActorRank(
+      businessId,
+      actorId,
+      ability,
+    );
 
     const membership = await this.prisma.$transaction(async (transaction) => {
-      await this.lockBusiness(transaction, businessId);
+      await this.businessOwnershipPolicy.lockBusiness(transaction, businessId);
 
       const existing = await transaction.businessMembership.findFirst({
         where: { id: membershipId, businessId },
@@ -632,7 +581,10 @@ export class BusinessMembershipsService {
       }
 
       // You may not act upon someone who outranks you.
-      this.assertRankPermits(actorRank, existing.role.rank);
+      this.businessRoleAssignmentPolicy.assertRankPermits(
+        actorRank,
+        existing.role.rank,
+      );
 
       const currentStatus = existing.status as BusinessMembershipStatus;
       // Already in the target state. Reported as a plain conflict rather than
@@ -654,7 +606,7 @@ export class BusinessMembershipsService {
           SeededRoleName.BUSINESS_OWNER &&
         currentStatus === BusinessMembershipStatus.ACTIVE;
       if (options.protectsLastOwner && isActiveOwner) {
-        await this.assertAnotherActiveOwnerExists(
+        await this.businessOwnershipPolicy.assertAnotherActiveOwnerExists(
           transaction,
           businessId,
           membershipId,
@@ -683,63 +635,13 @@ export class BusinessMembershipsService {
   }
 
   // ── invariants ─────────────────────────────────────────────────────────
-
-  /**
-   * Serializes every membership mutation for ONE business.
-   *
-   * The alternative — a Serializable transaction — also produces a correct
-   * result, but Postgres reports the loser as a serialization failure and
-   * Prisma does not retry it, so a concurrent demotion surfaces to the client
-   * as a 500 (`P2034`) rather than a conflict it can act on. An explicit row
-   * lock gives deterministic ordering and a real error, with no retry loop.
-   *
-   * The lock is taken on the BUSINESS row, not the membership row, because the
-   * invariant being protected ("at least one active owner") is a property of
-   * the business as a whole: two transactions demoting two DIFFERENT owners
-   * would never contend on a per-membership lock, and both would observe a
-   * count of two.
-   */
-  private async lockBusiness(
-    transaction: Prisma.TransactionClient,
-    businessId: string,
-  ): Promise<void> {
-    await transaction.$queryRaw`SELECT id FROM businesses WHERE id = ${businessId}::uuid FOR UPDATE`;
-  }
-
-  private async assertAnotherActiveOwnerExists(
-    transaction: Prisma.TransactionClient,
-    businessId: string,
-    excludingMembershipId: string,
-  ): Promise<void> {
-    const remainingOwners = await transaction.businessMembership.count({
-      where: {
-        businessId,
-        status: BusinessMembershipStatus.ACTIVE,
-        role: { name: SeededRoleName.BUSINESS_OWNER },
-        id: { not: excludingMembershipId },
-      },
-    });
-    if (remainingOwners === 0) {
-      throw Errors.lastOwnerProtected();
-    }
-  }
-
-  private async loadAssignableBusinessRole(roleId: string) {
-    const role = await this.prisma.role.findUnique({
-      where: { id: roleId },
-      select: { id: true, name: true, rank: true, scope: true },
-    });
-    if (!role) {
-      throw Errors.resourceNotFound('Role');
-    }
-    // The write-path half of scope integrity: refuse before any row is
-    // touched, with a clean 403. The read-path half — the one that actually
-    // bounds authority if this check is ever bypassed — is in `AbilityFactory`.
-    if ((role.scope as RoleScope) !== RoleScope.BUSINESS) {
-      throw Errors.roleNotAssignable();
-    }
-    return role;
-  }
+  //
+  // The ownership rule lives in `BusinessOwnershipPolicy` and the assignment
+  // rules in `BusinessRoleAssignmentPolicy`, both injected above. Neither is
+  // restated here: account deletion enforces the same ownership rule from the
+  // USER side, and invitations enforce the same assignment rules from the
+  // INVITE side. The phantom-owner defect that prompted this was precisely one
+  // copy of the ownership query forgetting a clause the others remembered.
 
   private async loadSeededBusinessRole(name: SeededRoleName) {
     // `findUniqueOrThrow`, not `findFirst`: `roles.name` is a real full unique
@@ -752,45 +654,6 @@ export class BusinessMembershipsService {
   }
 
   /**
-   * The caller's assignment ceiling inside this business.
-   *
-   * Returns `UNBOUNDED_RANK` for a platform admin (`manage all`) and otherwise
-   * the rank of the caller's ACTIVE membership. A caller with no active
-   * membership is REFUSED rather than defaulted, because past the `manage all`
-   * gate a missing row means they reached this business through a
-   * platform-scoped grant without unrestricted authority — so nothing bounds
-   * them, and they hold no rank to be measured against.
-   *
-   * A guard whose whole purpose is to bound authority must never read "I could
-   * not find your rank" as "you have no limit". An earlier version of this code
-   * did exactly that, and any future platform role holding `assignRole` would
-   * have inherited an infinite ceiling in every business on the platform.
-   *
-   * Note the ACTIVE filter: a suspended owner has rank 100 on paper and no
-   * authority in fact.
-   */
-  private async resolveActorRank(
-    businessId: string,
-    actorId: string,
-    ability: AppAbility,
-  ): Promise<number | typeof UNBOUNDED_RANK> {
-    if (ability.can('manage', 'all')) return UNBOUNDED_RANK;
-
-    const actorMembership = await this.prisma.businessMembership.findUnique({
-      where: { businessId_userId: { businessId, userId: actorId } },
-      select: { status: true, role: { select: { rank: true } } },
-    });
-    if (
-      !actorMembership ||
-      (actorMembership.status as BusinessMembershipStatus) !==
-        BusinessMembershipStatus.ACTIVE
-    ) {
-      throw Errors.roleNotAssignable();
-    }
-    return actorMembership.role.rank;
-  }
-
-  /**
    * You may grant, or act upon, a role AT OR BELOW your own rank — never above.
    *
    * At-or-below rather than strictly-below is deliberate: a lateral grant is
@@ -800,15 +663,6 @@ export class BusinessMembershipsService {
    * ("appoint another owner first") unreachable. What is forbidden is reaching
    * UP: an admin can never mint an owner.
    */
-  private assertRankPermits(
-    actorRank: number | typeof UNBOUNDED_RANK,
-    targetRank: number,
-  ): void {
-    if (actorRank === UNBOUNDED_RANK) return;
-    if (targetRank > actorRank) {
-      throw Errors.roleNotAssignable();
-    }
-  }
 
   // Object-level authorization, evaluated against the REAL row rather than the
   // subject type — which is all the guard could check before the record was

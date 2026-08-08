@@ -75,6 +75,8 @@ model User {
   // Invitations this person sent. Distinct from `memberships` because an
   // inviter is not necessarily still a member by the time it is accepted.
   sentInvitations    BusinessMembership[] @relation("BusinessMembershipInviter")
+  // Invitations addressed to this person, resolved when the invite was raised.
+  receivedInvitations BusinessInvitation[] @relation("BusinessInvitationInvitee")
   refreshTokens      RefreshToken[]
 
   @@map("users")
@@ -284,9 +286,10 @@ model BusinessMembership {
   /// constrained by the TS enum and `@IsEnum`, so widening the lifecycle needs
   /// no migration.
   status     String    @default("active")
-  /// When they first became active here. Null while merely INVITED, and
-  /// preserved across a suspend/reactivate cycle so "member since" stays true.
-  joinedAt   DateTime? @map("joined_at")
+  /// When they first became active here. NOT NULL: a membership row now exists
+  /// only once somebody has actually joined, and it is preserved across a
+  /// suspend/reactivate cycle so "member since" stays true.
+  joinedAt   DateTime  @map("joined_at")
   /// When the relationship ended. Set alongside `status = 'left'`, cleared if
   /// they re-join on the same row.
   endedAt    DateTime? @map("ended_at")
@@ -324,9 +327,10 @@ model BusinessMembership {
 ///
 /// Modelled separately from `BusinessMembership` because an invited email need
 /// not belong to a user yet — there is no `userId` to hang a membership row on
-/// until somebody accepts. When the invitee DOES already have an account, an
-/// INVITED membership row is created alongside this one so the roster shows
-/// them as pending and the (business, user) slot is reserved.
+/// until somebody accepts. No membership row is written until acceptance: a
+/// placeholder would consume the ONE row `@@unique([businessId, userId])`
+/// allows, overwriting a former member's history to record an offer they had
+/// not taken up.
 ///
 /// Acceptance is a conditional UPDATE out of `pending`, inside the same
 /// transaction that writes the membership, so two simultaneous redemptions of
@@ -346,6 +350,15 @@ model BusinessInvitation {
   /// carries no `@@unique` here — look it up with `findFirst`, never
   /// `findUnique`.
   email      String
+  /// The account the address resolved to AT INVITE TIME, when it resolved to
+  /// one at all. Null means the address had no account yet — the ordinary case
+  /// for inviting a stranger.
+  ///
+  /// This exists so revoke and accept stop re-deriving identity from `email`,
+  /// which is mutable. Deriving it late meant a re-registered address inherited
+  /// somebody else's invitation: the revoke deleted the wrong membership and
+  /// attributed the audit event to the wrong person.
+  invitedUserId String? @map("invited_user_id") @db.Uuid
   roleId     String    @map("role_id") @db.Uuid
   /// SHA-256 of the opaque token, hex-encoded — the same construction, and the
   /// same reasoning, as `RefreshToken.tokenHash`. The plaintext is emailed once
@@ -364,8 +377,14 @@ model BusinessInvitation {
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   role     Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  /// SetNull, not Cascade: an erased account must not take the invitation
+  /// history of a business with it. The address on the row is what remains.
+  invitedUser User? @relation("BusinessInvitationInvitee", fields: [invitedUserId], references: [id], onDelete: SetNull)
 
   @@index([businessId, status])
+  /// "What is this person still expected to accept?" — and the index behind
+  /// the `SetNull` FK, which would otherwise scan on every account erasure.
+  @@index([invitedUserId])
   /// Supports a retention sweep over expired invitations.
   @@index([expiresAt])
   /// As on the other two role-referencing tables: `ON DELETE RESTRICT` scans

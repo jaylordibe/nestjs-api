@@ -347,9 +347,21 @@ An invited email need not belong to a user yet, which is the entire reason
 `BusinessInvitation` is a separate model — `BusinessMembership.userId` is NOT
 NULL.
 
-When the address already has an account, an `INVITED` membership is written
-alongside the invitation: it reserves the `(businessId, userId)` slot, shows the
-person as pending on the roster, and grants nothing.
+**No membership row is written until acceptance.** When the address already has
+an account, the account id is recorded on the invitation as `invitedUserId` and
+nothing else changes. An earlier design wrote a placeholder `INVITED` membership
+to reserve the slot; because `@@unique([businessId, userId])` allows exactly one
+row per pair, that placeholder *overwrote* a former member's `joinedAt` and
+`endedAt` — so sending an invitation silently rewrote somebody's employment
+history. Everything the placeholder was for is held elsewhere: "one outstanding
+invitation per address" by the partial unique index on `business_invitations`,
+and "who is pending?" by `GET /businesses/:id/invitations`.
+
+`POST /businesses/:id/invitations/:invitationId/resend` rotates the token,
+extends the expiry, and re-mails it. It requires `create BusinessInvitation`,
+because resending is the same authority as inviting — same address, same role,
+same business. The token is **rotated, never re-sent**: re-mailing the same
+secret would leave every earlier copy live in every inbox it passed through.
 
 `POST /invitations/accept` is `@AuthenticatedOnly()`, not `@Public()`. Someone
 without an account registers through the ordinary `/auth/register` first, which
@@ -357,8 +369,22 @@ keeps **one** registration policy (disposable-email blocking, verification,
 lockout) instead of forking a second, less-guarded account-creation path behind a
 bearer token. The token survives registration.
 
-The caller's email must match the invitation's, or the token alone would be
-sufficient and a forwarded invitation would let anyone join. Acceptance is a
+The caller must be the invitee, or the token alone would be sufficient and a
+forwarded invitation would let anyone join. Which check applies is decided by
+what was true at invite time:
+
+- `invitedUserId` set — identity is the **account id**, not the address. The
+  invitee may have changed their email since, and somebody else may since have
+  registered the old one.
+- `invitedUserId` null — the address **is** the identity, so the caller must
+  have proven control of it (`emailVerifiedAt`). An unverified match is not
+  proof: changing your own email needs only your password, and that change
+  clears `emailVerifiedAt` while the access token issued beforehand keeps
+  working — so a forwarded token plus an email change would otherwise be a
+  complete bypass.
+
+Every failure raises the same error the unknown-token path raises, so a holder
+of somebody else's token learns nothing about whose it is. Acceptance is a
 conditional `UPDATE` out of `pending` inside the transaction that writes the
 membership, so two simultaneous redemptions produce exactly one membership and
 the loser's whole transaction rolls back.

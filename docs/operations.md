@@ -68,7 +68,7 @@ path, and the dump script is a stopgap for a single-box deployment.
 
 | Control | Status | Where |
 |---|---|---|
-| GDPR erasure endpoint | ✅ Implemented | `POST /users/me/gdpr-erase` — anonymises PII, requires re-authentication, blocks login |
+| GDPR erasure endpoint | ✅ Implemented | `POST /users/me/gdpr-erase` — anonymises PII, requires re-authentication, revokes every session, and **soft-deletes any business the subject solely owned**. Erasure answers a legal obligation, so it is never refused for a commercial relationship; `DELETE /users/me` is refused in that case instead (`LAST_OWNER_PROTECTED`). |
 | Data export | ✅ Implemented | `GET /users/me/export` |
 | Audit-log **retention** | ❌ Operator-owned | `audit_logs` grows without bound. It holds IPs, user agents, and (behind Cloudflare) geolocation, so it is itself personal data with a retention obligation. |
 | Soft-delete **hard purge** | ⚙️ Scaffolded | `src/common/scheduled-jobs/example-retention-sweep.service.ts` is a worked pattern, not an installed policy. Soft-deleted users are retained indefinitely by default. |

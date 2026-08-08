@@ -103,11 +103,22 @@ export const Errors = {
   // A business without an active owner is unadministrable: nobody can grow the
   // roster, and nobody can delete it. This fires for every caller, platform
   // admins included — `manage all` bypasses AUTHORIZATION, not data integrity.
-  lastOwnerProtected: (): ConflictException =>
+  // `soleOwnedBusinesses` is supplied by the ACCOUNT-deletion path, where the
+  // caller has no way to guess which of their businesses is blocking them — and
+  // where the remedy differs (transfer or close the business, rather than
+  // appoint a co-owner). Naming them is not a leak: they are businesses the
+  // caller owns.
+  lastOwnerProtected: (
+    soleOwnedBusinesses?: readonly { id: string; name: string }[],
+  ): ConflictException =>
     new ConflictException({
       errorCode: ErrorCode.LAST_OWNER_PROTECTED,
-      message:
-        'A business must always have at least one active owner. Appoint another owner first.',
+      message: soleOwnedBusinesses?.length
+        ? 'You are the only active owner of a business. Transfer ownership or delete the business before deleting this account.'
+        : 'A business must always have at least one active owner. Appoint another owner first.',
+      ...(soleOwnedBusinesses?.length
+        ? { details: { businesses: soleOwnedBusinesses } }
+        : {}),
     }),
   membershipNotActive: (status: string): ConflictException =>
     new ConflictException({

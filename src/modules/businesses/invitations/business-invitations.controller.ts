@@ -10,7 +10,12 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiCreatedResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiCreatedResponse,
+  ApiOkResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { AppAbility } from '../../../common/authorization/app-ability';
 import { ApiPaginatedResponse } from '../../../common/decorators/api-paginated-response.decorator';
@@ -74,6 +79,39 @@ export class BusinessInvitationsController {
       data: data.map((row) => new BusinessInvitationResponseDto(row)),
       meta,
     };
+  }
+
+  /**
+   * Re-sends a pending invitation on a fresh token.
+   *
+   * Guarded by `create BusinessInvitation`, not `delete`: resending is the same
+   * authority as inviting — same address, same role, same business — and gating
+   * it behind `delete` would leave a manager able to raise an invitation they
+   * could not repair when the mail went astray.
+   *
+   * 200, not 201: nothing new comes into existence. The invitation is the same
+   * row, carrying a rotated secret.
+   */
+  @Post(':invitationId/resend')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @RequirePermission('create', 'BusinessInvitation')
+  @HttpCode(HttpStatus.OK)
+  @ApiOkResponse({ type: BusinessInvitationResponseDto })
+  async resend(
+    @Param('businessId', ParseUUIDPipe) businessId: string,
+    @Param('invitationId', ParseUUIDPipe) invitationId: string,
+    @CurrentAbility() ability: AppAbility,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<BusinessInvitationResponseDto> {
+    const invitation = await this.service.resend(
+      businessId,
+      invitationId,
+      ability,
+      user.id,
+    );
+    // As with `create`, the plaintext token goes to the invited address and
+    // nowhere else.
+    return new BusinessInvitationResponseDto(invitation);
   }
 
   @Delete(':invitationId')

@@ -5,6 +5,7 @@ import { SeededRoleName } from '../src/common/enums/seeded-role-name.enum';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { truncateAll } from './setup/db';
 import {
+  addMembership,
   createPlatformAdmin,
   createUser,
   createRegularUser,
@@ -83,15 +84,40 @@ describe('Audit logs (e2e)', () => {
     );
   });
 
-  it('PLATFORM_SUPPORT can read the audit trail (read AuditLog)', async () => {
+  it('PLATFORM_ENGINEER can read the audit trail (read AuditLog)', async () => {
+    // The non-admin role that legitimately investigates. Engineers hold the
+    // highest TECHNICAL authority and no governance, which is the shape the
+    // audit trail is appropriate for.
+    const engineer = await createUser(app, {
+      email: 'engineer@example.com',
+      roles: [SeededRoleName.PLATFORM_ENGINEER],
+    });
+    await request(app.getHttpServer())
+      .get('/api/audit-logs')
+      .set('Authorization', `Bearer ${engineer.token}`)
+      .expect(200);
+  });
+
+  it.each([
+    SeededRoleName.PLATFORM_TECHNICAL_SUPPORT,
+    SeededRoleName.PLATFORM_APP_SUPPORT,
+  ])('%s is DENIED the audit trail', async (roleName) => {
+    // The trail carries IP addresses, user agents, parsed device fingerprints,
+    // and — behind Cloudflare — geolocation, for every account on the platform.
+    // Support roles are the most widely staffed on the platform and the least
+    // appropriate default holders of that.
+    //
+    // A project that genuinely needs support-side visibility should add a
+    // SANITIZED endpoint (whitelisted fields, restricted event types,
+    // server-side filtering) rather than granting `read AuditLog`.
     const support = await createUser(app, {
-      email: 'support@example.com',
-      roles: [SeededRoleName.PLATFORM_APP_SUPPORT],
+      email: `${roleName}@example.com`,
+      roles: [roleName],
     });
     await request(app.getHttpServer())
       .get('/api/audit-logs')
       .set('Authorization', `Bearer ${support.token}`)
-      .expect(200);
+      .expect(403);
   });
 
   it('filters by action and actorId', async () => {
@@ -287,8 +313,8 @@ describe('Audit logs (e2e)', () => {
       // who the actor is without a second call.
       expect(auditLog.actor?.roles).toContain(SeededRoleName.PLATFORM_ADMIN);
 
-      // And this is the CURRENT-state caveat, made concrete: the target held
-      // only PLATFORM_USER when the action was recorded, and the role this very
+      // And this is the CURRENT-state caveat, made concrete: the target held NO
+      // platform role when the action was recorded, and the role this very
       // audit row describes being granted is already in the list. The field
       // answers "who is this person now?", never "what were they allowed to do
       // at the time?" — for that, read `metadata`, which is point-in-time.
@@ -307,6 +333,21 @@ describe('Audit logs (e2e)', () => {
     it('still names a soft-deleted user', async () => {
       const owner = await createRegularUser(app, 'closing@example.com');
       await generateAuditRow(owner);
+
+      // Creating the business made this user its only owner, and an account
+      // deletion that would strand a business is now refused. A co-owner is the
+      // setup this test always implied — it is about the audit trail surviving a
+      // closed account, not about who may close one.
+      const business = await app
+        .get(PrismaService)
+        .business.findFirstOrThrow({ where: { slug: 'acme' } });
+      const coOwner = await createRegularUser(app, 'remaining@example.com');
+      await addMembership(
+        app,
+        business.id,
+        coOwner.id,
+        SeededRoleName.BUSINESS_OWNER,
+      );
 
       await request(app.getHttpServer())
         .delete(`/api/users/${owner.id}`)

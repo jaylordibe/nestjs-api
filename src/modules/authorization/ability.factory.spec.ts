@@ -226,7 +226,6 @@ describe('AbilityFactory', () => {
 
   describe('membership status', () => {
     it.each([
-      BusinessMembershipStatus.INVITED,
       BusinessMembershipStatus.SUSPENDED,
       BusinessMembershipStatus.LEFT,
     ])('compiles nothing from a %s membership', (status) => {

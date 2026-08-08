@@ -95,6 +95,21 @@ The `TOKEN_*` / `SESSION_INVALIDATED` / `USER_INACTIVE` cluster is the only set 
 | `UNIQUE_CONSTRAINT_VIOLATION` | Prisma P2002 — unique index violation. | `{ field: string }` |
 | `RESOURCE_CONFLICT` | Generic 409 for application-level conflicts. | `null` |
 
+### Business memberships and invitations (HTTP 400, 403, 409)
+
+| Code | Status | Trigger | `details` shape |
+|---|---|---|---|
+| `LAST_OWNER_PROTECTED` | 409 | The operation would leave a live business with no active owner: removing, demoting, or suspending the last one — or **deleting the account of somebody who solely owns a business** (`DELETE /users/me`, `DELETE /users/:id`). Fires for **every** caller, platform admins included: it is a data-integrity invariant, not an authorization rule. | `{ businesses: { id, name }[] }` on the account-deletion paths, so the caller can act; `null` on the membership paths, where they already named the business. |
+| `MEMBERSHIP_NOT_ACTIVE` | 409 | The membership exists but is not in a state that permits this operation. | `{ status: string }` |
+| `ROLE_NOT_ASSIGNABLE` | 403 | The role is out of scope, above the caller's rank ceiling, or privileged while the caller holds no `assignRole BusinessMembership`. **One code for all three**, so a caller probing for escalation cannot learn which wall they hit; the remedy is the same either way. | `null` |
+| `INVITATION_INVALID` | 400 | Unknown, consumed, revoked, rotated by a resend, addressed to a different account, or presented by a caller who has not verified control of the invited address. **Deliberately indistinguishable**, so a token cannot be probed. | `null` |
+| `INVITATION_EXPIRED` | 400 | Distinguishable on purpose: the holder already proved possession of a real token, so this discloses nothing new, and their remedy differs — ask for a resend. | `null` |
+
+`POST /users/me/gdpr-erase` never raises `LAST_OWNER_PROTECTED`. Erasure answers
+a legal obligation and cannot be refused for a commercial relationship, so it
+soft-deletes the solely-owned businesses instead. That asymmetry with
+`DELETE /users/me` is deliberate.
+
 ### Infrastructure (HTTP 429, 500, 503)
 
 | Code | Trigger |

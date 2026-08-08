@@ -125,23 +125,48 @@ describe('Business invitations (e2e)', () => {
       expect(body.tokenHash).toBeUndefined();
     });
 
-    it('reserves an INVITED membership when the address already has an account', async () => {
+    it('writes NO membership row when the address already has an account', async () => {
+      // The whole point of the rewrite. A placeholder membership consumed the
+      // one row `@@unique([businessId, userId])` allows, so an invitation could
+      // silently overwrite a former member's history.
       const invitee = await createRegularUser(app, 'invitee@example.com');
       await inviteAndCaptureToken(invitee.email);
 
       const prisma = app.get(PrismaService);
-      const membership = await prisma.businessMembership.findUniqueOrThrow({
-        where: {
-          businessId_userId: { businessId: business.id, userId: invitee.id },
-        },
-      });
-      expect(membership.status).toBe(BusinessMembershipStatus.INVITED);
-      // The DB CHECK requires `joined_at` absent until they have actually
-      // joined something.
-      expect(membership.joinedAt).toBeNull();
+      expect(
+        await prisma.businessMembership.count({
+          where: { businessId: business.id, userId: invitee.id },
+        }),
+      ).toBe(0);
     });
 
-    it('an INVITED membership grants nothing', async () => {
+    it('records the invitee\u2019s account id on the invitation', async () => {
+      // Resolved ONCE, at invite time. Revoke and accept used to re-derive
+      // identity from the address, so a re-registered address inherited
+      // somebody else's invitation.
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      await inviteAndCaptureToken(invitee.email);
+
+      const invitation = await app
+        .get(PrismaService)
+        .businessInvitation.findFirstOrThrow({
+          where: { businessId: business.id, email: invitee.email },
+        });
+      expect(invitation.invitedUserId).toBe(invitee.id);
+    });
+
+    it('leaves invitedUserId null when the address has no account', async () => {
+      await inviteAndCaptureToken('stranger@example.com');
+
+      const invitation = await app
+        .get(PrismaService)
+        .businessInvitation.findFirstOrThrow({
+          where: { businessId: business.id, email: 'stranger@example.com' },
+        });
+      expect(invitation.invitedUserId).toBeNull();
+    });
+
+    it('an outstanding invitation grants nothing', async () => {
       const invitee = await createRegularUser(app, 'invitee@example.com');
       await inviteAndCaptureToken(invitee.email, SeededRoleName.BUSINESS_ADMIN);
 
@@ -149,6 +174,25 @@ describe('Business invitations (e2e)', () => {
         .get(`/api/businesses/${business.id}`)
         .set('Authorization', `Bearer ${invitee.token}`)
         .expect(404);
+    });
+
+    it('refuses to invite someone already on the roster', async () => {
+      const member = await createRegularUser(app, 'member@example.com');
+      await addMembership(
+        app,
+        business.id,
+        member.id,
+        SeededRoleName.BUSINESS_MEMBER,
+      );
+
+      await request(app.getHttpServer())
+        .post(invitationsUrl())
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({
+          email: member.email,
+          roleId: await roleIdFor(app, SeededRoleName.BUSINESS_MEMBER),
+        })
+        .expect(409);
     });
 
     it('refuses a second pending invitation to the same address', async () => {
@@ -491,6 +535,133 @@ describe('Business invitations (e2e)', () => {
         .delete(`${invitationsUrl()}/${invitationId}`)
         .set('Authorization', `Bearer ${owner.token}`)
         .expect(409);
+    });
+  });
+
+  describe('resending', () => {
+    it('rotates the token, killing the previous one', async () => {
+      // The security-relevant half. Re-mailing the SAME secret would leave every
+      // earlier copy live in every inbox and mail log it passed through; after a
+      // resend exactly one token opens this invitation.
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      const { token: originalToken, invitationId } =
+        await inviteAndCaptureToken(invitee.email);
+      const before = await app
+        .get(PrismaService)
+        .businessInvitation.findUniqueOrThrow({ where: { id: invitationId } });
+
+      await request(app.getHttpServer())
+        .post(`${invitationsUrl()}/${invitationId}/resend`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .expect(200);
+
+      const after = await app
+        .get(PrismaService)
+        .businessInvitation.findUniqueOrThrow({ where: { id: invitationId } });
+      expect(after.tokenHash).not.toBe(before.tokenHash);
+      expect(after.expiresAt.getTime()).toBeGreaterThanOrEqual(
+        before.expiresAt.getTime(),
+      );
+      expect(after.status).toBe(BusinessInvitationStatus.PENDING);
+
+      // The old token is dead, and says so in the same way an unknown token
+      // does — INVITATION_INVALID, never a distinguishable "that token was
+      // rotated".
+      const rejected = await acceptAs(invitee, originalToken).expect(400);
+      expect((rejected.body as ErrorBody).errorCode).toBe('INVITATION_INVALID');
+    });
+
+    it('the rotated token works', async () => {
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      const { invitationId } = await inviteAndCaptureToken(invitee.email);
+
+      await request(app.getHttpServer())
+        .post(`${invitationsUrl()}/${invitationId}/resend`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .expect(200);
+
+      // Captured the same way `inviteAndCaptureToken` does — by planting a
+      // known hash, since the plaintext is emailed and never returned.
+      const replacementToken = 'replacement-token-for-this-spec';
+      await app.get(PrismaService).businessInvitation.update({
+        where: { id: invitationId },
+        data: { tokenHash: hashOpaqueToken(replacementToken) },
+      });
+
+      await acceptAs(invitee, replacementToken).expect(200);
+    });
+
+    it('a consumed invitation cannot be resent', async () => {
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      const { token, invitationId } = await inviteAndCaptureToken(
+        invitee.email,
+      );
+      await acceptAs(invitee, token).expect(200);
+
+      await request(app.getHttpServer())
+        .post(`${invitationsUrl()}/${invitationId}/resend`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .expect(409);
+    });
+
+    it('a stranger to the business gets a 404, not a 403', async () => {
+      // A 403 would confirm that this invitation exists in this business.
+      const { invitationId } = await inviteAndCaptureToken(
+        'invitee@example.com',
+      );
+      const stranger = await createRegularUser(app, 'stranger@example.com');
+
+      await request(app.getHttpServer())
+        .post(`${invitationsUrl()}/${invitationId}/resend`)
+        .set('Authorization', `Bearer ${stranger.token}`)
+        .expect(403);
+    });
+  });
+
+  describe('who may redeem an invitation', () => {
+    it('refuses a caller who is not the invited ACCOUNT', async () => {
+      // `invitedUserId` was resolved at invite time, so identity is the account
+      // id — not the address, which either party may have changed since.
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      const bystander = await createRegularUser(app, 'bystander@example.com');
+      const { token } = await inviteAndCaptureToken(invitee.email);
+
+      const rejected = await acceptAs(bystander, token).expect(400);
+      expect((rejected.body as ErrorBody).errorCode).toBe('INVITATION_INVALID');
+    });
+
+    it('refuses a re-registered address that inherited the invitation', async () => {
+      // Invite an address with no account, then have somebody register it. The
+      // address alone is not identity; control of it must be proven.
+      const { token } = await inviteAndCaptureToken('ghost@example.com');
+      const prisma = app.get(PrismaService);
+      const squatter = await createRegularUser(app, 'squatter@example.com');
+      // Unverified: exactly the state an email CHANGE leaves an account in,
+      // while the access token issued beforehand keeps working.
+      await prisma.user.update({
+        where: { id: squatter.id },
+        data: { email: 'ghost@example.com', emailVerifiedAt: null },
+      });
+
+      const rejected = await request(app.getHttpServer())
+        .post('/api/invitations/accept')
+        .set('Authorization', `Bearer ${squatter.token}`)
+        .send({ token })
+        .expect(400);
+      expect((rejected.body as ErrorBody).errorCode).toBe('INVITATION_INVALID');
+
+      expect(
+        await prisma.businessMembership.count({
+          where: { businessId: business.id, userId: squatter.id },
+        }),
+      ).toBe(0);
+    });
+
+    it('admits a stranger who registered the address and verified it', async () => {
+      const { token } = await inviteAndCaptureToken('newcomer@example.com');
+      const newcomer = await createRegularUser(app, 'newcomer@example.com');
+
+      await acceptAs(newcomer, token).expect(200);
     });
   });
 

@@ -14,6 +14,7 @@ import {
   burnPasswordHashingTime,
   hashPassword,
 } from '../../common/util/password-hashing.util';
+import { nextWholeSecond } from '../../common/util/session-cutoff.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UserResponseDto } from '../users/dto/user-response.dto';
 import { UsersService } from '../users/users.service';
@@ -302,15 +303,17 @@ export class AuthService {
     });
   }
 
-  // Logout-everywhere. Bumps passwordChangedAt to now; JwtStrategy rejects
-  // every token with iat earlier than that second. Same mechanism used by
-  // password change — all the user's active sessions die on the next
-  // request. No Redis writes needed; scales to however many devices the
-  // user has logged in on.
+  // Logout-everywhere. Bumps passwordChangedAt to the next whole second;
+  // JwtStrategy rejects every token with iat earlier than that. Same mechanism
+  // used by password change — all the user's active sessions die on the next
+  // request. No Redis writes needed; scales to however many devices the user
+  // has logged in on. The rounding is what makes "everywhere" literal: a raw
+  // timestamp spares any token minted in the same second (see
+  // `nextWholeSecond`).
   async logoutAll(userId: string): Promise<void> {
     await this.prisma.user.update({
       where: { id: userId },
-      data: { passwordChangedAt: new Date() },
+      data: { passwordChangedAt: nextWholeSecond() },
     });
     // The `passwordChangedAt` bump only invalidates ACCESS tokens, which are
     // stateless and check `iat` against it. Refresh tokens are rows and carry

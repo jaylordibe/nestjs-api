@@ -43,7 +43,7 @@ Every e2e spec runs against a **real Postgres and Redis** — no mocks, no in-me
 
 ## Setup guide
 
-Requires **Node 22+**, **Yarn 1.x**, and **Docker**.
+Requires **Node 24** (see `.nvmrc`), **Yarn 1.22.x**, and **Docker**.
 
 ### First-time setup (after cloning)
 

@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { DiscoveryModule } from '@nestjs/core';
 import { AbilityScopedQueryService } from './ability-scoped-query.service';
 import { AbilityFactory } from './ability.factory';
+import { AuthorizationDataIntegrityService } from './authorization-data-integrity.service';
 import { PermissionCatalogIntegrityService } from './permission-catalog-integrity.service';
 import { PermissionCheckService } from './permission-check.service';
 import { PermissionLoaderService } from './permission-loader.service';
@@ -27,6 +28,7 @@ import { RouteAuthorizationAuditService } from './route-authorization-audit.serv
     PermissionLoaderService,
     PermissionCheckService,
     PermissionCatalogIntegrityService,
+    AuthorizationDataIntegrityService,
     RouteAuthorizationAuditService,
   ],
   exports: [

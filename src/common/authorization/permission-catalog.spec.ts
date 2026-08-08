@@ -192,6 +192,32 @@ describe('ROLE_DEFINITION_CATALOG', () => {
     }
   });
 
+  it('withholds the audit trail from every support role', () => {
+    // `audit_logs.metadata` carries IP addresses, user agents, parsed device
+    // fingerprints, and Cloudflare geolocation for every account on the
+    // platform. Support roles are the most widely staffed and the least
+    // appropriate default holders of that.
+    //
+    // Investigative access stays with PLATFORM_ENGINEER and, through
+    // `manage all`, PLATFORM_ADMIN. If a project needs support-side
+    // visibility it should add a SANITIZED endpoint rather than granting
+    // this permission — which is why this is a guard rather than a comment.
+    const supportRoles = [
+      SeededRoleName.PLATFORM_TECHNICAL_SUPPORT,
+      SeededRoleName.PLATFORM_APP_SUPPORT,
+    ];
+    for (const roleName of supportRoles) {
+      const readsAuditLog = ROLE_DEFINITION_CATALOG[roleName].permissions.some(
+        (permission) =>
+          permission.action === 'read' && permission.subject === 'AuditLog',
+      );
+      expect({ roleName, readsAuditLog }).toEqual({
+        roleName,
+        readsAuditLog: false,
+      });
+    }
+  });
+
   it('withholds raw queue payloads from every support role', () => {
     // `readPayload QueueJob` is what makes "sanitized diagnostic visibility"
     // enforceable. Support roles investigate failures; they do not read the

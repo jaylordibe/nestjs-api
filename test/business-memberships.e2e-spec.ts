@@ -153,7 +153,6 @@ describe('Business memberships (e2e)', () => {
 
   describe('only ACTIVE memberships confer authority', () => {
     it.each([
-      BusinessMembershipStatus.INVITED,
       BusinessMembershipStatus.SUSPENDED,
       BusinessMembershipStatus.LEFT,
     ])('a %s membership grants nothing', async (status) => {
@@ -681,35 +680,42 @@ describe('Business memberships (e2e)', () => {
     });
   });
 
-  describe('removing an INVITED membership cancels it', () => {
-    it('deletes the placeholder rather than 500ing on the joined_at CHECK', async () => {
-      // Regression: `remove()` routed every status through the same transition,
-      // writing status='left' with `joinedAt` still NULL. That violates
-      // `business_memberships_joined_at_check`, and Postgres 23514 is not one
-      // of the Prisma codes the global filter translates — so a routine roster
-      // action answered 500 INTERNAL_ERROR and wrote no audit row.
-      const invitee = await createRegularUser(app, 'invitee@example.com');
+  describe('a pending invitation writes no membership row', () => {
+    it('leaves a former member\u2019s history untouched', async () => {
+      // The placeholder this replaces consumed the ONE row
+      // `@@unique([businessId, userId])` allows, so inviting a former member
+      // back overwrote their `joinedAt` and `endedAt` \u2014 a manager could
+      // rewrite somebody's employment history by sending an invitation, before
+      // that person had accepted anything.
+      const formerMember = await createRegularUser(app, 'former@example.com');
       const membershipId = await addMembership(
         app,
         business.id,
-        invitee.id,
+        formerMember.id,
         SeededRoleName.BUSINESS_MEMBER,
-        BusinessMembershipStatus.INVITED,
+        BusinessMembershipStatus.LEFT,
       );
+      const prisma = app.get(PrismaService);
+      const before = await prisma.businessMembership.findUniqueOrThrow({
+        where: { id: membershipId },
+      });
 
       await request(app.getHttpServer())
-        .delete(`${membershipsUrl()}/${membershipId}`)
+        .post(`/api/businesses/${business.id}/invitations`)
         .set('Authorization', `Bearer ${owner.token}`)
-        .expect(204);
+        .send({
+          email: formerMember.email,
+          roleId: await roleIdFor(app, SeededRoleName.BUSINESS_ADMIN),
+        })
+        .expect(201);
 
-      // An INVITED row is a reservation, not history — cancelling frees the
-      // slot so the address can be invited again.
-      const prisma = app.get(PrismaService);
-      expect(
-        await prisma.businessMembership.count({
-          where: { businessId: business.id, userId: invitee.id },
-        }),
-      ).toBe(0);
+      const after = await prisma.businessMembership.findUniqueOrThrow({
+        where: { id: membershipId },
+      });
+      expect(after.status).toBe(BusinessMembershipStatus.LEFT);
+      expect(after.joinedAt).toEqual(before.joinedAt);
+      expect(after.endedAt).toEqual(before.endedAt);
+      expect(after.roleId).toBe(before.roleId);
     });
   });
 

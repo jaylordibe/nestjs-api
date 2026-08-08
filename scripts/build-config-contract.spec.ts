@@ -138,11 +138,8 @@ describe('build configuration contract', () => {
 // and `lint:fix` the opt-in mutation, so that a workflow step or a document
 // written from muscle memory gets the gate rather than a silent pass.
 //
-// Prettier is enforced through the `prettier/prettier` ESLint rule, so a
-// separate `format` script is a second entry point to a formatter `lint`
-// already applies — and one whose glob drifts out of step with the lint glob.
-// It covered `prisma/` while lint did not, which is why the lint glob must
-// keep covering `prisma/` now that `format` is gone.
+// Prettier is enforced through the `prettier/prettier` ESLint rule, so `lint` is
+// the formatting gate too, and its glob has to cover every linted path itself.
 //
 // Documentation alone cannot hold any of this: re-adding `--fix` to `lint`, or
 // pointing CI at `lint:fix`, restores the silent pass with no visible symptom.
@@ -170,18 +167,11 @@ describe('lint gate contract', () => {
     expect(packageManifest().scripts?.['lint:fix']).toContain('yarn lint');
   });
 
-  // Inherited from the deleted `format` script, whose glob was the only thing
-  // covering these files.
+  // `prisma/` is linted like any other source directory, and nothing else
+  // covers it.
   it('keeps prisma/ inside the lint glob', () => {
     expect(packageManifest().scripts?.lint).toContain('prisma');
   });
-
-  it.each([['format'], ['format:check']])(
-    'has no standalone %s script duplicating the ESLint prettier rule',
-    (scriptName) => {
-      expect(packageManifest().scripts?.[scriptName]).toBeUndefined();
-    },
-  );
 
   it('runs the checking script in CI', () => {
     expect(testWorkflow()).toMatch(/run:\s*yarn lint\s*$/m);

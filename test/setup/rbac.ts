@@ -193,8 +193,9 @@ export async function createBusinessWithOwner(
 /**
  * Puts a user into a business with a given role and status.
  *
- * `joinedAt` is stamped for every status except INVITED because the database
- * CHECK requires it — a membership that has been active must record when.
+ * `joinedAt` is always stamped: the column is NOT NULL, because a membership row
+ * now exists only once somebody has actually joined. A pending invitation is a
+ * `business_invitations` row, never a placeholder membership.
  */
 export async function addMembership(
   app: INestApplication<App>,
@@ -213,7 +214,7 @@ export async function addMembership(
       userId,
       roleId: role.id,
       status,
-      joinedAt: status === BusinessMembershipStatus.INVITED ? null : new Date(),
+      joinedAt: new Date(),
       endedAt: status === BusinessMembershipStatus.LEFT ? new Date() : null,
     },
   });

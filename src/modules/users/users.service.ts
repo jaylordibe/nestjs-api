@@ -18,8 +18,11 @@ import {
   hashPassword,
 } from '../../common/util/password-hashing.util';
 import { RedisService } from '../../common/redis/redis.service';
+import { nextWholeSecond } from '../../common/util/session-cutoff.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RefreshTokenService } from '../auth/refresh-token.service';
+import { PermissionLoaderService } from '../authorization/permission-loader.service';
+import { BusinessOwnershipPolicy } from '../businesses/business-ownership.policy';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { UpdateAuthUserEmailDto } from './dto/update-auth-user-email.dto';
@@ -69,6 +72,11 @@ export class UsersService {
     // ref goes in the module imports AND on the injection.
     @Inject(forwardRef(() => RefreshTokenService))
     private readonly refreshTokenService: RefreshTokenService,
+    private readonly permissionLoaderService: PermissionLoaderService,
+    // The ownership invariant is enforced from BOTH sides. Deleting an account
+    // is the other half of "a live business always has an active owner", and it
+    // is the half that used to be missing entirely.
+    private readonly businessOwnershipPolicy: BusinessOwnershipPolicy,
   ) {}
 
   // Tells the owner of an existing account that someone tried to sign up with
@@ -395,11 +403,6 @@ export class UsersService {
       updatedBy: actorId,
     };
 
-    if (dto.password) {
-      updateData.password = await hashPassword(dto.password);
-      updateData.passwordChangedAt = new Date();
-    }
-
     const updated = await this.prisma.user.update({
       where: { id },
       data: updateData,
@@ -413,12 +416,8 @@ export class UsersService {
           // Role changes no longer travel through this endpoint — they have
           // their own audited routes (`POST/DELETE /users/:userId/roles`).
           isActiveChanged: dto.isActive !== undefined,
-          passwordChanged: Boolean(dto.password),
         },
       });
-    }
-    if (dto.password) {
-      await this.notifyPasswordChanged(updated);
     }
     return updated;
   }
@@ -428,14 +427,12 @@ export class UsersService {
     // Admin "delete" is soft — keeps the row for audit trail / recovery.
     // For true PII removal (GDPR right-to-be-forgotten) the user themselves
     // invokes gdprErase, which also anonymizes personal columns.
-    await this.prisma.user.update({
-      where: { id },
-      data: {
-        deletedAt: new Date(),
-        deletedBy: actorId,
-        updatedBy: actorId,
-      },
-    });
+    //
+    // Refused outright when the target is somebody's last owner. A platform
+    // admin is not exempt: `manage all` bypasses AUTHORIZATION, not data
+    // integrity, and the stranded membership it would create is invisible to
+    // every roster read — so nobody would find it to repair it.
+    await this.deleteAccount(id, actorId);
     if (actorId) {
       await this.auditService.record({
         action: 'user.soft_deleted.by_admin',
@@ -460,35 +457,117 @@ export class UsersService {
       throw Errors.currentPasswordIncorrect();
     }
     const now = new Date();
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        email: `deleted-${userId}@deleted.invalid`,
-        username: null,
-        password: await hashPassword(`erased-${userId}-${now.getTime()}`),
-        passwordChangedAt: now,
-        firstName: 'Deleted',
-        middleName: null,
-        lastName: 'User',
-        phoneNumber: null,
-        gender: null,
-        birthday: null,
-        timezone: null,
-        profileImageUrl: null,
-        otpHash: null,
-        otpPurpose: null,
-        otpExpiresAt: null,
-        emailVerifiedAt: null,
-        deletedAt: now,
-        deletedBy: userId,
-        updatedBy: userId,
-      },
-    });
+    const erasedPasswordHash = await hashPassword(
+      `erased-${userId}-${now.getTime()}`,
+    );
+
+    // Erasure does NOT refuse on sole ownership, and that asymmetry with
+    // `softDelete` is the whole point: a right-to-be-forgotten request answers a
+    // legal obligation, so it cannot be declined because of a commercial
+    // relationship. The businesses are closed in the same transaction instead —
+    // never left ownerless, never left live.
+    const { businesses: closedBusinesses, affectedUserIds } =
+      await this.prisma.$transaction(async (transaction) => {
+        const closed =
+          await this.businessOwnershipPolicy.closeSolelyOwnedBusinesses(
+            transaction,
+            userId,
+            userId,
+          );
+
+        await this.refreshTokenService.lockSessions(transaction, userId);
+        await transaction.user.update({
+          where: { id: userId },
+          data: {
+            email: `deleted-${userId}@deleted.invalid`,
+            username: null,
+            password: erasedPasswordHash,
+            passwordChangedAt: nextWholeSecond(now),
+            firstName: 'Deleted',
+            middleName: null,
+            lastName: 'User',
+            phoneNumber: null,
+            gender: null,
+            birthday: null,
+            timezone: null,
+            profileImageUrl: null,
+            otpHash: null,
+            otpPurpose: null,
+            otpExpiresAt: null,
+            emailVerifiedAt: null,
+            deletedAt: now,
+            deletedBy: userId,
+            updatedBy: userId,
+          },
+        });
+        await this.refreshTokenService.revokeAllForUserInTransaction(
+          transaction,
+          userId,
+        );
+        return closed;
+      });
+
+    // Cache invalidation happens AFTER the commit. Dropping a cached grant set
+    // while the transaction could still roll back would repopulate it from the
+    // pre-erasure rows and leave the stale copy behind — the one failure mode
+    // an invalidation is supposed to rule out.
+    await this.invalidateGrantsFor([userId, ...affectedUserIds]);
+
     await this.auditService.record({
       action: 'user.gdpr_erased',
       actorId: userId,
       targetUserId: userId,
+      // Ids only. The business NAMES are personal data in a single-proprietor
+      // tenant, and writing them into the audit trail during an erasure would
+      // re-create exactly what the erasure just removed.
+      metadata: {
+        closedBusinessIds: closedBusinesses.map((business) => business.id),
+      },
     });
+  }
+
+  /**
+   * Soft-delete an account, refusing to strand a business without an owner.
+   *
+   * Shared by the administrative delete and the self-close so the invariant
+   * cannot hold on one route and not the other — they differ only in who acts
+   * and which audit event follows, never in what is allowed.
+   */
+  private async deleteAccount(
+    userId: string,
+    actorId: string | null,
+  ): Promise<void> {
+    await this.prisma.$transaction(async (transaction) => {
+      await this.businessOwnershipPolicy.assertUserMayBeDeleted(
+        transaction,
+        userId,
+      );
+      await this.refreshTokenService.lockSessions(transaction, userId);
+      await transaction.user.update({
+        where: { id: userId },
+        data: {
+          deletedAt: new Date(),
+          deletedBy: actorId,
+          updatedBy: actorId,
+        },
+      });
+      // A deleted account must not keep minting access tokens off a refresh
+      // token. `JwtStrategy` already rejects the user through the scoped
+      // client, but leaving live rows behind means a restore silently
+      // resurrects every session that existed before the deletion.
+      await this.refreshTokenService.revokeAllForUserInTransaction(
+        transaction,
+        userId,
+      );
+    });
+    await this.invalidateGrantsFor([userId]);
+  }
+
+  /** Drop cached grant sets, one user at a time, tolerating a cache outage. */
+  private async invalidateGrantsFor(userIds: readonly string[]): Promise<void> {
+    for (const userId of new Set(userIds)) {
+      await this.permissionLoaderService.invalidateUser(userId);
+    }
   }
 
   async updateInfo(
@@ -520,14 +599,13 @@ export class UsersService {
     // suspension (a separate business concept from deletion), not to
     // double-signal lifecycle state. The row stays for audit/FK integrity;
     // call gdprErase for true PII removal.
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        deletedAt: new Date(),
-        deletedBy: actorId,
-        updatedBy: actorId,
-      },
-    });
+    //
+    // Refused while the user is the last active owner of a live business — the
+    // response names them, and the remedy (transfer ownership, or delete the
+    // business) is entirely in the caller's hands. `POST /users/me/gdpr-erase`
+    // is the path that cannot be refused, and it closes those businesses
+    // instead.
+    await this.deleteAccount(userId, actorId);
     await this.auditService.record({
       action: 'user.self_deleted',
       actorId,
@@ -570,6 +648,61 @@ export class UsersService {
     });
   }
 
+  /**
+   * THE credential write. Every password change on an existing account goes
+   * through here.
+   *
+   * Writes the hash, stamps `passwordChangedAt`, and revokes every refresh
+   * family — all in one transaction, under the session lock.
+   *
+   * There is deliberately no parameter to skip the revocation. Hashing was
+   * already centralized while the WRITE was not, and the result was that five of
+   * six call sites remembered `passwordChangedAt` and forgot to end the
+   * sessions: access tokens died, so the account holder believed the session was
+   * closed, while a stolen refresh token kept exchanging and re-extending its
+   * own expiry indefinitely. Making the revocation impossible to omit is the
+   * fix; asking callers to remember it is what failed.
+   *
+   * `extraData` lets a caller fold in fields that must land atomically with the
+   * credential change — clearing an OTP, anonymising a profile — without
+   * reopening the chance to write a password some other way.
+   */
+  private async applyPasswordChange(
+    userId: string,
+    plaintextPassword: string,
+    actorId: string | null,
+    extraData: Prisma.UserUpdateInput = {},
+  ): Promise<User> {
+    const passwordHash = await hashPassword(plaintextPassword);
+    // Rounded up to the next whole second — see `nextWholeSecond`. A raw
+    // timestamp leaves a token minted in the same second as the change valid,
+    // because `iat` has no sub-second precision to compare against.
+    const changedAt = nextWholeSecond();
+
+    return this.prisma.$transaction(async (transaction) => {
+      // User lock first — the same order every session path uses, so a
+      // credential change and a concurrent rotation cannot deadlock, and a
+      // rotation in flight cannot slip a replacement token past the revocation.
+      await this.refreshTokenService.lockSessions(transaction, userId);
+
+      const updated = await transaction.user.update({
+        where: { id: userId },
+        data: {
+          ...extraData,
+          password: passwordHash,
+          passwordChangedAt: changedAt,
+          updatedBy: actorId,
+        },
+      });
+
+      await this.refreshTokenService.revokeAllForUserInTransaction(
+        transaction,
+        userId,
+      );
+      return updated;
+    });
+  }
+
   async updateOwnPassword(
     userId: string,
     dto: UpdateAuthUserPasswordDto,
@@ -583,15 +716,11 @@ export class UsersService {
     if (!passwordMatches) {
       throw Errors.currentPasswordIncorrect();
     }
-    const passwordHash = await hashPassword(dto.newPassword);
-    const updated = await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        password: passwordHash,
-        passwordChangedAt: new Date(),
-        updatedBy: actorId,
-      },
-    });
+    const updated = await this.applyPasswordChange(
+      userId,
+      dto.newPassword,
+      actorId,
+    );
     await this.notifyPasswordChanged(updated);
     return updated;
   }
@@ -607,15 +736,11 @@ export class UsersService {
       );
     }
     await this.findById(userId);
-    const passwordHash = await hashPassword(newPassword);
-    const updated = await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        password: passwordHash,
-        passwordChangedAt: new Date(),
-        updatedBy: actorId,
-      },
-    });
+    const updated = await this.applyPasswordChange(
+      userId,
+      newPassword,
+      actorId,
+    );
     await this.auditService.record({
       action: 'password.reset.by_admin',
       actorId,
@@ -787,20 +912,20 @@ export class UsersService {
     if (!otpMatches) {
       throw Errors.invalidOtp();
     }
-    const passwordHash = await hashPassword(dto.newPassword);
-    const updated = await this.prisma.user.update({
-      where: { id: user.id },
-      data: {
-        password: passwordHash,
-        passwordChangedAt: new Date(),
+    const updated = await this.applyPasswordChange(
+      user.id,
+      dto.newPassword,
+      user.id,
+      {
+        // Folded into the same transaction: a reset that cleared the OTP but
+        // failed to write the password would burn the code for nothing.
         otpHash: null,
         otpPurpose: null,
         otpExpiresAt: null,
         failedLoginCount: 0,
         lockedUntil: null,
-        updatedBy: user.id,
       },
-    });
+    );
     await this.auditService.record({
       action: 'password.reset.completed',
       actorId: user.id,

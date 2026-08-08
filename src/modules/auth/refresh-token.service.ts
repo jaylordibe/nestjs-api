@@ -83,6 +83,7 @@ export class RefreshTokenService {
         id: true,
         userId: true,
         familyId: true,
+        createdAt: true,
         expiresAt: true,
         consumedAt: true,
         revokedAt: true,
@@ -121,10 +122,40 @@ export class RefreshTokenService {
     try {
       const refreshToken = await this.prisma.$transaction(
         async (transaction) => {
+          // User first, then family — the same order every revocation path
+          // takes, so the two can never deadlock against each other.
+          await lockUserSessions(transaction, existing.userId);
           await lockFamily(transaction, existing.familyId);
 
+          // A credential change ends every session that predates it. Checked
+          // HERE, inside the lock, rather than trusting the caller: this is the
+          // backstop that holds even if some future code path writes a password
+          // without going through `UsersService.applyPasswordChange`.
+          const owner = await transaction.user.findUnique({
+            where: { id: existing.userId },
+            select: { passwordChangedAt: true },
+          });
+          if (
+            owner?.passwordChangedAt &&
+            existing.createdAt.getTime() < owner.passwordChangedAt.getTime()
+          ) {
+            lostTheConsumeRace = true;
+            throw new LostConsumeRaceError();
+          }
+
+          // `revokedAt` and `expiresAt` are re-checked INSIDE the transaction.
+          // The equivalent checks above read the row fetched before it, so a
+          // revocation committing in between would otherwise still let this
+          // rotation issue a live child into a revoked family — and the family
+          // lock made that MORE likely, by parking the rotation until the
+          // revocation committed and then resuming on stale data.
           const consumed = await transaction.refreshToken.updateMany({
-            where: { id: existing.id, consumedAt: null },
+            where: {
+              id: existing.id,
+              consumedAt: null,
+              revokedAt: null,
+              expiresAt: { gt: new Date() },
+            },
             data: { consumedAt: new Date() },
           });
           if (consumed.count !== 1) {
@@ -231,6 +262,15 @@ export class RefreshTokenService {
    */
   async revokeFamily(familyId: string): Promise<void> {
     await this.prisma.$transaction(async (transaction) => {
+      // The family's owner, read inside the transaction so the lock order below
+      // is the same one `rotate` uses: user, then family.
+      const anyTokenInFamily = await transaction.refreshToken.findFirst({
+        where: { familyId },
+        select: { userId: true },
+      });
+      if (!anyTokenInFamily) return;
+
+      await lockUserSessions(transaction, anyTokenInFamily.userId);
       await lockFamily(transaction, familyId);
       await transaction.refreshToken.updateMany({
         where: { familyId, revokedAt: null },
@@ -239,12 +279,56 @@ export class RefreshTokenService {
     });
   }
 
-  /** Every session this user has anywhere. Pairs with logout-all. */
+  /**
+   * Every session this user has anywhere. Pairs with logout-all, support-driven
+   * revocation, and every credential change.
+   *
+   * Transactional and under the user lock, which is what makes "every" true. As
+   * a bare `updateMany` it raced rotation and lost: a rotation that had inserted
+   * its replacement row but not committed sat outside the revoking statement's
+   * snapshot, so the sweep matched the parent, blocked on the rotation's row
+   * lock, and then committed — leaving the freshly-inserted child alive with
+   * `revokedAt: null`. "Sign me out everywhere" left one live renewable token,
+   * and bumping `passwordChangedAt` did not compensate, because the rotation had
+   * already minted an access token with a fresh `iat`.
+   */
   async revokeAllForUser(userId: string): Promise<void> {
-    await this.prisma.refreshToken.updateMany({
+    await this.prisma.$transaction(async (transaction) => {
+      await lockUserSessions(transaction, userId);
+      await transaction.refreshToken.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+    });
+  }
+
+  /**
+   * Revokes every session as part of a caller-supplied transaction.
+   *
+   * Exists so a credential change can write the new password and end every
+   * session atomically — a password write that commits without the revocation
+   * is precisely the gap this hardening pass closed.
+   *
+   * The caller must already hold the user lock. It is not taken here, because
+   * taking it twice in one transaction is harmless but taking it in the wrong
+   * ORDER is not, and the caller is the only one who knows what else it holds.
+   */
+  async revokeAllForUserInTransaction(
+    transaction: Prisma.TransactionClient,
+    userId: string,
+  ): Promise<void> {
+    await transaction.refreshToken.updateMany({
       where: { userId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
+  }
+
+  /** Locks one account's session state. Exported for credential changes. */
+  async lockSessions(
+    transaction: Prisma.TransactionClient,
+    userId: string,
+  ): Promise<void> {
+    await lockUserSessions(transaction, userId);
   }
 
   /**
@@ -295,6 +379,29 @@ async function lockFamily(
   familyId: string,
 ): Promise<void> {
   await transaction.$queryRaw`SELECT id FROM refresh_tokens WHERE family_id = ${familyId}::uuid FOR UPDATE`;
+}
+
+/**
+ * THE ordering primitive for every session operation on one account.
+ *
+ * A family lock cannot serialize `revokeAllForUser`, because that spans families
+ * — and a bare `updateMany` cannot see a replacement row a concurrent, still-open
+ * rotation has inserted, so the replacement commits afterwards with
+ * `revokedAt: null` and survives "sign me out everywhere".
+ *
+ * Locking the USER row fixes that and fixes the deadlock question in the same
+ * move: every path here takes this lock FIRST and the family lock second, so two
+ * transactions can never hold one and wait on the other in opposite orders.
+ *
+ * It locks `users`, not `refresh_tokens`, deliberately: a user with no tokens
+ * still needs a lockable row, or a revoke racing a first login has nothing to
+ * serialize against.
+ */
+async function lockUserSessions(
+  transaction: Prisma.TransactionClient,
+  userId: string,
+): Promise<void> {
+  await transaction.$queryRaw`SELECT id FROM users WHERE id = ${userId}::uuid FOR UPDATE`;
 }
 
 // Thrown out of the rotation transaction when the conditional consume finds no

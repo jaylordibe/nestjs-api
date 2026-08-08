@@ -6,7 +6,6 @@ import type { AppAbility } from '../../../common/authorization/app-ability';
 import { EmailService } from '../../../common/email/email.service';
 import { BusinessInvitationStatus } from '../../../common/enums/business-invitation-status.enum';
 import { BusinessMembershipStatus } from '../../../common/enums/business-membership-status.enum';
-import { RoleScope } from '../../../common/enums/role-scope.enum';
 import { Errors } from '../../../common/errors/errors';
 import { buildOrderBy, MetaQueryDto } from '../../../common/dto/meta-query.dto';
 import { PaginationMeta } from '../../../common/dto/paginated-response.dto';
@@ -17,6 +16,8 @@ import {
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AbilityScopedQueryService } from '../../authorization/ability-scoped-query.service';
 import { PermissionLoaderService } from '../../authorization/permission-loader.service';
+import { BusinessOwnershipPolicy } from '../business-ownership.policy';
+import { BusinessRoleAssignmentPolicy } from '../business-role-assignment.policy';
 import { CreateBusinessInvitationDto } from './dto/create-business-invitation.dto';
 import type { BusinessInvitationRow } from './dto/business-invitation-response.dto';
 
@@ -42,6 +43,8 @@ export class BusinessInvitationsService {
     private readonly abilityScopedQueryService: AbilityScopedQueryService,
     private readonly permissionLoaderService: PermissionLoaderService,
     private readonly emailService: EmailService,
+    private readonly businessOwnershipPolicy: BusinessOwnershipPolicy,
+    private readonly businessRoleAssignmentPolicy: BusinessRoleAssignmentPolicy,
     configService: ConfigService,
   ) {
     this.expiresInDays = configService.getOrThrow<number>(
@@ -56,10 +59,12 @@ export class BusinessInvitationsService {
    * The address need not belong to a user — that is the entire reason this is a
    * separate model from `BusinessMembership`, whose `userId` is NOT NULL.
    *
-   * When the address DOES already have an account, an INVITED membership row is
-   * written alongside the invitation. That reserves the (business, user) slot,
-   * so the roster shows the person as pending and a second invitation cannot be
-   * raised behind the first.
+   * **No membership row is written here.** When the address already has an
+   * account, the account is recorded on the invitation as `invitedUserId` and
+   * nothing else changes. Writing a placeholder membership instead consumed the
+   * ONE row `@@unique([businessId, userId])` allows, so re-inviting a former
+   * member overwrote their `joinedAt`/`endedAt` — a manager could silently
+   * rewrite somebody's employment history by sending an invitation.
    */
   async create(
     businessId: string,
@@ -67,8 +72,18 @@ export class BusinessInvitationsService {
     ability: AppAbility,
     actorId: string,
   ): Promise<{ invitation: BusinessInvitationRow; token: string }> {
-    const role = await this.loadAssignableBusinessRole(dto.roleId);
-    await this.assertRankPermits(businessId, actorId, role.rank, ability);
+    const role = await this.businessRoleAssignmentPolicy.loadAssignableRole(
+      dto.roleId,
+    );
+    // The SAME two bounds the roster path applies. An invitation IS a role
+    // assignment, merely deferred, so enforcing this only on `POST
+    // /memberships` would make the rule whichever endpoint the caller picked.
+    await this.businessRoleAssignmentPolicy.assertMayAssign(
+      businessId,
+      actorId,
+      role,
+      ability,
+    );
 
     const business = await this.prisma.scoped.business.findFirst({
       where: { id: businessId },
@@ -85,55 +100,33 @@ export class BusinessInvitationsService {
     });
 
     const token = generateOpaqueToken();
-    const expiresAt = new Date(
-      Date.now() + this.expiresInDays * 24 * 60 * 60 * 1000,
-    );
+    const expiresAt = this.expiryFromNow();
 
     const invitation = await this.prisma.$transaction(async (transaction) => {
+      // The same business-row lock every membership mutation takes. An invite
+      // does not change the roster, but it reads it to decide whether the
+      // person is already on it, and that read must not race a concurrent
+      // removal or role change.
+      await this.businessOwnershipPolicy.lockBusiness(transaction, businessId);
+
       if (existingUser) {
         const membership = await transaction.businessMembership.findUnique({
           where: {
             businessId_userId: { businessId, userId: existingUser.id },
           },
-          select: { id: true, status: true },
+          select: { status: true },
         });
-        const status = membership?.status as
-          | BusinessMembershipStatus
-          | undefined;
+        // A former member may be invited back; anyone currently attached —
+        // active or suspended — is already here.
         if (
           membership &&
-          status !== BusinessMembershipStatus.LEFT &&
-          status !== BusinessMembershipStatus.INVITED
+          (membership.status as BusinessMembershipStatus) !==
+            BusinessMembershipStatus.LEFT
         ) {
           throw Errors.resourceConflict(
             'That person already has a membership in this business',
           );
         }
-
-        // Reserve the slot. `joinedAt` stays null — the DB CHECK requires it
-        // absent for INVITED, and they have not joined anything yet.
-        await transaction.businessMembership.upsert({
-          where: {
-            businessId_userId: { businessId, userId: existingUser.id },
-          },
-          create: {
-            businessId,
-            userId: existingUser.id,
-            roleId: role.id,
-            status: BusinessMembershipStatus.INVITED,
-            invitedBy: actorId,
-            createdBy: actorId,
-            updatedBy: actorId,
-          },
-          update: {
-            roleId: role.id,
-            status: BusinessMembershipStatus.INVITED,
-            joinedAt: null,
-            endedAt: null,
-            invitedBy: actorId,
-            updatedBy: actorId,
-          },
-        });
       }
 
       try {
@@ -141,6 +134,7 @@ export class BusinessInvitationsService {
           data: {
             businessId,
             email: dto.email,
+            invitedUserId: existingUser?.id ?? null,
             roleId: role.id,
             tokenHash: hashOpaqueToken(token),
             status: BusinessInvitationStatus.PENDING,
@@ -154,9 +148,11 @@ export class BusinessInvitationsService {
       } catch (error) {
         // The partial unique index on (business_id, email) WHERE status =
         // 'pending' is what makes "one outstanding invitation per address"
-        // true under concurrency. Translate it rather than letting the global
-        // filter report a raw UNIQUE_CONSTRAINT_VIOLATION on a column pair the
-        // client never sent as a pair.
+        // true under concurrency — and, now that no placeholder membership
+        // exists, it is the ONLY thing that makes it true. Translate it rather
+        // than letting the global filter report a raw
+        // UNIQUE_CONSTRAINT_VIOLATION on a column pair the client never sent
+        // as a pair.
         if (
           error instanceof Prisma.PrismaClientKnownRequestError &&
           error.code === 'P2002'
@@ -226,25 +222,27 @@ export class BusinessInvitationsService {
     };
   }
 
-  /** Withdraws a pending invitation. Accepted ones are history and immutable. */
+  /**
+   * Withdraws a pending invitation. Accepted ones are history and immutable.
+   *
+   * One statement against one table. It used to be three across two, with the
+   * membership deletion keyed off a SECOND lookup of the invited address — so a
+   * crash between them left a business with a membership nobody had invited,
+   * and a re-registered address had somebody else's membership deleted and the
+   * audit event attributed to them. `invitedUserId` is resolved once, at invite
+   * time, and never re-derived from a mutable string.
+   */
   async revoke(
     businessId: string,
     invitationId: string,
     ability: AppAbility,
     actorId: string,
   ): Promise<void> {
-    const existing = await this.prisma.businessInvitation.findFirst({
-      where: this.abilityScopedQueryService.buildWhereOrEmpty(
-        ability,
-        'read',
-        'BusinessInvitation',
-        { id: invitationId, businessId },
-      ),
-      select: { id: true, status: true, email: true },
-    });
-    if (!existing) {
-      throw Errors.resourceNotFound('Business invitation');
-    }
+    const existing = await this.findVisibleInvitation(
+      businessId,
+      invitationId,
+      ability,
+    );
 
     // Conditional, not a read-then-write: revoking and accepting race, and the
     // loser must not silently overwrite the winner.
@@ -263,26 +261,92 @@ export class BusinessInvitationsService {
       );
     }
 
-    // Drop the placeholder membership if one was reserved and never accepted.
-    const invitedUser = await this.prisma.scoped.user.findFirst({
-      where: { email: existing.email },
-      select: { id: true },
-    });
-    if (invitedUser) {
-      await this.prisma.businessMembership.deleteMany({
-        where: {
-          businessId,
-          userId: invitedUser.id,
-          status: BusinessMembershipStatus.INVITED,
-        },
-      });
-    }
-
     await this.auditService.record({
       action: 'business_invitation.revoked',
       actorId,
-      targetUserId: invitedUser?.id ?? null,
+      targetUserId: existing.invitedUserId,
       metadata: { businessId, invitationId },
+    });
+  }
+
+  /**
+   * Re-sends a pending invitation on a FRESH token, invalidating the old one.
+   *
+   * The recovery path a business actually needs: the mail was lost, filtered,
+   * or is about to expire. Without it the only remedy was revoke-then-invite,
+   * which needs `delete BusinessInvitation` on top of `create` — a manager
+   * holding one and not the other could raise an invitation they could never
+   * repair.
+   *
+   * The token is ROTATED rather than re-sent, and that is the security-relevant
+   * part: re-mailing the same secret would leave every earlier copy of it live
+   * in every inbox and mail log it ever passed through. After a resend, exactly
+   * one token opens this invitation.
+   */
+  async resend(
+    businessId: string,
+    invitationId: string,
+    ability: AppAbility,
+    actorId: string,
+  ): Promise<BusinessInvitationRow> {
+    const existing = await this.findVisibleInvitation(
+      businessId,
+      invitationId,
+      ability,
+    );
+    // Re-checked at resend time, not just at invite time: the actor may have
+    // been demoted since, or had `assignRole` withdrawn, and a resend re-issues
+    // the same role.
+    await this.businessRoleAssignmentPolicy.assertMayAssign(
+      businessId,
+      actorId,
+      existing.role,
+      ability,
+    );
+
+    const business = await this.prisma.scoped.business.findFirst({
+      where: { id: businessId },
+      select: { name: true },
+    });
+    if (!business) {
+      throw Errors.resourceNotFound('Business');
+    }
+
+    const token = generateOpaqueToken();
+    // Conditional on PENDING for the same reason revoke is: a resend racing an
+    // acceptance must not resurrect a consumed invitation with a working token.
+    const rotated = await this.prisma.businessInvitation.updateMany({
+      where: { id: invitationId, status: BusinessInvitationStatus.PENDING },
+      data: {
+        tokenHash: hashOpaqueToken(token),
+        expiresAt: this.expiryFromNow(),
+        updatedBy: actorId,
+      },
+    });
+    if (rotated.count !== 1) {
+      throw Errors.resourceConflict(
+        'That invitation is no longer pending and cannot be resent',
+      );
+    }
+
+    await this.sendInvitationEmail(
+      existing.email,
+      business.name,
+      existing.role.name,
+      actorId,
+      token,
+    );
+    await this.auditService.record({
+      action: 'business_invitation.resent',
+      actorId,
+      targetUserId: existing.invitedUserId,
+      // No token material, hashed or otherwise — same rule as `create`.
+      metadata: { businessId, invitationId },
+    });
+
+    return this.prisma.businessInvitation.findUniqueOrThrow({
+      where: { id: invitationId },
+      include: INVITATION_INCLUDE,
     });
   }
 
@@ -296,9 +360,20 @@ export class BusinessInvitationsService {
    * the same still-valid token here. An acceptance endpoint that minted
    * accounts would be a second, less-guarded front door into user creation.
    *
-   * The caller's email must MATCH the invited address. Without that check the
-   * token alone would be sufficient, and a forwarded invitation would let
-   * anyone join a business that invited somebody else specifically.
+   * The caller must be the person who was invited. Without that check the token
+   * alone would be sufficient, and a forwarded invitation would let anyone join
+   * a business that invited somebody else specifically. Identity is established
+   * two ways, and which one applies is decided by what was true at INVITE time:
+   *
+   *   - `invitedUserId` set — the address already had an account, so identity
+   *     is the account id. Not the address: the invitee may have changed their
+   *     email since, and somebody else may since have registered the old one.
+   *   - `invitedUserId` null — nobody held the address, so the address IS the
+   *     identity, and the caller must have PROVEN they control it. An
+   *     unverified match is not proof: changing your own email needs only your
+   *     password, and `emailVerifiedAt` is cleared by that change while the
+   *     access token issued beforehand keeps working. Without this check, a
+   *     forwarded token plus an email change is a complete bypass.
    *
    * Replay safety is a conditional UPDATE out of `pending` inside the same
    * transaction that writes the membership: two simultaneous redemptions of one
@@ -315,6 +390,7 @@ export class BusinessInvitationsService {
         id: true,
         businessId: true,
         email: true,
+        invitedUserId: true,
         roleId: true,
         status: true,
         expiresAt: true,
@@ -336,9 +412,7 @@ export class BusinessInvitationsService {
     if (invitation.business.deletedAt) {
       throw Errors.invitationInvalid();
     }
-    if (invitation.email !== actor.email.toLowerCase()) {
-      throw Errors.invitationInvalid();
-    }
+    await this.assertIsInvitee(invitation, actor);
     // Distinguishable on purpose: the holder already proved possession of a
     // real token, so this leaks nothing, and their remedy differs.
     if (invitation.expiresAt.getTime() <= Date.now()) {
@@ -366,9 +440,10 @@ export class BusinessInvitationsService {
           throw new InvitationAlreadyConsumedError();
         }
 
-        // Upsert, because the invitation may already have reserved an INVITED
-        // row — and because someone who previously LEFT still owns the only row
-        // `@@unique([businessId, userId])` will ever allow.
+        // Upsert, because someone who previously LEFT still owns the only row
+        // `@@unique([businessId, userId])` will ever allow. `joinedAt` is
+        // rewritten on that path deliberately — this IS the day they joined
+        // again — where an invitation that was merely SENT must never touch it.
         const membership = await transaction.businessMembership.upsert({
           where: {
             businessId_userId: {
@@ -422,6 +497,74 @@ export class BusinessInvitationsService {
 
   // ── helpers ────────────────────────────────────────────────────────────
 
+  private expiryFromNow(): Date {
+    return new Date(Date.now() + this.expiresInDays * 24 * 60 * 60 * 1000);
+  }
+
+  /**
+   * Loads an invitation the caller is allowed to see, or 404s.
+   *
+   * Scoped through the ability so a caller who cannot read the invitation is
+   * told it does not exist rather than that they may not touch it — a 403 here
+   * would confirm that a given address was invited to a given business.
+   */
+  private async findVisibleInvitation(
+    businessId: string,
+    invitationId: string,
+    ability: AppAbility,
+  ) {
+    const invitation = await this.prisma.businessInvitation.findFirst({
+      where: this.abilityScopedQueryService.buildWhereOrEmpty(
+        ability,
+        'read',
+        'BusinessInvitation',
+        { id: invitationId, businessId },
+      ),
+      select: {
+        id: true,
+        status: true,
+        email: true,
+        invitedUserId: true,
+        // `id` included so the row satisfies `AssignableBusinessRole` — a
+        // resend re-issues this exact role and is re-checked against it.
+        role: { select: { id: true, name: true, rank: true } },
+      },
+    });
+    if (!invitation) {
+      throw Errors.resourceNotFound('Business invitation');
+    }
+    return invitation;
+  }
+
+  /**
+   * Establishes that the caller is the invitee. See `accept` for the reasoning.
+   *
+   * Every failure raises the SAME error the unknown-token path raises, so a
+   * holder of somebody else's token learns nothing about whose it is.
+   */
+  private async assertIsInvitee(
+    invitation: { email: string; invitedUserId: string | null },
+    actor: { id: string; email: string },
+  ): Promise<void> {
+    if (invitation.invitedUserId) {
+      if (invitation.invitedUserId !== actor.id) {
+        throw Errors.invitationInvalid();
+      }
+      return;
+    }
+
+    if (invitation.email !== actor.email.toLowerCase()) {
+      throw Errors.invitationInvalid();
+    }
+    const caller = await this.prisma.scoped.user.findUnique({
+      where: { id: actor.id },
+      select: { emailVerifiedAt: true },
+    });
+    if (!caller?.emailVerifiedAt) {
+      throw Errors.invitationInvalid();
+    }
+  }
+
   private async sendInvitationEmail(
     email: string,
     businessName: string,
@@ -455,52 +598,6 @@ export class BusinessInvitationsService {
           error instanceof Error ? error.message : String(error)
         }`,
       );
-    }
-  }
-
-  private async loadAssignableBusinessRole(roleId: string) {
-    const role = await this.prisma.role.findUnique({
-      where: { id: roleId },
-      select: { id: true, name: true, rank: true, scope: true },
-    });
-    if (!role) {
-      throw Errors.resourceNotFound('Role');
-    }
-    if ((role.scope as RoleScope) !== RoleScope.BUSINESS) {
-      throw Errors.roleNotAssignable();
-    }
-    return role;
-  }
-
-  /**
-   * The same ceiling `BusinessMembershipsService` enforces, applied at INVITE
-   * time.
-   *
-   * Checking only at acceptance would be too late in the way that matters: the
-   * invitation email would already have gone out promising a role the inviter
-   * was never allowed to grant, and the refusal would land on the invitee.
-   */
-  private async assertRankPermits(
-    businessId: string,
-    actorId: string,
-    targetRank: number,
-    ability: AppAbility,
-  ): Promise<void> {
-    if (ability.can('manage', 'all')) return;
-
-    const actorMembership = await this.prisma.businessMembership.findUnique({
-      where: { businessId_userId: { businessId, userId: actorId } },
-      select: { status: true, role: { select: { rank: true } } },
-    });
-    if (
-      !actorMembership ||
-      (actorMembership.status as BusinessMembershipStatus) !==
-        BusinessMembershipStatus.ACTIVE
-    ) {
-      throw Errors.roleNotAssignable();
-    }
-    if (targetRank > actorMembership.role.rank) {
-      throw Errors.roleNotAssignable();
     }
   }
 }

@@ -57,11 +57,20 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw Errors.userInactive();
     }
 
-    // Invalidate any token issued strictly before the second in which the
-    // user's password was last changed. Tolerates sub-second jitter (a token
-    // can be issued in the same second as the change and still verify) but
-    // guarantees rejection for tokens issued ≥1s before. Catches stolen
-    // tokens when the real user rotates their password.
+    // Invalidate every token issued before the password was last changed.
+    //
+    // `iat` is whole seconds (RFC 7519 §4.1.6) and `passwordChangedAt` has
+    // millisecond precision, so a naive comparison leaves a sub-second hole: a
+    // change at 10.400s floors to 10, and a token minted at 10.100s carries
+    // `iat = 10`, which is not `< 10` — it survives the very control the user
+    // invoked to kill it.
+    //
+    // The rounding is handled at the WRITE instead (`nextWholeSecond`, used by
+    // every credential change and by logout-all), so this comparison stays a
+    // plain floor. Fixing it here instead was tried and is wrong: account
+    // creation also stamps `passwordChangedAt`, so rounding up on read rejects
+    // a brand-new user's first login whenever it lands in the same second as
+    // their registration.
     if (user.passwordChangedAt && payload.iat !== undefined) {
       const changedAtSeconds = Math.floor(
         user.passwordChangedAt.getTime() / 1000,

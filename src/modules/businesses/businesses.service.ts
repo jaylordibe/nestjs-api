@@ -67,8 +67,8 @@ export class BusinessesService {
           userId: actorId,
           roleId: ownerRole.id,
           status: BusinessMembershipStatus.ACTIVE,
-          // The DB CHECK requires `joined_at` for anything past INVITED, and
-          // the creator joins the instant the business exists.
+          // `joined_at` is NOT NULL, and the creator joins the instant the
+          // business exists.
           joinedAt: new Date(),
           createdBy: actorId,
           updatedBy: actorId,

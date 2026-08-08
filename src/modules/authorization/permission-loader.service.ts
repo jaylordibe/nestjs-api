@@ -46,8 +46,8 @@ export const AUTHORIZATION_EPOCH_KEY = 'authz:epoch';
 // `deletedAt` of its own, those grants still resolve to real rows: the roster,
 // including names and emails, would stay readable after the business was gone.
 //
-// ACTIVE MEMBERSHIP: `INVITED`, `SUSPENDED`, and `LEFT` rows all still name a
-// role, and a suspended owner still has rank 100 recorded against them. Status
+// ACTIVE MEMBERSHIP: `SUSPENDED` and `LEFT` rows both still name a role, and a
+// suspended owner still has rank 100 recorded against them. Status
 // is the ONLY thing standing between "we withdrew this person's access" and
 // "they kept it", and it has to be applied here because a guard runs before any
 // row is loaded and cannot see a status at all.

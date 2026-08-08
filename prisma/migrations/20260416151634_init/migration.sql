@@ -127,7 +127,7 @@ CREATE TABLE "business_memberships" (
     "user_id" UUID NOT NULL,
     "role_id" UUID NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'active',
-    "joined_at" TIMESTAMP(3),
+    "joined_at" TIMESTAMP(3) NOT NULL,
     "ended_at" TIMESTAMP(3),
     "invited_by" UUID,
     "notes" TEXT,
@@ -144,6 +144,7 @@ CREATE TABLE "business_invitations" (
     "updated_by" UUID,
     "business_id" UUID NOT NULL,
     "email" TEXT NOT NULL,
+    "invited_user_id" UUID,
     "role_id" UUID NOT NULL,
     "token_hash" TEXT NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'pending',
@@ -268,6 +269,9 @@ CREATE INDEX "business_invitations_expires_at_idx" ON "business_invitations"("ex
 CREATE INDEX "business_invitations_role_id_idx" ON "business_invitations"("role_id");
 
 -- CreateIndex
+CREATE INDEX "business_invitations_invited_user_id_idx" ON "business_invitations"("invited_user_id");
+
+-- CreateIndex
 CREATE INDEX "audit_logs_actor_id_created_at_idx" ON "audit_logs"("actor_id", "created_at");
 
 -- CreateIndex
@@ -323,6 +327,9 @@ ALTER TABLE "business_invitations" ADD CONSTRAINT "business_invitations_business
 
 -- AddForeignKey
 ALTER TABLE "business_invitations" ADD CONSTRAINT "business_invitations_role_id_fkey" FOREIGN KEY ("role_id") REFERENCES "roles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "business_invitations" ADD CONSTRAINT "business_invitations_invited_user_id_fkey" FOREIGN KEY ("invited_user_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "device_tokens" ADD CONSTRAINT "device_tokens_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -413,20 +420,6 @@ CREATE UNIQUE INDEX businesses_slug_key
 CREATE UNIQUE INDEX business_invitations_business_id_email_pending_key
   ON business_invitations (business_id, email)
   WHERE status = 'pending';
-
--- Membership lifecycle integrity.
---
--- `joined_at` must be set for any status other than `invited`. Stated in ONE
--- direction on purpose: an `invited` row MAY carry a `joined_at` left over from
--- an earlier stint, because a former member who is re-invited reuses the same
--- row. A stricter `status = 'invited' -> joined_at IS NULL` would reject that.
---
--- Expressed as a CHECK rather than trusted to the service layer because a
--- membership with no join date is indistinguishable from a corrupt row later,
--- and by then the code that wrote it is long gone.
-ALTER TABLE business_memberships
-  ADD CONSTRAINT business_memberships_joined_at_check
-  CHECK (status = 'invited' OR joined_at IS NOT NULL);
 
 -- Trigram index for substring search across the audit-log metadata envelope.
 --

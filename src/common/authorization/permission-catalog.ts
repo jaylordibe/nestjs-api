@@ -530,10 +530,20 @@ export const ROLE_DEFINITION_CATALOG: Readonly<
     // by the queue's own contract.
     description:
       'Escalated technical support: incident investigation, sanitized diagnostics, approved retries',
+    // NOTE the absence of READ_ANY_AUDIT_LOG. The audit trail carries IP
+    // addresses, user agents, parsed device fingerprints, and — behind
+    // Cloudflare — geolocation, for every account on the platform. That is
+    // surveillance-grade data, and "support might need it" is not a reason to
+    // hand it to the two most widely-staffed roles by default.
+    //
+    // Queue diagnostics answer the questions support actually has (what failed,
+    // why, retry it) without exposing who did what from where. A project that
+    // genuinely needs support-side audit visibility should add a SANITIZED
+    // endpoint — whitelisted fields, restricted event types, server-side
+    // filtering — rather than granting this permission.
     permissions: [
       READ_ANY_USER,
       READ_ANY_BUSINESS,
-      READ_ANY_AUDIT_LOG,
       READ_ANY_QUEUE_JOB,
       RETRY_ANY_QUEUE_JOB,
       READ_ANY_BUSINESS_MEMBERSHIP,
@@ -547,10 +557,13 @@ export const ROLE_DEFINITION_CATALOG: Readonly<
     // helps its owner, whereas editing its email takes it from them.
     description:
       'Customer-facing support: account visibility, verification resends, unlocks, session revocation',
+    // Also without READ_ANY_AUDIT_LOG — see the note on
+    // PLATFORM_TECHNICAL_SUPPORT above. This role is the widest-staffed one on
+    // the platform and is the least appropriate place for a firehose of other
+    // people's IP addresses and device fingerprints.
     permissions: [
       READ_ANY_USER,
       READ_ANY_BUSINESS,
-      READ_ANY_AUDIT_LOG,
       READ_ANY_BUSINESS_MEMBERSHIP,
       UNLOCK_ANY_USER,
       REVOKE_ANY_USER_SESSION,
