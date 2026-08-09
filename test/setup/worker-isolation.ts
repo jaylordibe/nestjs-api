@@ -1,9 +1,8 @@
 // Per-worker isolation for the e2e suite.
 //
-// The suite used to be pinned to `maxWorkers: 1`, because every spec shared
-// ONE database: two workers running concurrently would have truncated each
-// other's rows mid-test. That made the wall-clock the sum of every spec —
-// ~13 min locally, and the same serially in CI.
+// Sharing ONE database across the suite forces `maxWorkers: 1`: two workers
+// running concurrently would truncate each other's rows mid-test, making the
+// wall-clock the sum of every spec.
 //
 // Instead of serialising, give each worker its own state. `globalSetup`
 // migrates a TEMPLATE database once and clones it per worker (`CREATE

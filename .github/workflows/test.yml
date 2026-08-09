@@ -123,14 +123,14 @@ jobs:
       # Blocks the build on any high/critical advisory, EXCEPT ones explicitly
       # accepted (with rationale + review date) in .github/scripts/audit-gate.mjs.
       #
-      # This replaced a raw `yarn audit --level high || test $? -lt 8` bitmask
-      # check. That worked — yarn 1.x's exit code is a bitmask of ALL severities
-      # (1=info, 2=low, 4=moderate, 8=high, 16=critical), so `>= 8` did isolate
-      # high+ — but it was all-or-nothing: yarn 1.x cannot accept a *single*
-      # advisory, so one genuinely-unfixable high finding would either red-light
-      # the job forever or force deleting the whole gate. The script threads
-      # that needle: hard on everything unaccepted, and it nags when an
-      # acceptance goes stale or past its review date.
+      # A raw `yarn audit --level high || test $? -lt 8` bitmask check would
+      # isolate high+ correctly — yarn 1.x's exit code is a bitmask of ALL
+      # severities (1=info, 2=low, 4=moderate, 8=high, 16=critical) — but it is
+      # all-or-nothing: yarn 1.x cannot accept a *single* advisory, so one
+      # genuinely-unfixable high finding would either red-light the job forever
+      # or force deleting the whole gate. The script threads that needle: hard
+      # on everything unaccepted, and it nags when an acceptance goes stale or
+      # past its review date.
       #
       # When a NEW high trips this, reach for an upgrade BEFORE a `resolutions`
       # override, and only allowlist as a last resort — advisories are often
@@ -340,19 +340,17 @@ jobs:
     timeout-minutes: 15
 
     # NO job-level `env:` block, for the same reason the `quality` job carries
-    # none — and here the rule was learned the hard way. `.env.test` already
+    # none — and the failure mode here is especially sharp. `.env.test` already
     # pins `COMPOSE_PROJECT_NAME` (to `nestjs-test`), so compose resolves the
     # SAME project from `base/` and from `head/`; the working directory never
     # enters into it and there is nothing to pin.
     #
-    # A `COMPOSE_PROJECT_NAME: migration-safety` block used to sit here to
-    # "fix" a directory-derived project name that `.env.test` had already made
-    # impossible, and it broke this job outright: the steps that talk to the
-    # containers source `.env.test` with `set -a` first, so the shell variable
-    # this block exported was OVERWRITTEN in exactly those steps. `Start
-    # Postgres + Redis` (no sourcing) created project `migration-safety`, then
-    # `Assert the database is actually populated` (sourced) looked in project
-    # `nestjs-test` and reported `service "postgres" is not running`.
+    # Restating `COMPOSE_PROJECT_NAME` here would break this job outright: the
+    # steps that talk to the containers source `.env.test` with `set -a` first,
+    # so a shell variable exported by a job-level block is OVERWRITTEN in
+    # exactly those steps. `Start Postgres + Redis` (no sourcing) would create
+    # one project, then `Assert the database is actually populated` (sourced)
+    # would look in another and report `service "postgres" is not running`.
     #
     # So: any key `.env.test` defines must not be restated here, and every
     # `docker compose` invocation below runs from `head/` with that same file.

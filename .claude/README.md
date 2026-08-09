@@ -400,14 +400,12 @@ schema, skill/agent name agreement, collisions with built-in commands, the
 1,536-character skill-listing cap, cross-reference resolution, and doc-vs-code
 symbol drift.
 
-It also enforces the guardrails above, each of which was a real defect here
-before it was a check:
+It also enforces the guardrails above:
 
 - every agent is read-only, judged by its **effective tool pool** rather than by
-  a phrase in its prose. The earlier probe searched for the sentence "Never edit
-  files", so it passed the three agents that had neither the sentence nor the
-  restriction — silence read as compliance. A check that cannot catch an
-  omission is not a check;
+  a phrase in its prose. Probing for a sentence such as "Never edit files" would
+  pass any agent that has neither the sentence nor the restriction — silence
+  reading as compliance. A check that cannot catch an omission is not a check;
 - the required deny floor is present, so deleting one line cannot quietly
   retract a promise that `CLAUDE.md` still makes;
 - `Bash` and `PowerShell` deny/ask rules stay mirrored;

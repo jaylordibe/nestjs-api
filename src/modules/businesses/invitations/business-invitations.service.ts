@@ -286,12 +286,13 @@ export class BusinessInvitationsService {
   /**
    * Withdraws a pending invitation. Accepted ones are history and immutable.
    *
-   * One statement against one table. It used to be three across two, with the
-   * membership deletion keyed off a SECOND lookup of the invited address — so a
-   * crash between them left a business with a membership nobody had invited,
-   * and a re-registered address had somebody else's membership deleted and the
-   * audit event attributed to them. `invitedUserId` is resolved once, at invite
-   * time, and never re-derived from a mutable string.
+   * One statement against one table, deliberately. Spreading it across two —
+   * with the membership deletion keyed off a SECOND lookup of the invited
+   * address — lets a crash between them leave a business with a membership
+   * nobody invited, and lets a re-registered address have somebody else's
+   * membership deleted with the audit event attributed to them. `invitedUserId`
+   * is resolved once, at invite time, and never re-derived from a mutable
+   * string.
    */
   async revoke(
     businessId: string,

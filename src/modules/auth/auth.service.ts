@@ -215,9 +215,9 @@ export class AuthService {
    *
    * That re-read happens INSIDE `rotate`'s transaction, under the user lock, and
    * the user it returns is the row that authorised the exchange. Checking
-   * eligibility here afterwards — as this used to — meant the row that was
-   * checked and the row that authorised the new session were two different
-   * reads with a commit window between them.
+   * eligibility here afterwards would make the row that was checked and the row
+   * that authorised the new session two different reads, with a commit window
+   * between them.
    */
   async refresh(
     presentedToken: string,

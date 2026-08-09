@@ -26,11 +26,11 @@ import { createTestApp } from './setup/test-app';
  * Ownership survives every race between promotion and account withdrawal.
  *
  * The invariant, stated once: **every live business has at least one ACTIVE
- * owner whose account is live and active.** Its two halves used to be enforced
- * by two mechanisms that could not see each other. Account deletion locked the
- * businesses the user was ALREADY known to own; a promotion into a business the
- * user did not yet own therefore locked nothing the deletion would wait on, and
- * both committed. The result is an ACTIVE `BUSINESS_OWNER` membership pointing
+ * owner whose account is live and active.** Enforcing its two halves with
+ * mechanisms that cannot see each other breaks it: if account deletion locks
+ * only the businesses the user is ALREADY known to own, a promotion into a
+ * business the user does not yet own locks nothing the deletion waits on, and
+ * both commit. The result is an ACTIVE `BUSINESS_OWNER` membership pointing
  * at a dead account — invisible to every roster read (they all filter on a live
  * user), and unrepairable by any business-level actor, because `BUSINESS_ADMIN`
  * holds no `transferOwnership`.

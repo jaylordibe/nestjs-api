@@ -67,19 +67,18 @@ jobs:
       # across `run` blocks within the same job and the runner is ephemeral, so
       # there is no cleanup to do.
       #
-      # Host trust comes from a PINNED secret, never from the network. This step
-      # used to run `ssh-keyscan` against the deploy host and trust whatever
-      # answered — which is not host verification, it is a fresh
-      # trust-on-first-use decision on every single run, made by a machine with
-      # nobody watching. Anyone able to intercept the runner's first packet gets
-      # the deploy: the private key is offered to them, and the deploy script
-      # runs on their box.
+      # Host trust comes from a PINNED secret, never from the network. Running
+      # `ssh-keyscan` against the deploy host and trusting whatever answers is not
+      # host verification — it is a fresh trust-on-first-use decision on every
+      # single run, made by a machine with nobody watching. Anyone able to
+      # intercept the runner's first packet gets the deploy: the private key is
+      # offered to them, and the deploy script runs on their box.
       #
-      # Agent forwarding is gone too. It existed so the VM could reuse the
-      # runner's key to `git fetch` from GitHub, which meant ONE credential
-      # authenticated the runner to the VM *and* the VM to source control, and
+      # Agent forwarding is deliberately off. It would let the VM reuse the
+      # runner's key to `git fetch` from GitHub, so ONE credential would
+      # authenticate the runner to the VM *and* the VM to source control, and
       # anyone with root on the VM could borrow it for the length of the deploy.
-      # The VM now uses its own read-only deploy key — see docs/prod/README.md.
+      # The VM uses its own read-only deploy key — see docs/prod/README.md.
       - name: Configure SSH
         env:
           # Read through `env:` rather than interpolated into the script.

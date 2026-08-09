@@ -21,8 +21,7 @@ import { PrismaService } from '../../src/prisma/prisma.service';
 // production uses, so tests exercise the real grant graph rather than a
 // hand-maintained fixture that could drift from it.
 //
-// Note what is NOT here any more: a default role. Every user used to be granted
-// PLATFORM_USER, mirroring `UsersService.create`. Self-service capability now
+// Note what is deliberately NOT here: a default role. Self-service capability
 // comes from AUTHENTICATED_USER_PERMISSIONS, which the ability factory injects
 // for every authenticated caller — so `createUser` below creates an account
 // with NO roles at all, which is exactly the shape of a real signup.

@@ -73,8 +73,8 @@ export class UsersService {
     private readonly refreshTokenService: RefreshTokenService,
     private readonly permissionLoaderService: PermissionLoaderService,
     // The ownership invariant is enforced from BOTH sides. Deleting an account
-    // is the other half of "a live business always has an active owner", and it
-    // is the half that used to be missing entirely.
+    // is the other half of "a live business always has an active owner"; drop
+    // it and a deleted owner leaves the business ownerless.
     private readonly businessOwnershipPolicy: BusinessOwnershipPolicy,
   ) {}
 
@@ -508,9 +508,9 @@ export class UsersService {
     const { businesses: closedBusinesses, affectedUserIds } =
       await this.prisma.$transaction(async (transaction) => {
         // User row first, then the businesses — the order documented in
-        // `row-lock.util.ts`. Taking the businesses first (as this used to) is
-        // the opposite of what every membership mutation takes, so the two sides
-        // of the ownership invariant could deadlock against each other.
+        // `row-lock.util.ts`. Taking the businesses first is the opposite of
+        // what every membership mutation takes, so the two sides of the
+        // ownership invariant would deadlock against each other.
         await this.refreshTokenService.lockSessions(transaction, userId);
         const closed =
           await this.businessOwnershipPolicy.closeSolelyOwnedBusinesses(

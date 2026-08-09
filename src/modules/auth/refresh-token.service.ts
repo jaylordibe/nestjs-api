@@ -75,8 +75,8 @@ export interface IssuedRefreshToken {
  *
  * So the two are welded into {@link endAllSessionsInTransaction}, and the
  * row-only revocation is **private**. There is deliberately no public way to
- * revoke a user's tokens without moving the cutoff: the previous hardening pass
- * proved that a step callers must remember is a step callers forget.
+ * revoke a user's tokens without moving the cutoff: a step callers must
+ * remember is a step callers forget.
  *
  * ## Lock protocol
  *
@@ -148,8 +148,8 @@ export class RefreshTokenService {
    * Returns the owning user alongside the new token so the caller can mint a
    * matching access token and render its response without a second lookup — and,
    * more importantly, so the eligibility decision and the token write are ONE
-   * decision. Re-reading the user afterwards (as this used to) means the row
-   * that authorised the new session is not the row that was checked.
+   * decision. Re-reading the user afterwards would mean the row that authorised
+   * the new session is not the row that was checked.
    */
   async rotate(
     presentedToken: string,

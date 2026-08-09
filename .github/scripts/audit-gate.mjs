@@ -1,7 +1,7 @@
 // CI dependency-audit gate.
 //
-// Why this exists instead of the old one-liner
-// (`yarn audit --level high || test $? -lt 8`):
+// Why a script rather than a one-liner such as
+// `yarn audit --level high || test $? -lt 8`:
 // yarn 1.x's audit has no way to accept a *specific* advisory, so a single
 // unfixable high finding would permanently red-light the `quality` job — the
 // classic pressure to just delete the gate. This script keeps the gate hard
@@ -51,16 +51,11 @@ const BLOCKING_SEVERITIES = new Set(['high', 'critical']);
 //       'rationale.',
 //     reviewBy: '2026-12-31',
 //   }
-// Currently empty — as intended. The previous brace-expansion entry
-// (GHSA-mh99-v99m-4gvg) was removed on 2026-08-06: upstream published
-// backports to BOTH maintenance lines (1.1.17/1.1.18 and 2.1.3/2.1.4) plus
-// 5.0.8/5.0.9, and every consumer's declared range already permitted them
-// (`^1.1.7`, `^2.0.2`, `^5.0.5`). The entry's premise — "no 1.x/2.x backport
-// exists, so no in-range bump reaches the fix" — had simply expired. The
-// lockfile was stale, not the constraint. Refreshing those four resolutions
-// cleared the advisory outright, which is exactly the outcome rung 1 of the
-// ladder below is meant to produce, and why an allowlist entry must always
-// carry a review date.
+// Empty by default, and worth keeping that way: an entry's premise expires. A
+// backport can land on a maintenance line the consumer's declared range already
+// permits, at which point the lockfile was stale rather than the constraint
+// real, and a refresh clears the advisory outright — rung 1 of the ladder above.
+// That is why every entry carries a review date.
 const ALLOWLISTED_ADVISORIES = [];
 
 const auditJsonPath = process.argv[2];

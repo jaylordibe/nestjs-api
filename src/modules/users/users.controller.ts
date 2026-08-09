@@ -76,11 +76,9 @@ export class UsersController {
     return { ok: true };
   }
 
-  // Email verification is now handled by POST /auth/verify-email (link-
-  // based) and POST /auth/resend-verification (public, no auth needed
-  // since unverified users can't log in). The old /users/verify-email
-  // and /users/me/request-email-verification endpoints were removed
-  // when the OTP flow was replaced with a JWT link.
+  // Email verification lives on POST /auth/verify-email (link-based) and
+  // POST /auth/resend-verification (public — unverified users cannot log in,
+  // so requiring auth would make the endpoint unreachable).
 
   // `@AuthenticatedOnly()`: the caller is asking what THEY may do. There is no
   // subject to check a permission against — gating this behind a permission
