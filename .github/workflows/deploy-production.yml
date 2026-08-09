@@ -61,7 +61,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # SSH material is written once at the start of the job; ~/.ssh persists
       # across `run` blocks within the same job and the runner is ephemeral, so

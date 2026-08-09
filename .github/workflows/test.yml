@@ -66,10 +66,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: yarn
@@ -186,7 +186,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # The same compose file developers use, pointed at .env.test instead of
       # .env — so CI gets Postgres on DB_PORT and Redis on REDIS_PORT WITH the
@@ -204,7 +204,7 @@ jobs:
         run: docker compose --env-file .env.test up -d --wait
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: yarn
@@ -245,7 +245,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Makes .env.test visible to every LATER step, not just the jest
       # processes that load it themselves — the authorization-catalog step
@@ -286,7 +286,7 @@ jobs:
         run: docker compose --env-file .env.test up -d --wait
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: yarn
@@ -339,22 +339,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    # Compose derives its project name from the working directory, and this job
-    # deliberately works out of two (`base/` and `head/`). Without pinning it,
-    # containers started from `head/` belong to project "head" and every later
-    # `docker compose exec`/`logs` run from `base/` would look for a project
-    # "base" that has no services — reporting a missing container rather than
-    # the migration result this job exists to produce.
+    # NO job-level `env:` block, for the same reason the `quality` job carries
+    # none — and here the rule was learned the hard way. `.env.test` already
+    # pins `COMPOSE_PROJECT_NAME` (to `nestjs-test`), so compose resolves the
+    # SAME project from `base/` and from `head/`; the working directory never
+    # enters into it and there is nothing to pin.
     #
-    # This is NOT test configuration and appears nowhere in `.env.test`, so it
-    # shadows nothing; the steps below still source that file for everything the
-    # application reads.
-    env:
-      COMPOSE_PROJECT_NAME: migration-safety
+    # A `COMPOSE_PROJECT_NAME: migration-safety` block used to sit here to
+    # "fix" a directory-derived project name that `.env.test` had already made
+    # impossible, and it broke this job outright: the steps that talk to the
+    # containers source `.env.test` with `set -a` first, so the shell variable
+    # this block exported was OVERWRITTEN in exactly those steps. `Start
+    # Postgres + Redis` (no sourcing) created project `migration-safety`, then
+    # `Assert the database is actually populated` (sourced) looked in project
+    # `nestjs-test` and reported `service "postgres" is not running`.
+    #
+    # So: any key `.env.test` defines must not be restated here, and every
+    # `docker compose` invocation below runs from `head/` with that same file.
 
     steps:
       - name: Check out the proposed commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: head
 
@@ -363,7 +368,7 @@ jobs:
       # not yet released — and it is the released schema these migrations will
       # really land on.
       - name: Check out the released commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: main
           path: base
@@ -424,7 +429,7 @@ jobs:
 
       - name: Set up Node
         if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'false'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: yarn
@@ -461,9 +466,15 @@ jobs:
 
       # Without this the job could pass against an empty database and prove
       # nothing at all — the exact vacuous-green failure it exists to prevent.
+      #
+      # Runs from `head/` like every other compose call in this job, even
+      # though it inspects the database the `base/` seed just filled: the two
+      # checkouts share one Postgres container, and keeping a single directory
+      # for `up`/`exec`/`logs` means the compose file being read is always the
+      # one the stack was actually started from.
       - name: Assert the database is actually populated
         if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'false'
-        working-directory: base
+        working-directory: head
         run: |
           set -euo pipefail
           set -a; . ./.env.test; set +a
@@ -573,13 +584,13 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
@@ -592,6 +603,14 @@ jobs:
       # Fails on HIGH or CRITICAL; MEDIUM is reported but non-blocking.
       # `ignore-unfixed: true` skips CVEs with no available patch so the
       # build doesn't red-light on findings you literally cannot fix.
+      #
+      # The only exact-version `uses:` in this repo — everything else tracks a
+      # moving major tag (`@v7`). Two reasons, both load-bearing: upstream
+      # publishes no moving major tag at all (there is no `@v0`/`@v0.36`, only
+      # `vX.Y.Z`), so an alias here would simply fail to resolve; and this is a
+      # `composite` action, not a JavaScript one, so it has no Node runtime and
+      # was untouched by the Node 20 deprecation that moved every other action
+      # in these workflows. Bump it deliberately, not as part of a sweep.
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@v0.36.0
         with:

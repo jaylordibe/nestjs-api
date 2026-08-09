@@ -37,7 +37,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Same loader as test.yml. This job boots the COMPILED app
       # (`node dist/main`), which reads process.env only — it never loads
@@ -68,7 +68,7 @@ jobs:
         run: docker compose --env-file .env.test up -d --wait
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: yarn
@@ -199,7 +199,7 @@ jobs:
 
       - name: Upload ZAP report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: zap-api-scan-report
           path: |
@@ -210,7 +210,7 @@ jobs:
 
       - name: Upload API logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: api-logs
           path: app.log
