@@ -25,6 +25,15 @@ jobs:
     # Production deploys require the full test suite to pass.
     uses: ./.github/workflows/test.yml
 
+  # Dependency advisories and the Trivy filesystem scan. A separate workflow so
+  # a slow or noisy scan never blocks the deterministic test signal — but called
+  # here so it still gates the deploy. Without this job the audit runs on pull
+  # requests and on the weekly cron only, and a push straight to `main` deploys
+  # with no dependency scanning at all.
+  security:
+    name: Security
+    uses: ./.github/workflows/security.yml
+
   deploy:
     name: Deploy
     # Deploy is OPT-IN. The template ships the `DEPLOY_ENABLED` repo
@@ -36,7 +45,7 @@ jobs:
     # Variables) — once the server + PRODUCTION_* secrets are provisioned.
     # See docs/prod/README.md.
     if: ${{ vars.DEPLOY_ENABLED == 'true' }}
-    needs: test
+    needs: [test, security]
     runs-on: ubuntu-latest
     timeout-minutes: 20
 

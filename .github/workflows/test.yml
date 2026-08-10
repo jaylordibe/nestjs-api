@@ -28,8 +28,9 @@ permissions:
   contents: read
 
 jobs:
-  # Four independent jobs, no `needs:` between them — the deploy gate is
-  # bounded by the SLOWEST job, not by their sum.
+  # Every job below is independent, with no `needs:` between them — the deploy
+  # gate is bounded by the SLOWEST job, not by their sum. (Deliberately not
+  # stated as a count: the previous "Four" outlived the fourth job by two.)
   #
   # This structure is deliberately sized for where a project GOES, not for
   # the handful of specs a fresh clone ships with. Retrofitting sharding into
@@ -98,57 +99,14 @@ jobs:
       - name: Unit tests
         run: yarn test --passWithNoTests
 
-      # Informational: lists everything moderate and above. Never fails.
-      #
-      # Known moderates, each blocked by a range its parent PINS (verified
-      # 2026-08-06 — anything whose fix is in-range gets the lockfile refresh
-      # instead of a note here):
-      #   - uuid       `resend > svix > uuid` — svix declares ^10.0.0, fix is
-      #                11.1.1+, and uuid 11+ is ESM-only so it breaks the CJS
-      #                `require` path svix uses. Blocked until svix bumps.
-      #   - valibot    `prisma > @prisma/dev > valibot` — pinned to an exact
-      #                1.2.0, fix is 1.4.2+. Blocked until Prisma bumps.
-      #   - @hono/node-server  `prisma > @prisma/dev` — our own `resolutions`
-      #                entry pins ^1.19.13; the fix is 2.0.5, a major bump of a
-      #                Prisma dev-tooling transitive. Revisit with the next
-      #                Prisma upgrade rather than forcing it here.
-      #
-      # None of the three ships in the pruned runtime image (`prisma` and
-      # `resend > svix` dev/CLI paths). Runtime-path moderates are NOT accepted
-      # this way — `qs` reached production via `platform-express > express` and
-      # was fixed by refreshing the lockfile, not documented as known.
-      - name: Dependency audit (informational)
-        run: yarn audit --level moderate || true
-
-      # Blocks the build on any high/critical advisory, EXCEPT ones explicitly
-      # accepted (with rationale + review date) in .github/scripts/audit-gate.mjs.
-      #
-      # A raw `yarn audit --level high || test $? -lt 8` bitmask check would
-      # isolate high+ correctly — yarn 1.x's exit code is a bitmask of ALL
-      # severities (1=info, 2=low, 4=moderate, 8=high, 16=critical) — but it is
-      # all-or-nothing: yarn 1.x cannot accept a *single* advisory, so one
-      # genuinely-unfixable high finding would either red-light the job forever
-      # or force deleting the whole gate. The script threads that needle: hard
-      # on everything unaccepted, and it nags when an acceptance goes stale or
-      # past its review date.
-      #
-      # When a NEW high trips this, reach for an upgrade BEFORE a `resolutions`
-      # override, and only allowlist as a last resort — advisories are often
-      # satisfied by a version the parent's declared range ALREADY permits, i.e.
-      # the lockfile is stale rather than the upstream constraint being real.
-      # Diagnose with:
-      #
-      #   yarn audit --level high --json       → module, vulnerable_versions, path
-      #   npm view <parent> dependencies.<pkg> → does its range allow the fix?
-      #
-      # Escalation ladder: in-range `yarn upgrade <parent>` → `resolutions`
-      # override (only when a parent pins a vulnerable range, and note when it
-      # can be removed) → documented allowlist entry (only when NO compatible
-      # patched version exists at all, e.g. an ESM-only fix on a CJS chain).
-      - name: Dependency audit (blocks on high+)
-        run: |
-          yarn audit --level high --json > yarn-audit.json || true
-          node .github/scripts/audit-gate.mjs yarn-audit.json
+      # The dependency audit used to run here. It now lives in
+      # .github/workflows/security.yml, which adds a weekly cron: a PR-only
+      # audit only ever learns about an advisory when someone next opens a pull
+      # request, so a CVE disclosed against a dependency nobody is currently
+      # touching goes unnoticed indefinitely. The deploy workflows call that
+      # workflow alongside this one, so the gate still stands in front of every
+      # deploy. The IMAGE scan stays here, in the `docker` job — it needs the
+      # image that job builds.
 
 
   # The e2e suite, split across independent runners.

@@ -1,5 +1,7 @@
-# Trivy vulnerability exceptions for the production image scan (see the
-# `docker` job in .github/workflows/test.yml). Each entry is a conscious,
+# Trivy vulnerability exceptions. Read by BOTH Trivy jobs: the production image
+# scan (the `docker` job in .github/workflows/test.yml) and the working-tree
+# scan (the `trivy-fs` job in .github/workflows/security.yml), so an entry here
+# suppresses a finding in both. Each entry is a conscious,
 # documented risk acceptance — keep the rationale and review date current, and
 # remove the entry the moment its upgrade path opens up. Mirror any change here
 # in the dependency-audit allowlist (.github/scripts/audit-gate.mjs), which
