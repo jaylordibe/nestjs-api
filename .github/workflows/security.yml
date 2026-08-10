@@ -2,20 +2,27 @@ name: Security
 
 # Dependency + filesystem vulnerability scanning. Kept SEPARATE from the fast
 # merge gate (test.yml) on purpose: a slow or noisy scan must never block the
-# deterministic test signal. This runs on every PR into a protected branch, plus
-# a weekly sweep so newly-disclosed CVEs in UNCHANGED dependencies are still
-# caught — a PR-only audit learns about an advisory whenever someone next opens
-# a pull request, which is not a security cadence — plus on-demand from the
-# Actions tab.
+# deterministic test signal.
 #
-# `workflow_call` is what keeps the split honest. Moving scanning out of
-# test.yml also moves it out of the DEPLOY path, because the deploy workflows
-# gate on `uses: ./.github/workflows/test.yml` and nothing else. The deploy
-# workflows call this one too; do not remove this trigger without removing
-# those callers.
+# Each trigger below covers something the others cannot, so none is redundant:
+#   - pull_request  — pre-merge, where a HIGH advisory is still cheap to act on.
+#   - schedule      — the weekly sweep. Advisories are disclosed against
+#                     dependencies nobody is currently touching; a PR-only audit
+#                     would not surface one until somebody happened to open a
+#                     pull request, which is not a security cadence.
+#   - workflow_call — the deploy path. A deploy workflow gates only on the
+#                     workflows it explicitly calls, so scanning that lives
+#                     outside test.yml sits outside the deploy gate unless it is
+#                     called too, and a push straight to a deploy branch would
+#                     ship with no dependency scan at all. Do not remove this
+#                     trigger without removing the callers in deploy-*.yml.
+#   - workflow_dispatch — the on-demand button in the Actions tab.
 #
-# The IMAGE scan stays in test.yml's `docker` job — it needs the image that job
-# builds, and rebuilding it here would double the work to move one step.
+# The IMAGE scan lives in test.yml's `docker` job, which needs the image that
+# job builds. The two are complementary: this workflow reads package.json and
+# yarn.lock plus the whole working tree — so it sees secrets and Dockerfile
+# misconfigurations in files that never reach the runtime image — while that one
+# reads the base image's OS packages and the installed node_modules tree.
 on:
   pull_request:
     branches:

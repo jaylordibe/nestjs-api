@@ -29,8 +29,8 @@ permissions:
 
 jobs:
   # Every job below is independent, with no `needs:` between them — the deploy
-  # gate is bounded by the SLOWEST job, not by their sum. (Deliberately not
-  # stated as a count: the previous "Four" outlived the fourth job by two.)
+  # gate is bounded by the SLOWEST job, not by their sum. (Stated without a
+  # count on purpose: a number here goes stale the moment a job is added.)
   #
   # This structure is deliberately sized for where a project GOES, not for
   # the handful of specs a fresh clone ships with. Retrofitting sharding into
@@ -99,14 +99,12 @@ jobs:
       - name: Unit tests
         run: yarn test --passWithNoTests
 
-      # The dependency audit used to run here. It now lives in
-      # .github/workflows/security.yml, which adds a weekly cron: a PR-only
-      # audit only ever learns about an advisory when someone next opens a pull
-      # request, so a CVE disclosed against a dependency nobody is currently
-      # touching goes unnoticed indefinitely. The deploy workflows call that
-      # workflow alongside this one, so the gate still stands in front of every
-      # deploy. The IMAGE scan stays here, in the `docker` job — it needs the
-      # image that job builds.
+      # Dependency advisories are deliberately NOT audited in this job. They
+      # belong to .github/workflows/security.yml, which the deploy workflows
+      # call alongside this one: scanning needs a weekly cadence as well as a
+      # per-PR one, and this workflow has no schedule to give it. The IMAGE
+      # scan does live here, in the `docker` job below — it needs the image
+      # that job builds.
 
 
   # The e2e suite, split across independent runners.
