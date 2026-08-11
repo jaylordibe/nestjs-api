@@ -1,0 +1,71 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jaylordibe/claude-engineering-framework/main/plugins/engineering-framework/reference/repo-config.schema.json",
+  "frameworkVersion": "0.2.0",
+
+  "policy": {
+    "humanOwnedGitWrites": true,
+    "humanOwnedPullRequests": true,
+    "humanOwnedMigrations": true,
+    "humanOwnedDeployments": true,
+    "humanOwnedDependencyInstall": false
+  },
+
+  "useDefaultProtectedPaths": true,
+
+  "protectedCommands": [
+    {
+      "match": "*docker compose down*",
+      "reason": "this repository runs two compose stacks from one file (dev on 5433/6378, test on 5434/6380) and the local dev database holds the developer's own data. Use `yarn stack:down`, which tears both down and never passes -v.",
+      "decision": "deny"
+    },
+    {
+      "match": "*docker-compose down*",
+      "reason": "this repository runs two compose stacks from one file and the local dev database holds the developer's own data. Use `yarn stack:down`, which never passes -v.",
+      "decision": "deny"
+    },
+    {
+      "match": "*yarn lint:fix*",
+      "reason": "the fixing form rewrites files across src/, test/, scripts/ and prisma/, and `eslint --fix` exits 0 after silently repairing whatever it could. That is the correct closing step while implementing, but never during validation, where it would manufacture a passing lint and formatting check. Evidence uses `yarn lint`.",
+      "decision": "ask"
+    },
+    {
+      "match": "*eslint*--fix*",
+      "reason": "`eslint --fix` exits 0 after rewriting whatever it repaired, so it cannot fail and proves nothing. Fine while implementing, never as validation evidence. Use `yarn lint`.",
+      "decision": "ask"
+    },
+    {
+      "match": "*docker exec*psql*",
+      "reason": "this opens a SQL shell inside a database container, where a single statement can drop or rewrite the developer's local data with nothing between it and the volume. Confirm the target container is the test stack (5434) and not the dev stack (5433).",
+      "decision": "ask"
+    }
+  ],
+
+  "protectedPaths": [
+    {
+      "pattern": "*/prisma/migrations/*",
+      "reason": "never edit an already-applied migration — its checksum is recorded in _prisma_migrations and editing it breaks `migrate deploy` in every deployed environment. Approve ONLY for a migration that has not been applied anywhere (a fresh --create-only, or a template re-baseline before any deploy). Otherwise add a NEW migration."
+    }
+  ],
+
+  "commands": {
+    "install": "yarn install --frozen-lockfile",
+    "build": "yarn build",
+    "lint": "yarn lint",
+    "test": "yarn test",
+    "testE2E": "yarn test:e2e",
+    "securityScan": "yarn audit --level moderate",
+    "start": "yarn start:dev"
+  },
+
+  "risk": {
+    "highRiskPaths": [
+      "*/src/modules/auth/*",
+      "*/src/modules/authorization/*",
+      "*/src/common/authorization/*",
+      "*/src/common/errors/*",
+      "*/prisma/schema.prisma",
+      "*/prisma/migrations/*"
+    ],
+    "notes": "This repository is the GitHub template every new API project is forked from, so a defect here propagates into every fork rather than affecting one system. One PostgreSQL database serves every tenant, and tenant isolation is enforced in the query through AbilityScopedQueryService — never by a guard and never at the connection level, because a guard runs before the row is loaded and CASL ignores conditions on a subject-type check. A read that forgets to scope leaks across businesses with no other layer to catch it. Permissions are a code catalog (src/common/authorization/permission-catalog.ts) that the database projects; the application refuses to boot on drift or on a route declaring no authorization metadata. Soft delete is a convenience, never a security boundary. Uniqueness on users.email, users.username and businesses.slug lives in partial indexes Prisma cannot see, so those columns are not unique selectors and findUnique on them is a bug. Two compose stacks run side by side and the e2e globalSetup issues a real DROP DATABASE, so anything that confuses the test stack (5434/6380) with the dev stack (5433/6378) destroys the developer's own data."
+  }
+}

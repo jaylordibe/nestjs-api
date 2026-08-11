@@ -210,11 +210,13 @@ test/                        # e2e tests (real Postgres + Redis, no mocks)
 
 ## Working with Claude Code (optional)
 
-Contributors using [Claude Code](https://code.claude.com) get a committed, team-shared **ticket-to-diff pipeline** — `/ticket <TICKET-KEY>` drives a ticket from context-gathering → plan → implement → review → verify, stopping at a plan-approval gate and a commit gate. It lives in [`.claude/`](./.claude/README.md); the only per-machine step is a one-time issue-tracker login (`/mcp` → authenticate **atlassian**). Full details in [`.claude/README.md`](./.claude/README.md). Not required to build, run, or test the API.
+Contributors using [Claude Code](https://code.claude.com) get a **requirement-to-diff pipeline** from the [`engineering-framework`](https://github.com/jaylordibe/claude-engineering-framework) plugin — `/engineering-framework:work-item <key | URL | requirement>` drives work from repository mapping → plan → implement → review → validate → present, stopping at a plan-approval gate and a human Git gate. Install it with `/plugin marketplace add jaylordibe/claude-engineering-framework` then `/plugin install engineering-framework@jaylordibe`.
+
+This repository commits the other half of that contract in `.claude/`: the permission floor (`settings.json`), the repository policy file (`engineering-framework.json`), and five domain playbooks describing *this* API's auth, authorization, resource, sweep, and e2e-harness conventions. See [`CLAUDE.md`](./CLAUDE.md) → **Deep references** for how those pieces fit together. The only per-machine step is a one-time issue-tracker login (`/mcp` → authenticate **atlassian**), and none of it is required to build, run, or test the API.
 
 ## Adding a new resource
 
-See [`CLAUDE.md`](./CLAUDE.md) → **"Generating a new resource"** for the full convention. Short version:
+See [`docs/resource-pattern.md`](./docs/resource-pattern.md) for the full convention and code skeletons. Short version:
 
 1. Add the model to `prisma/schema.prisma` with the standard columns (`id`, `createdAt`, `updatedAt`, `createdBy`, `updatedBy`, optionally `deletedAt`/`deletedBy` for soft delete, optionally `isActive` only when suspension is a distinct concept).
 2. Run `yarn prisma:migrate dev --name add_<resource>`.

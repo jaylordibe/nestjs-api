@@ -1,136 +1,28 @@
 # CLAUDE.md
 
-Guidance for Claude Code working in this repo. **This file is the always-on core** — it's loaded into context on every request, so it holds only what applies to *almost every* change. Situational, deep playbooks live in **skills** (`.claude/skills/`) and **docs** (`docs/`); load them when the task calls for them rather than duplicating their content here. General engineering standards live in `.claude/standards/`; this file's repository-specific rules take precedence if a generic standard conflicts with an established project contract. See **Deep references** at the bottom.
+Guidance for Claude Code working in this repo. **This file is the always-on core** — it's loaded into context on every request, so it holds only what applies to *almost every* change. Situational, deep playbooks live in **skills** (`.claude/skills/`) and **docs** (`docs/`); load them when the task calls for them rather than duplicating their content here.
 
-**Precedence.** This file supersedes any parent-workspace `CLAUDE.md` for work in this repository. Where a parent file prescribes a different workflow, the mapping is: plans are presented through Claude Code's plan flow, not written to `tasks/todo.md`; the gate sequence below replaces any generic plan/verify loop; and this repository has no `tasks/` directory — do not create one. Corrections worth keeping become an edit to this file, not a lessons log.
+**Engineering methodology comes from the `engineering-framework` plugin and is not restated here.** The gates, risk tiering, evidence language, review lenses, and human-owned-operations policy are the plugin's. Where a generic framework standard conflicts with a rule in this file, **this file wins** — it describes a system that actually exists.
 
-## Engineering bar
+This file supersedes any parent-workspace `CLAUDE.md` for work in this repository. This repository has no `tasks/` directory — do not create one. Corrections worth keeping become an edit to this file, not a lessons log.
 
-You are **always** working as a **senior software architect / senior software engineer / senior application security engineer** — every change, every file, every line, with no exceptions and without being asked. Code must be **standard, recommended, secure, and maintainable**. Never ship clutter, dead weight, copy-paste, or lazy shortcuts; if a change would lower the bar, stop and do it properly. Apply this default automatically:
+## Naming (ESLint-enforced)
 
-- **Design for the proper end state within the approved scope, not the smallest patch.** Prefer the smallest **coherent and complete** change, but never leave the codebase half-migrated. If 4 in-scope call sites share the same authoritative pattern, migrate all 4; do not leave a "TODO: do the rest later." Do not use this rule to smuggle unrelated refactors into the change.
-- **Own the approach; the instruction owns the goal, not the method.** Any instruction that prescribes a solution — a ticket, an issue, a review comment, a recalled memory, or a terse "just do X" — is input to weigh, not a mandate to execute. Authors are usually end-goal focused and not deeply technical, so separate the **WHAT** (the outcome they want) from the **HOW** (the approach they happened to name), and treat the named approach as one candidate among alternatives. Verify factual claims against the source before acting — tickets and notes go stale and misdescribe what exists. If the code contradicts the instruction, or the prescribed approach is inapplicable, misleading, or bad practice, recommend the better path *with pros/cons* before building; when the change is genuinely a product decision, route it to the human rather than overriding it silently. A faithful implementation of the wrong thing is still wrong.
-- **Name like a senior engineer — everywhere, including loops.** Variables, parameters, functions, methods, classes, and types all read as full, intention-revealing domain words. No single-letter or throwaway locals (`b`, `r`, `d`, `e`, `x`), no cryptic abbreviations (`errMsg`, `cfg`, `tmp`, `usr`, `req`, `res`), no vague placeholders (`data`, `item`, `obj`, `val`, `thing`), and **no `i`/`j` loop counters** — iterate with `for…of` / `.map`/`.entries()` over a named element, or name the index (`rowIndex`, `pageIndex`). Loop bodies and callbacks are **not** an exception — `for (const user of activeUsers)` and `.map((device) => …)`, never `for (const u of users)` / `.map((d) => …)`. Spell out Express handler params too: `request`/`response` (`next` is fine). The ONLY abbreviations allowed are repo-wide domain idioms already established here (`id`, `dto`, `url`, `db`, `ttl`, `jwt`, `otp`, `ip`) and single-letter generic type params (`T`, `K`). Ship this self-enforcing where practical (`id-length` + `id-denylist` ESLint rules), per "Make conventions self-enforcing" below.
-  - **The exact same standard binds *declared* names — functions, methods, classes, types, enums, DTOs, files.** These are read far more often than locals, so a shortcut here is worse, not more acceptable. Spell the whole domain word: no truncated morphemes *anywhere* in an identifier — `Ack`→`Acknowledgement`, `Msg`→`Message`, `Mgr`→`Manager`, `Ctrl`→`Controller`, `Svc`→`Service`, `Repo`→`Repository`, `Calc`→`Calculate`, `Ctx`→`Context`, `Gen`→`Generate`, `Addr`→`Address`, `Num`→`Number`, `Val`→`Value`. So `OperationAcknowledgementDto`, never `OperationAckDto`; `formatServiceDateCompact`, never `fmtSvcDate`. A class/function/file name is API surface for every future reader — hold it to the *highest* bar, not the lowest.
-- **Reach for established patterns over invention.** RFC standards, well-known API conventions (Stripe, Google Cloud), OWASP guidance, NestJS idioms — name the reference when justifying a choice.
-- **Make conventions self-enforcing.** New conventions ship with a guardrail (ESLint rule, type contract, central factory, exhaustive switch, hook, etc.) so the next contributor can't drift. Documentation alone is not enough.
+Variables, parameters, functions, methods, classes, and types all read as full, intention-revealing domain words. No single-letter or throwaway locals (`b`, `r`, `d`, `e`, `x`), no cryptic abbreviations (`errMsg`, `cfg`, `tmp`, `usr`, `req`, `res`), no vague placeholders (`data`, `item`, `obj`, `val`, `thing`), and **no `i`/`j` loop counters** — iterate with `for…of` / `.map`/`.entries()` over a named element, or name the index (`rowIndex`, `pageIndex`). Loop bodies and callbacks are **not** an exception — `for (const user of activeUsers)` and `.map((device) => …)`, never `for (const u of users)` / `.map((d) => …)`. Spell out Express handler params too: `request`/`response` (`next` is fine). The ONLY abbreviations allowed are repo-wide domain idioms already established here (`id`, `dto`, `url`, `db`, `ttl`, `jwt`, `otp`, `ip`) and single-letter generic type params (`T`, `K`).
+
+**The same standard binds *declared* names — functions, methods, classes, types, enums, DTOs, files.** No truncated morphemes *anywhere* in an identifier — `Ack`→`Acknowledgement`, `Msg`→`Message`, `Mgr`→`Manager`, `Ctrl`→`Controller`, `Svc`→`Service`, `Repo`→`Repository`, `Calc`→`Calculate`, `Ctx`→`Context`, `Gen`→`Generate`, `Addr`→`Address`, `Num`→`Number`, `Val`→`Value`. So `OperationAcknowledgementDto`, never `OperationAckDto`; `formatServiceDateCompact`, never `fmtSvcDate`.
+
+This is enforced by `id-length` + `id-denylist` in `eslint.config.mjs`, not by convention alone.
+
+## Repository-specific engineering rules
+
+- **Separate data, behavior, and pure helpers.** A service/controller holds **behavior**, never large static lookup tables, registries, or config arrays dangling above the class — those move to a co-located config module (e.g. `*-registry.ts`) and are imported. Pure, reusable functions (string/date/enum/number transforms) live in `src/common/util/*.util.ts` with a `*.util.spec.ts`, never inline at the top of a service. If a reader must scroll past static data or a helper to reach the class, it's misfiled.
 - **Single source of truth.** One filter, one envelope, one factory, one config file. Two files doing the same thing is a smell — consolidate.
-- **Separate data, behavior, and pure helpers — no clutter.** Each file has one clear responsibility. A service/controller holds **behavior**, never large static lookup tables, registries, or config arrays dangling above the class — those move to a co-located config module (e.g. `*-registry.ts`) and are imported. Pure, reusable functions (string/date/enum/number transforms) live in `src/common/util/*.util.ts` with a `*.util.spec.ts`, never inline at the top of a service. Rule of thumb: if a reader must scroll past static data or a helper to reach the class, it's misfiled — extract it.
-- **Security is non-negotiable.** Every endpoint and DTO needs a thought about attack surface (enumeration leaks, timing attacks, replay, FK escalation, role abuse, log redaction). See the `auth-security` skill for the hardening floor.
+- **Make conventions self-enforcing.** New conventions ship with a guardrail (ESLint rule, type contract, central factory, exhaustive switch, boot-time gate). Documentation alone is not enough — this repo already fails to boot on authorization drift, and that is the standard to match.
 - **Delete what you replace.** Old filters, old throws, old code paths — gone. No `// removed` comments, no `// legacy` directories, no parallel implementations.
-- **Plans recommend, they don't transcribe.** Plan-mode output should read like a decision record: Context → Approach (with rationale + rejected alternatives) → File-by-file changes → Tests → Verification → What this deliberately does NOT do. Not a checklist. The plan proposes the approach *you* judge best; when it departs from a method the instruction prescribed (a ticket's approach, a "do it like X" aside), lead with the recommendation and put the prescribed approach under rejected alternatives with the trade-off.
-- **"What do you think / what do you recommend" means PLAN, not execute.** When the user asks for your thoughts, opinion, or a recommendation, respond with senior-level planning — the analysis, the options with trade-offs, and your recommended approach — then **stop and wait**. Do NOT start editing files, writing migrations, or otherwise implementing. Implementation begins only when the user explicitly says to go ahead (e.g. "implement it", "do it", "go"). A plan or recommendation is never itself a green light.
-- **Tests are part of the change.** A feature without e2e coverage on the contract isn't done. Update the existing assertions when the contract changes — don't add a duplicate test alongside the stale one.
-- **Verify before declaring done.** `yarn build` + `yarn lint` + the **affected** e2e spec(s) must pass on every change. **Evidence uses `yarn lint`, never `yarn lint:fix`** — `eslint --fix` exits 0 after silently rewriting whatever it repaired, so the fixing form cannot fail and proves nothing. `lint` is the gate and never edits your files; `lint:fix` is the local fixer you run *while* writing. Prettier is enforced inside `lint` via the `prettier/prettier` rule, so `lint` is the formatting gate too. run the **full** `yarn test:e2e` only when a module is complete or the user asks. The e2e suite runs **in parallel** (`maxWorkers: 50%`): `globalSetup` migrates one template database and clones it per worker, and each worker gets its own Redis logical database (`test/setup/worker-isolation.ts`) — so specs must never assume exclusive access to anything outside their own database. Type-check and a passing suite verify correctness, but don't claim a UI/feature works without actually exercising it.
-
-
-When a small ask conflicts with this bar (e.g. "just fix this one site"), surface the conflict and propose the proper-scope plan first — don't silently scope down.
-
-## Engineering workflow and gates
-
-Use the engineering workflow for any material feature, bug, refactor, contract change, schema change, authorization change, background job, integration, or change whose blast radius is unclear.
-
-**These five gates are human-invoked and Claude cannot start them.** Each sets `disable-model-invocation: true`, which removes it from Claude's context entirely — a Skill call to one of them is not possible, by design. When work is proceeding gate-by-gate, Claude's obligation is therefore to **stop and ask the user to run the next gate**, never to claim a gate ran, and never to simulate one from memory. `/work-item <key | URL | requirement>` (`.claude/skills/work-item/SKILL.md`) is the top-level conductor that walks all five in one session; the individual gates below are for non-work-item work, focused operation, or recovery in a fresh session.
-
-1. **`/gate-design <requirement>` — understand and decide.**
-   - Start with the `context-mapper` agent when impact is unclear or cross-cutting.
-   - Reconcile the ticket's WHAT/HOW against repository reality.
-   - Classify risk first — **the tier decides the artifact.** Low risk gets no plan document at all (say so and hand back; the later gates still run); Medium and above get a plan whose depth matches the tier. The table below is the contract, and `gate-design` §4 expands it.
-   - Evaluate alternatives and threat-model relevant surfaces in proportion to that tier.
-   - Stop at the approval gate. A presented plan is not permission to implement.
-
-2. **`/gate-approve` — take the human's decision.**
-   - The design must be a finished plan; an unfinished one goes back to `/gate-design`.
-   - Read the recommendation, rejected alternatives, residual risk, non-goals, and **every unresolved blocker** back to the user first. An approval nobody re-read is a rubber stamp.
-   - Take an explicit decision — never infer one from praise — then record what was approved and every condition attached to it.
-   - Claude cannot invoke this gate. That, not the typing, is what stops a design from approving itself.
-
-3. **`/gate-implement` — build only the approved design.**
-   - There must be a plan the human explicitly approved in this session.
-   - Preserve unrelated worktree changes.
-   - Implement the approved behavior, security controls, tests, documentation, and observability.
-   - A material divergence in behavior, architecture, contract, migration, or risk requires renewed approval.
-
-4. **`/gate-review` — independently challenge the diff.**
-   - Review architecture, correctness, security, tests, API contracts, database behavior, concurrency, performance, and reliability as relevant.
-   - Verify every finding against the source before acting.
-   - Fix confirmed findings within approved scope, add regression coverage, then re-review.
-   - No unresolved Critical or High finding may pass this gate.
-
-5. **`/gate-validate` — prove it with evidence.**
-   - Validation is read-only: do not modify source, tests, snapshots, lockfiles, migrations, config, or generated output to manufacture a pass.
-   - Run the canonical checks appropriate to the change and risk.
-   - Report exactly `PASS`, `FAIL`, or `BLOCKED`; skipped, partial, unavailable, or flaky checks are never `PASS`.
-
-Manual/ad-hoc work does not bypass the final gates. After implementation, **stop and tell the user to run `/gate-review`, then `/gate-validate`** — summarise what changed, name the affected contracts and risk tier, and wait. An ad-hoc self-check is not a substitute for either gate and must never be reported as one.
-
-**A `/work-item` run is the exception, and runs to completion on its own.** Invoking it authorises the whole pipeline, so it interrupts the human exactly twice: at **plan approval** (presented via `ExitPlanMode`, so the decision is a click) and at **Stage 6**, where they review the diff and push. It does not ask permission to move between implement, review, and validate — that would turn one authorisation into four confirmations of a decision already made. Every panel, check, and stop condition still runs at full strength; only the prompting is removed, and on High/Critical work the review's independent subagent fan-out becomes mandatory to preserve the independence a human checkpoint used to supply. The exhaustive list of what still stops a run mid-pipeline is in `.claude/standards/gate-handoff.md` §5.
-
-### Ending a gate
-
-How a gate closes depends on how it was entered — `.claude/standards/gate-handoff.md` §0 holds the mode table, and every gate reads it first.
-
-**Standalone** (a human typed the command): state the outcome, what changed on disk, the evidence that actually ran, anything blocking the next gate, then **name the next command with its argument already filled in** and offer to continue. A developer should never finish a gate wondering what to do next.
-
-**Conductor** (a `/work-item` stage): the same close, then a one-line stage marker and straight on to the next stage. No next-command line, no offer, no fresh-session recommendation.
-
-In standalone mode, answering "yes" authorises the **next gate only** — never a skip, never the rest of the pipeline, never a Git or deployment write. Recommend a fresh session instead when the change is High/Critical and the next gate is `/gate-review`: a review is worth more from a context that did not just write the code. In conductor mode that independence comes from the review's read-only subagents, which is why their fan-out is mandatory rather than optional on High/Critical work.
-
-**For the whole sequence in one pass, use `/work-item <requirement>` — it needs no issue key**, and falls back to treating its argument as the requirement itself. It stops only at the plan approval gate and the human Git/release gate.
-
-### Skill naming
-
-Every **user-invocable** project skill is namespaced `gate-*`. A project skill sharing a name with a Claude Code built-in does not win — it appears *beside* it in the `/` menu, and the user picks by row. This has already bitten twice (`review`, `design`), and a reserved-name denylist cannot prevent it because a new built-in can ship at any time. `yarn claude:validate` enforces the prefix. The domain playbook skills need none: they set `user-invocable: false` and never reach the menu. `/work-item` is the one reviewed exemption — it is the conductor, not a gate.
-
-### Where the design lives
-
-**The design is a plan, not a committed file.** `/gate-design` writes it through Claude Code's native plan flow and presents it with `ExitPlanMode`; the plan persists in Claude Code's own plans directory. Nothing is written to the repository, and approval is the plan-mode decision rather than a `Status:` line someone has to maintain.
-
-Structure the plan on `.claude/templates/plan.md` — depth scales with the risk tier below.
-
-The *decision* is the user's and Claude never infers it. `/gate-approve` sets `disable-model-invocation: true`, so **Claude cannot invoke it** — only a human can. That control lives in the frontmatter and is unaffected by there being no file. Git writes stay denied, so the user's commit remains the act of record.
-
-What this trades away, stated plainly so nobody rediscovers it as a surprise: the plan is local and unshared, its filename is generated rather than descriptive, CI cannot enforce anything about it, and a commit no longer links to the reasoning behind it. When a decision genuinely needs to outlive the session — a non-obvious invariant, a line that looks deletable but is not — put that explanation in a **code comment next to the thing it protects**, which is where it will actually be found.
-
-### Risk classification
-
-| Risk | Typical examples | Minimum expectation |
-|---|---|---|
-| **Low** | Copy/docs, isolated internal rename, test-only cleanup with no contract effect | **No plan document.** Focused design reasoning, affected tests, self-review + `/code-review`, validation |
-| **Medium** | Ordinary business logic, endpoint behavior, module-level job or refactor | Plan (brief threat model), correctness review + the one domain lens touched, integration coverage |
-| **High** | Authentication, authorization, tenant isolation, PII, money/pricing, uploads, webhooks, external integrations, migrations, public contracts, concurrency | Full plan, explicit threat model, negative + authorization tests, migration/rollback analysis, multi-lens review with adversarial verification of Critical/High findings |
-| **Critical** | Identity infrastructure, cryptography, broad privileged access, destructive data work, production repair, release infrastructure | All High gates plus qualified human security and operational review; never give unconditional automated approval |
-
-**Take the higher tier whenever the change sits on a boundary.** The tiering is
-what keeps the process honest in both directions: a uniform ceremony gets skipped,
-and a skipped step reads exactly like a completed one — so refusing to write an
-plan for a copy fix is what keeps the plan meaningful for a schema change.
-
-### Evidence language
-
-- **`PASS`** means the required command/check actually ran successfully for the stated scope.
-- **`FAIL`** means it ran and failed.
-- **`BLOCKED`** means it could not run or required evidence is unavailable.
-- **`NOT RUN`**, skipped, filtered, partial, or flaky is not `PASS`.
-- A successful build does not prove runtime behavior; passing tests do not prove their assertions are sufficient; static review does not prove the absence of vulnerabilities.
-- Never claim "secure," "battle-tested," "production-ready," "works," or "done" more broadly than the evidence supports.
-
-### Human-owned operations
-
-Unless the user explicitly requests the exact operation, Claude must not:
-
-- commit, amend, push, force-push, merge, rebase, publish, tag, or open/merge a pull request;
-- transition a ticket, change assignee/status/fields, or claim an issue is complete;
-- deploy, release, publish packages/images, alter infrastructure, rotate secrets, or modify production configuration;
-- apply migrations to local/shared/production databases, reset/drop/re-seed data, or perform production data repair;
-- accept product, security, privacy, migration, operational, or residual risk on the human's behalf.
-
-Claude may prepare the diff, plan, tests, evidence, migration files, release checklist, and handoff. The human owns approval, Git writes, risk acceptance, migration application, deployment, and production access.
-
-This list is enforced, not merely stated: `.claude/settings.json` denies the named command forms (Bash **and** PowerShell), and `.claude/hooks/guard-dangerous-commands.sh` catches the forms a prefix rule structurally cannot see — `git -C <path> commit`, `dotenv -e .env -- prisma migrate deploy`, `sudo npm publish`, `cat .env`. Neither layer is a sandbox; see `.claude/README.md` for what each one does and does not guarantee. Treat a refusal from either as the rule working, never as an obstacle to route around: if an operation genuinely needs to happen, say so and let the human run it.
+- **Verification commands.** `yarn build` + `yarn lint` + the **affected** e2e spec(s) on every change. **Evidence uses `yarn lint`, never `yarn lint:fix`** — `eslint --fix` exits 0 after silently rewriting whatever it repaired, so the fixing form cannot fail and proves nothing. Prettier is enforced inside `lint` via the `prettier/prettier` rule, so `lint` is the formatting gate too. Run the **full** `yarn test:e2e` only when a module is complete or the user asks. The e2e suite runs **in parallel** (`maxWorkers: 50%`): `globalSetup` migrates one template database and clones it per worker, and each worker gets its own Redis logical database (`test/setup/worker-isolation.ts`) — so specs must never assume exclusive access to anything outside their own database.
 
 ## Project
-
 
 NestJS 11 (TypeScript, Express) + Prisma 7 + PostgreSQL + Redis. JWT auth with DB-backed RBAC + CASL over two scopes (PLATFORM / BUSINESS). GitHub template: set `SERVICE_NAME` in `.env`, add feature modules. URLs unversioned (`/api/...`). Swagger at `/api/docs`.
 
@@ -149,17 +41,34 @@ Package manager: **yarn** (yarn.lock committed). Scripts: `start:dev`, `start:pr
 
 `SERVICE_NAME` is the single source of truth — drives `DB_NAME` default (`${SERVICE_NAME}_local`), container name, and JWT `iss`/`aud`.
 
+## Canonical commands
+
+Everything runs on the host; only PostgreSQL and Redis live in containers.
+
+| Purpose | Command | Notes |
+|---|---|---|
+| Install | `yarn install --frozen-lockfile` | |
+| Lint / format check | `yarn lint` | **The gate.** Prettier is enforced inside it via `prettier/prettier` |
+| Lint (apply fixes) | `yarn lint:fix` | Closing step while implementing — **never** validation evidence |
+| Build + type check | `yarn build` | `nest build` typechecks; `postbuild` asserts the artifact contract |
+| Unit tests | `yarn test` | |
+| E2E tests | `yarn test:e2e` | Starts the test stack itself via `pretest:e2e` |
+| Single e2e spec | `yarn test:e2e <pattern>` | The cadence during implementation |
+| Prisma client | `yarn prisma:generate` | Runs inside `yarn build` |
+| Migration status | `yarn prisma migrate status` | Read-only; **applying** migrations is human-owned |
+| RBAC catalog check | `yarn rbac:check` | Read-only; `rbac:sync` writes |
+| Dependency advisories | `yarn audit --level moderate` | The CI gate adds `.github/scripts/audit-gate.mjs` |
+| Start / stop stacks | `yarn stack:up` / `yarn stack:down` | `stack:down` never passes `-v` |
+
+**There is no separate type-check script** — `yarn build` is it. Report type checking as covered by the build, never as a missing gate.
+
 ## Consumers
 
-**FILL THIS IN after cloning this starter.** Every client that programs against this API goes in the table, and it is load-bearing: `gate-design`, `gate-implement`, and `gate-review` all ask "which consumers does this change force a matching change in?", and with an empty table the honest answer is always "none". A contract change that silently skips a consumer is how a broken client reaches a real user, and it is the single most common way a multi-repo change goes wrong.
-
-| Consumer | Repo / location | Audience | Owner |
-|---|---|---|---|
-| _(none declared yet)_ | | | |
+_(none — this repository is the GitHub template every new API project is forked from, so it has no clients of its own. **A fork must replace this paragraph with a table of its real consumers — repo, audience, owner — before its first contract change.**)_
 
 A **contract change** — any request/response DTO field, `errorCode`, enum value, HTTP status, required/optional/null change, pagination or ordering change, or event payload — is not done when this API compiles. It is done when every consumer in this table has either been updated or been explicitly recorded as unaffected, with the deployment order stated. Cross-repo work is a **handoff note plus a blocker**, never a sentence buried in a summary; if the other repo is owned by someone else, say who and what must ship first.
 
-If this API genuinely has no external consumers, replace the row with `_(none — internal only)_` and say why. `yarn claude:validate` fails while the placeholder is still there, because an unfilled table and a deliberately empty one are indistinguishable to every later reader.
+**In a fork, an unfilled table makes every contract change report "no consumers" and cross-repository breakage ship silently.** An unfilled table and a deliberately empty one are indistinguishable to every later reader, which is why the row above states the reason rather than sitting blank.
 
 ## Architecture
 
@@ -249,22 +158,33 @@ Uses `@prisma/adapter-pg`. `schema.prisma` is `provider = "postgresql"` only (no
 
 ## Deep references
 
-Load these on demand — they hold the long-form playbooks so this core stays lean:
+Load these on demand — they hold the long-form playbooks so this core stays lean. Methodology references resolve inside the `engineering-framework` plugin (`${CLAUDE_PLUGIN_ROOT}`); everything else is repository-owned.
 
 | Task | Where |
 |---|---|
-| Design a material change, reconcile ticket vs code, classify risk, compare alternatives, and produce an approval-gated plan | `gate-design` skill + `.claude/templates/plan.md` |
-| Implement an approved plan without unrelated scope or Git/deployment writes | `gate-implement` skill |
-| Drive a ticket end-to-end: map → plan → implement → review → validate → present → report | `work-item` skill (`/work-item <key | URL | requirement>`) |
-| Independently review the current diff across architecture, correctness, AppSec, tests, API, DB, and performance | `gate-review` skill + `.claude/agents/` |
-| Run read-only evidence gates and return `PASS` / `FAIL` / `BLOCKED` | `gate-validate` skill + `.claude/templates/release-checklist.md` |
-| General architecture, coding, security, and testing rules | `.claude/standards/architecture.md`, `coding.md`, `security.md`, `testing.md` |
+| Drive a requirement end-to-end: map → plan → implement → review → validate → present | `/engineering-framework:work-item <key \| URL \| requirement>` |
+| The five gates, run individually | `/engineering-framework:gate-design`, `gate-approve`, `gate-implement`, `gate-review`, `gate-validate` |
+| Audit the framework/repository contract; check this file against reality | `/engineering-framework:framework-doctor` |
+| General architecture, coding, security, testing, evidence rules | plugin `standards/` |
+| Plan, threat-model, contract-change, data-design, validation-report formats | plugin `templates/` |
 | Add/scaffold a CRUD resource (schema, five endpoints, list queries, response DTOs + relations, delete semantics, soft-delete filter) | `resource-pattern` skill (+ code skeletons in `docs/resource-pattern.md`) |
 | Permissions, roles, business-scoped resources, `@RequirePermission`, CASL abilities, tenant isolation, escalation/rank guard, grants cache | `authorization` skill (+ the contract in `src/common/authorization/README.md`) |
-| Auth / login / JWT / OTP / email-verify / phone-verify / lockout / timing hardening / security review | `auth-security` skill |
+| Auth / login / JWT / OTP / email-verify / phone-verify / lockout / timing hardening | `auth-security` skill |
 | Scheduled `@Cron` job (recurring sweep over all due rows) | `scheduled-sweep` skill |
 | Background job on the BullMQ queue — immediate / delayed / recurring, with retries, cancellation, rescheduling. **The default for NEW background work**; the decision table at the top of the README says which of the two a job belongs on | `src/common/queue/README.md` |
 | Write e2e specs (harness, coverage, cadence, error-envelope assertions) | `e2e-testing` skill |
 | Error envelope contract + ErrorCode catalog + client logout rule | `src/common/errors/README.md` |
 | Deployment / infra (Caddy + per-env compose + GitHub Actions) | `docs/README.md` → `docs/prod/` + `docs/staging/` |
 | Which operational controls are ACTUALLY enforced vs. only scaffolded — backups, restore verification, RPO/RTO, secret rotation, retention, backpressure, incident response, rollback | `docs/operations.md` |
+
+**Settings and framework integration:**
+
+- `.claude/settings.json` (committed) — the permissions floor. A plugin cannot ship permission rules, so this layer is **not** redundant with the plugin's guard hook: a hook is executable code and Claude Code treats a crashed hook as a *non-blocking* error, so it can fail open; a deny rule cannot. They are complementary, and **neither is a sandbox** — a shell can always express an operation the parser does not model. For a real boundary use OS sandboxing or a container.
+  - This repository's floor is deliberately **larger** than the framework's: the framework ships **no MCP rules at all**, so the issue-tracker denies (`mcp__*__*transition*`, `*IssueField*`, `editJiraIssue`, …) exist only here. MCP rules use a **glob server segment** — a hardcoded `mcp__atlassian__…` matches nothing in a fork that named its server differently, so the tracker floor would silently vanish.
+  - Every `Bash(...)` rule is mirrored as `PowerShell(...)`. The PowerShell tool is enabled by default on Windows without Git Bash and `Bash(...)` rules do not govern it, so an unmirrored rule disappears on those machines with no warning. **Add both forms, or neither.**
+  - File rules are consulted for `Read()` and `Edit()` only. A `Write()`, `Glob()`, `MultiEdit()` or `NotebookEdit()` path rule is accepted, never consulted, and warns at startup — the worst failure shape available, because the file reads as protected.
+- `.claude/engineering-framework.json` (committed) — this repository's policy: canonical commands, `risk.highRiskPaths`, the `prisma/migrations/**` protected path, and the `protectedCommands` the framework's generic tables cannot know about (`docker compose down`, the fixing linter, `docker exec … psql`).
+  - **One policy switch is deliberately relaxed:** `humanOwnedDependencyInstall: false`. Adding and removing packages is ordinary engineering here, and the lockfile is a protected path already, so the diff is visible at review. Migrations, deployments, Git writes, and pull requests all stay human-owned; publication, release, force pushes, and credential reads are denied regardless of this setting.
+- `.claude/settings.local.json` (per-developer, gitignored) — personal allowlist and enabled MCP servers.
+- `.claude/skills/` — five domain playbooks, all `user-invocable: false`. The `/` menu belongs to the plugin; keep project skills out of it.
+- `/engineering-framework:framework-doctor` — audits this repository against the framework contract. Replaces the former `yarn claude:validate` script.

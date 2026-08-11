@@ -1,18 +1,21 @@
 ---
 name: auth-security
-description: Applies this repository's authentication and account-security contract for registration, login, JWT sessions, OTP and verification flows, lockout, password changes, disposable-email handling, throttling, audit, and anti-enumeration behavior.
+description: This repository's answers for authentication and account security — the JWT and session contract, the anti-enumeration behavior of login and registration, OTP purpose binding, throttling on public routes, and the audit and provider contracts these flows must use.
 when_to_use: Use when changing src/modules/auth, JWT strategy or session validation, registration/login/logout, password or account recovery, email or phone verification, OTP generation/consumption, lockout, credential checks, authentication errors, or public authentication endpoints.
 user-invocable: false
 ---
 
-# Authentication security
+# Authentication security — this repository's answers
+
+The `engineering-framework:domain-auth` skill carries the questions and failure
+modes that govern any authentication change. This file carries **only this
+repository's answers**, and does not repeat the general reasoning.
 
 Read first:
 
 - `CLAUDE.md`
 - `src/modules/auth/**`
 - `src/common/errors/README.md`
-- relevant email/SMS/provider contracts
 - existing auth e2e specs
 
 Repository source is authoritative. Do not invent a token, OTP, session, or
@@ -22,153 +25,95 @@ already defines one.
 ## Boundary with authorization
 
 This skill covers identity, credentials, session validity, recovery, and
-verification.
+verification. Use the `authorization` skill for permissions, roles,
+PLATFORM/BUSINESS scope, ownership, tenant isolation, and 403-versus-404.
 
-Use the `authorization` skill for permissions, roles, PLATFORM/BUSINESS scope,
-ownership, tenant isolation, and 403-versus-404 behavior.
+## JWT and session authority
 
-Authentication proves who the actor is. It does not prove what records or
-actions the actor may access.
-
-## Non-negotiable invariants
-
-### JWT and session authority
-
-- Keep JWT claims minimal: `{ sub, jti }`.
-- Never place role grants, permission lists, business membership, or ownership
-  authority in the token.
-- Re-read grants server-side through the established authorization path so
-  revocation takes effect without waiting for token expiry.
+- JWT claims are exactly `{ sub, jti }`. No role grants, permission lists,
+  business membership, or ownership authority in the token.
+- Grants are re-read per request through `PermissionLoaderService` (Redis-cached,
+  explicitly invalidated), so revocation bites immediately rather than at token
+  expiry.
 - Preserve the existing `jti` session/revocation contract.
-- Validate issuer, audience, signature, expiry, and session state through the
-  configured JWT strategy.
-- Use `prisma.scoped` for user-facing identity reads so soft-deleted accounts
-  cannot authenticate.
-- Treat deletion, suspension, and lockout as independent states; do not merge
-  them into one boolean or one error-specific leak.
+- Issuer and audience derive from `SERVICE_NAME`; validate issuer, audience,
+  signature, expiry, and session state through the configured JWT strategy.
+- Use `prisma.scoped` for identity reads so soft-deleted accounts cannot
+  authenticate.
+- Deletion, suspension, and lockout are independent states. Do not merge them
+  into one boolean or one error-specific leak.
+- `@nestjs/jwt`'s `expiresIn` is typed `number | StringValue`; the runtime string
+  from `ConfigService` needs `as unknown as number` (see `auth.module.ts`).
 
-### Credential and enumeration behavior
+## Anti-enumeration contract
 
-- Collapse login failures to the established safe error, normally
-  `INVALID_CREDENTIALS`.
-- Do not reveal whether an account exists, is disposable, is soft-deleted, or
-  failed a password check when the contract intentionally hides that fact.
-- Preserve timing resistance. Missing/blocked accounts must still execute the
-  repository's dummy bcrypt path before returning.
-- Registration of disposable-email addresses remains byte-identical to a normal
-  successful registration response while silently creating no user and writing
-  the required audit event.
-- Non-auth contexts may use the explicit
-  `Errors.emailDomainDisallowed(domain)` contract when disclosure is allowed.
+This repository hides account existence deliberately. The specific behaviors:
+
+- Login failures collapse to `INVALID_CREDENTIALS`.
+- A missing or blocked account still executes the **dummy bcrypt path** before
+  returning, so timing does not distinguish it.
+- Disposable-email registration (`isDisposableEmail()`,
+  `common/util/disposable-email.util.ts`) is **byte-identical** to a successful
+  registration — same 201, same body — while creating no user row and writing an
+  audit event.
+- Disposable-email login collapses to `INVALID_CREDENTIALS` behind the same
+  timing-safe dummy bcrypt, and is audited.
+- `Errors.emailDomainDisallowed(domain)` is for **non-auth** contexts only, where
+  surfacing the reason is acceptable.
 - Never return raw provider, database, bcrypt, JWT, or mail/SMS errors.
 
-### Passwords, OTPs, and verification artifacts
+Any change that creates a distinguishable body, status, or timing on these paths
+breaks the contract.
 
-Before modifying any of these, trace the complete lifecycle:
+## OTPs and verification artifacts
 
-```text
-issue
-→ persist/derive
-→ deliver
-→ attempt validation
-→ consume/revoke
-→ expire
-→ audit
-```
+- Purpose binding is `OtpPurpose` (`src/common/enums/`). An OTP issued for one
+  purpose must never validate for another.
+- Consumption that changes account state runs inside a transaction.
+- No plaintext credential, OTP, or token reaches the logs — pino `redact.paths`
+  in `app.module.ts` covers `authorization`, `cookie`, and password/OTP body
+  fields. **Extend `redact.paths` when adding a new sensitive body field.**
+- Timestamp inputs use `@IsUtcIsoString()`, never `@IsDateString()`.
 
-Preserve or strengthen:
+## Public endpoint abuse controls
 
-- one-time use;
-- purpose binding through `OtpPurpose` or the established equivalent;
-- expiration;
-- attempt/rate limits;
-- replay resistance;
-- transaction safety when consumption changes account state;
-- safe handling of concurrent attempts;
-- no plaintext credential/OTP/token logging;
-- invalidation of superseded artifacts.
+Global `ThrottlerGuard` is 100/60s/IP and is **not sufficient** for expensive or
+dispatching routes. Every `@Public()` authentication or email/SMS-dispatch route
+carries its own `@Throttle({ default: { limit, ttl } })`: registration, login,
+resend verification, forgot/reset password, email/phone OTP issue and verify,
+account recovery, and anything that hashes a password or calls a provider.
 
-Do not silently make verification links, OTPs, password-reset artifacts, or
-session identifiers reusable.
+Throttler storage is Redis in dev/staging/prod and in-memory in test.
 
-### Public endpoint abuse controls
+## Errors, responses, audit, config
 
-Every public authentication or email/SMS-dispatch endpoint needs an explicit
-route-level `@Throttle`.
-
-Check:
-
-- registration;
-- login;
-- resend verification;
-- forgot/reset password;
-- email/phone OTP issue and verify;
-- account recovery;
-- any endpoint that performs password hashing or sends a provider request.
-
-Global throttling alone is not sufficient for expensive or dispatching routes.
-
-### Errors and response contracts
-
-- Throw through `Errors.*`.
-- Preserve the stable error envelope and machine-readable `errorCode`.
-- Clients must not depend on localized/free-form `message`.
-- Use typed response DTOs or the shared `OperationAcknowledgementDto`.
-- Hide sensitive fields in both runtime serialization and Swagger.
-- Do not create distinguishable response bodies, statuses, or timings that
-  defeat an anti-enumeration contract.
-
-### Audit and logging
-
-Audit security-sensitive actions and meaningful denied/blocked paths using the
-established `AuditService` contract.
-
-Preserve:
-
-- actor/target identity when known;
-- server-vouched request metadata;
-- request ID/correlation;
-- no caller-controlled `metadata.request`;
-- pino redaction for passwords, OTPs, tokens, authorization, cookies, and new
-  secret fields.
-
-Audit writes remain best-effort only where the current contract explicitly says
-they must not block the primary operation.
-
-### Configuration and providers
-
-- Read configuration through typed `configuration.ts` keys and
-  `configService.getOrThrow`.
-- Never read `process.env` directly outside the configuration factory.
-- Use typed `EmailService` and `SmsService` helpers rather than raw generic
-  provider calls.
-- External calls need explicit timeout and safe failure handling.
-- Retry only known transient provider failures; do not accidentally deliver
-  multiple OTPs or reset links without a deliberate idempotency policy.
-
-## Change workflow
-
-1. Trace the current success and failure paths end to end.
-2. Identify the public contract and anti-enumeration behavior.
-3. Identify account/session/OTP state transitions and transaction boundaries.
-4. Identify abuse, replay, concurrency, timing, and provider-failure risks.
-5. Preserve authorization separation.
-6. Implement through existing factories, DTOs, providers, audit, and config.
-7. Add negative and regression tests before declaring the change complete.
+- Throw through `Errors.*` — ESLint blocks direct `new *Exception` construction.
+- Clients program against `errorCode`, never `message`.
+- Side-effect endpoints return `OperationAcknowledgementDto { ok: boolean }`,
+  never an inline object literal or inline `schema:`.
+- Sensitive response fields need **both** `@Exclude()` and `@ApiHideProperty()`.
+- Audit through `AuditService.record({ action, actorId, targetUserId, metadata })`.
+  The server-vouched `metadata.request` envelope is merged automatically by the
+  `ClsModule` middleware — never pass a caller `metadata.request` key. Audit
+  writes are best-effort and never block the primary operation.
+- Configuration reads go through `configService.getOrThrow<T>('dot.path')` into
+  `configuration.ts`. Never `process.env` outside that file.
+- Use the typed `emailService.sendTemplate(...)` /
+  `smsService.sendPhoneVerificationOtp(...)` helpers, not raw `.send(...)`.
+  Email templates compile at boot, so a `{{var}}` typo fails startup.
 
 ## Required tests when relevant
 
 - valid and invalid credentials;
 - missing account and wrong password return the same public contract;
-- timing-safe dummy-password path remains reachable;
+- the timing-safe dummy-password path remains reachable;
 - disposable-email registration is byte-identical and creates no user;
 - unverified, suspended, locked, and soft-deleted account behavior;
-- OTP purpose, expiry, one-time use, replay, concurrent attempts, and retry;
+- OTP purpose, expiry, one-time use, replay, concurrent attempts, retry;
 - password-reset invalidation and session revocation;
 - public-route throttling;
 - provider timeout/failure without secret leakage;
 - stable `errorCode` and response DTO serialization;
-- audit event and redaction behavior;
-- tenant/permission behavior through the separate authorization tests.
+- audit event and redaction behavior.
 
 Use the `e2e-testing` skill for the harness and evidence rules.
