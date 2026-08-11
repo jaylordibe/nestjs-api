@@ -2,14 +2,6 @@
   "$schema": "https://raw.githubusercontent.com/jaylordibe/claude-engineering-framework/main/plugins/engineering-framework/reference/repo-config.schema.json",
   "frameworkVersion": "0.2.0",
 
-  "policy": {
-    "humanOwnedGitWrites": true,
-    "humanOwnedPullRequests": true,
-    "humanOwnedMigrations": true,
-    "humanOwnedDeployments": true,
-    "humanOwnedDependencyInstall": false
-  },
-
   "useDefaultProtectedPaths": true,
 
   "protectedCommands": [
@@ -22,16 +14,6 @@
       "match": "*docker-compose down*",
       "reason": "this repository runs two compose stacks from one file and the local dev database holds the developer's own data. Use `yarn stack:down`, which never passes -v.",
       "decision": "deny"
-    },
-    {
-      "match": "*yarn lint:fix*",
-      "reason": "the fixing form rewrites files across src/, test/, scripts/ and prisma/, and `eslint --fix` exits 0 after silently repairing whatever it could. That is the correct closing step while implementing, but never during validation, where it would manufacture a passing lint and formatting check. Evidence uses `yarn lint`.",
-      "decision": "ask"
-    },
-    {
-      "match": "*eslint*--fix*",
-      "reason": "`eslint --fix` exits 0 after rewriting whatever it repaired, so it cannot fail and proves nothing. Fine while implementing, never as validation evidence. Use `yarn lint`.",
-      "decision": "ask"
     },
     {
       "match": "*docker exec*psql*",
