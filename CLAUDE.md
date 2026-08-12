@@ -97,12 +97,19 @@ src/
     audit/  redis/
     queue/             # @Global() BullMQ layer — queue/job/recurring-schedule registries,
                        # QueueProducerService, QueueProcessor base, handler registry, README.md
+    constants/         # shared literal tables (HHMM_PATTERN, …)
+    logging/           # pino-http options + the redactUrlSecrets req serializer
+    telemetry/         # TelemetryShutdownService — flush ordering on shutdown hooks
     util/              # pure helpers + co-located *.util.spec.ts
   modules/
     authorization/     # @Global: AbilityFactory, PermissionLoaderService (grants cache),
                        # AbilityScopedQueryService (the ONLY caller of accessibleBy),
                        # guards/PermissionsGuard (global APP_GUARD, fails closed),
                        # PermissionCatalogIntegrityService + RouteAuthorizationAuditService (boot gates)
+    queue-admin/       # ADMINISTRATIVE control surface over BullMQ — inspect, retry,
+                       # cancel jobs. Every handler is @RequirePermission(…, 'QueueJob',
+                       # { administrative: true }); treat changes here as high risk.
+    enums/             # read-only projection of src/common/enums/ for clients
     auth/ users/ roles/ businesses/ (members, customers) audit-logs/ app-versions/ device-tokens/ health/ public/
 prisma/schema.prisma   # PostgreSQL datasource
 prisma/scripts/        # one-off ts-node admin scripts (backfills, imports)
@@ -191,8 +198,10 @@ Load these on demand — they hold the long-form playbooks so this core stays le
   - This repository's floor is deliberately **larger** than the framework's: the framework ships **no MCP rules at all**, so the issue-tracker denies (`mcp__*__*transition*`, `*IssueField*`, `editJiraIssue`, …) exist only here. MCP rules use a **glob server segment** — a hardcoded `mcp__atlassian__…` matches nothing in a fork that named its server differently, so the tracker floor would silently vanish.
   - Every `Bash(...)` rule is mirrored as `PowerShell(...)`. The PowerShell tool is enabled by default on Windows without Git Bash and `Bash(...)` rules do not govern it, so an unmirrored rule disappears on those machines with no warning. **Add both forms, or neither.**
   - File rules are consulted for `Read()` and `Edit()` only. A `Write()`, `Glob()`, `MultiEdit()` or `NotebookEdit()` path rule is accepted, never consulted, and warns at startup — the worst failure shape available, because the file reads as protected.
+  - **`allow` and `ask` rules use the `verb:*` prefix form; `deny` keeps `verb *`.** `Bash(yarn build *)` requires a space *and* an argument after `build`, so it never matches bare `yarn build` — an allow tier written that way prompts on every clean invocation, and an `ask` rule written that way lets the bare command fall through to a broader `allow`. The `deny` tier keeps `verb *` because the guard hook matches those operations in more forms than a prefix rule can express.
+  - **Six rules from the framework's `allow` floor are deliberately absent, and re-adding them is a regression.** `docker compose down:*` (this repo *denies* teardown; the allow form would permit the bare command its own deny rule misses), `docker exec:*` (held at `ask`, with a `protectedCommands` entry for the `psql` shell), and `yarn|npm|pnpm|bun run:*` (`yarn run prisma:migrate` escapes the `yarn prisma:migrate *` deny — the floor leans on the guard hook there, and this file's whole premise is that a hook can fail open).
 - `.claude/engineering-framework.json` (committed) — this repository's policy: canonical commands, `risk.highRiskPaths`, the `prisma/migrations/**` protected path, and the `protectedCommands` the framework's generic tables cannot know about (`docker compose down`, the fixing linter, `docker exec … psql`).
   - **One policy switch is deliberately relaxed:** `humanOwnedDependencyInstall: false`. Adding and removing packages is ordinary engineering here, and the lockfile is a protected path already, so the diff is visible at review. Migrations, deployments, Git writes, and pull requests all stay human-owned; publication, release, force pushes, and credential reads are denied regardless of this setting.
 - `.claude/settings.local.json` (per-developer, gitignored) — personal allowlist and enabled MCP servers.
-- `.claude/skills/` — five domain playbooks, all `user-invocable: false`. The `/` menu belongs to the plugin; keep project skills out of it.
+- `.claude/skills/` — four domain playbooks (`auth-security`, `authorization`, `e2e-testing`, `resource-pattern`), all `user-invocable: false`. The `/` menu belongs to the plugin; keep project skills out of it.
 - `/engineering-framework:framework-doctor` — audits this repository against the framework contract. Replaces the former `yarn claude:validate` script.

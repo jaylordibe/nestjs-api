@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/jaylordibe/claude-engineering-framework/main/plugins/engineering-framework/reference/repo-config.schema.json",
-  "frameworkVersion": "0.2.0",
+  "frameworkVersion": "0.3.0",
 
   "useDefaultProtectedPaths": true,
 
@@ -45,9 +45,10 @@
       "*/src/modules/authorization/*",
       "*/src/common/authorization/*",
       "*/src/common/errors/*",
+      "*/src/modules/queue-admin/*",
       "*/prisma/schema.prisma",
       "*/prisma/migrations/*"
     ],
-    "notes": "This repository is the GitHub template every new API project is forked from, so a defect here propagates into every fork rather than affecting one system. One PostgreSQL database serves every tenant, and tenant isolation is enforced in the query through AbilityScopedQueryService — never by a guard and never at the connection level, because a guard runs before the row is loaded and CASL ignores conditions on a subject-type check. A read that forgets to scope leaks across businesses with no other layer to catch it. Permissions are a code catalog (src/common/authorization/permission-catalog.ts) that the database projects; the application refuses to boot on drift or on a route declaring no authorization metadata. Soft delete is a convenience, never a security boundary. Uniqueness on users.email, users.username and businesses.slug lives in partial indexes Prisma cannot see, so those columns are not unique selectors and findUnique on them is a bug. Two compose stacks run side by side and the e2e globalSetup issues a real DROP DATABASE, so anything that confuses the test stack (5434/6380) with the dev stack (5433/6378) destroys the developer's own data."
+    "notes": "This repository is the GitHub template every new API project is forked from, so a defect here propagates into every fork rather than affecting one system. One PostgreSQL database serves every tenant, and tenant isolation is enforced in the query through AbilityScopedQueryService — never by a guard and never at the connection level, because a guard runs before the row is loaded and CASL ignores conditions on a subject-type check. A read that forgets to scope leaks across businesses with no other layer to catch it. Permissions are a code catalog (src/common/authorization/permission-catalog.ts) that the database projects; the application refuses to boot on drift or on a route declaring no authorization metadata. Soft delete is a convenience, never a security boundary. The queue-admin module is an administrative control surface over BullMQ whose handlers retry and cancel jobs under `administrative: true` permissions, so a defect there is privileged action on other tenants' background work rather than a read. Uniqueness on users.email, users.username and businesses.slug lives in partial indexes Prisma cannot see, so those columns are not unique selectors and findUnique on them is a bug. Two compose stacks run side by side and the e2e globalSetup issues a real DROP DATABASE, so anything that confuses the test stack (5434/6380) with the dev stack (5433/6378) destroys the developer's own data."
   }
 }
