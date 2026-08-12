@@ -45,8 +45,7 @@ It:
 - applies HTTP globals equivalent to production bootstrap;
 - listens once on port 0;
 - supports scoped provider overrides;
-- unregisters cron/interval/timeout callbacks;
-- leaves the live queue worker disabled under normal test config.
+- leaves the live queue worker disabled under normal test config, which also means no recurring job schedulers are installed (both are gated on `QUEUE_WORKER_ENABLED`).
 
 A bare `init()` can let Supertest create and destroy ephemeral listeners for
 each request, producing misleading socket/parse failures. Preserve the

@@ -35,14 +35,22 @@ Rules:
 - keep jobs inside the current worker's Redis DB;
 - use unique/deterministic job identifiers.
 
-## Scheduled sweeps
+## Recurring jobs
 
-Do not test wall-clock cron firing.
+There is no in-process scheduler. A recurring job is a BullMQ job scheduler
+declared in `recurring-schedule-registry.ts` and installed only by the worker
+runtime, so there is no wall-clock firing to test and nothing to disarm.
 
-Call the public sweep method directly with controlled time and mocked/real
-collaborators as appropriate.
+Test the three things that can actually break:
 
-Cover:
+- the handler's own logic — call its public seam (`runOnce()`, or the sweep
+  method) directly with controlled time;
+- reconciliation — declared schedules are upserted, undeclared ones removed,
+  and repeating it changes nothing;
+- the runtime gate — an app with `QUEUE_WORKER_ENABLED=false` installs no
+  schedulers at all.
+
+Cover, in the handler:
 
 - due versus not due;
 - batch limit and deterministic order;
