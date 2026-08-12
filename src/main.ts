@@ -37,13 +37,13 @@ async function bootstrap(): Promise<void> {
     credentials: true,
   });
 
-  // Swagger gate: local + staging expose `/api/docs`; production hides
-  // it. Operators don't need it on the customer-facing host, and the
-  // schema dump leaks DTO shape to anonymous traffic. Staging keeps it
-  // because that's where integration partners and admins actually use
-  // Try-it-out. Branches on NODE_ENV.
-  const nodeEnv = configService.getOrThrow<string>('nodeEnv');
-  if (nodeEnv !== 'production') {
+  // Swagger gate. Production is hard-off — the schema dump describes every DTO
+  // and route to anonymous traffic, and there is no deployment where that
+  // belongs on the customer-facing host. Non-production defaults to ON, because
+  // that is where integration partners and admins actually use Try-it-out, and
+  // can be turned off with SWAGGER_ENABLED=false. The resolution of both lives
+  // in `configuration.ts` so the production floor is stated once.
+  if (configService.getOrThrow<boolean>('swagger.enabled')) {
     // Stamp the commit hash into the Swagger doc's `version` so the
     // docs page shows which build it's describing. Mismatch with the
     // live API means a stale image is serving — pair with the health
@@ -84,10 +84,22 @@ async function bootstrap(): Promise<void> {
   // looking for — are not the ones that get dropped.
   app.enableShutdownHooks();
 
-  await app.listen(port);
+  // Bound to 0.0.0.0, not the Node default. Nest's default binds every
+  // interface today, but stating it removes the dependency on that default:
+  // a container platform routes to the container's own IP, so a process that
+  // ended up on loopback would be unreachable from outside while reporting
+  // itself perfectly healthy from inside — a failure that presents as "the
+  // container never became ready" with nothing in the logs to explain it.
+  //
+  // `port` is `PORT` from config, defaulting to 3000. Nothing here is
+  // hard-coded to any platform's convention: a host that injects `PORT`
+  // (managed container runtimes commonly do — 8080 is a frequent choice) simply
+  // wins, and a host that does not gets the default. That is the whole reason
+  // the port is configuration rather than a constant.
+  await app.listen(port, '0.0.0.0');
   app
     .get(Logger)
-    .log(`API listening on http://localhost:${port}/api`, 'Bootstrap');
+    .log(`API listening on port ${port}, prefix /api`, 'Bootstrap');
 }
 
 void bootstrap();

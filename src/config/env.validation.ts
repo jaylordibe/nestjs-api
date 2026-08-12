@@ -47,12 +47,100 @@ export const envValidationSchema = Joi.object({
     .uri({ scheme: ['postgresql', 'postgres'] })
     .required(),
 
+  // Connections THIS process may hold open to Postgres.
+  //
+  // The number that matters is not this one, it is the product:
+  //
+  //   (API max instances × DATABASE_POOL_MAX)
+  //     + (worker max instances × DATABASE_POOL_MAX)
+  //     + migration job connections
+  //     + any interactive/admin session
+  //     < the database's max_connections (minus its superuser reserve)
+  //
+  // Autoscaling is what makes an implicit default dangerous: the per-process
+  // number is multiplied by something nobody sets in this file. Capped at 100
+  // because a single process wanting more than that is a sign the work belongs
+  // on the queue, not in more connections.
+  DATABASE_POOL_MAX: Joi.number().integer().min(1).max(100).default(10),
+  // How long a caller waits for a free connection before failing. Bounded so a
+  // saturated pool surfaces as a fast error instead of a request that hangs
+  // until the client times out — and so an instance cannot sit past its own
+  // request deadline waiting for a connection that is not coming.
+  DATABASE_CONNECTION_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(60_000)
+    .default(5_000),
+  // How long an idle connection is held before being returned to the database.
+  // Short enough that an instance that has scaled down its traffic stops
+  // occupying connections its siblings need.
+  DATABASE_IDLE_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(600_000)
+    .default(30_000),
+
   REDIS_HOST: Joi.string().hostname().required(),
   REDIS_PORT: Joi.number().port().required(),
   REDIS_PASSWORD: Joi.string().min(16).required(),
   REDIS_URL: Joi.string()
     .uri({ scheme: ['redis', 'rediss'] })
-    .required(),
+    .required()
+    // The scheme and REDIS_TLS_ENABLED must agree. Checked here as well as in
+    // `buildRedisTransportOptions` so the failure lands at config validation
+    // with the variable named, rather than at the first connection attempt.
+    .when('REDIS_TLS_ENABLED', {
+      is: 'true',
+      then: Joi.string()
+        .pattern(/^rediss:\/\//)
+        .messages({
+          'string.pattern.base':
+            'REDIS_TLS_ENABLED is true, so REDIS_URL must use the rediss:// scheme. A redis:// URL would connect in plaintext.',
+        }),
+      otherwise: Joi.string()
+        .pattern(/^redis:\/\//)
+        .messages({
+          'string.pattern.base':
+            'REDIS_URL uses rediss:// but REDIS_TLS_ENABLED is not true. Set REDIS_TLS_ENABLED=true so the TLS options (CA, verification) are actually applied.',
+        }),
+    }),
+
+  // Whether to dial Redis over TLS. Required for a managed Redis with
+  // in-transit encryption; left off for the local container, which is
+  // reachable only on the developer's own machine.
+  //
+  // Kept in lockstep with REDIS_URL's scheme rather than allowed to disagree
+  // with it. Two statements of the same fact that can diverge is how a
+  // deployment ends up believing traffic is encrypted when it is not — the one
+  // failure here that produces no error and no symptom.
+  REDIS_TLS_ENABLED: Joi.string()
+    .valid('true', 'false')
+    .allow('')
+    .default('false'),
+  // PEM-encoded CA certificate for verifying the Redis server certificate.
+  //
+  // OPTIONAL, and optional on purpose: a Redis whose certificate chains to a
+  // publicly-trusted root needs nothing here, while a managed Redis that signs
+  // with a private or per-instance CA must supply it. Certificate verification
+  // itself is NOT configurable — `rejectUnauthorized` is hard-coded true in
+  // `common/redis/redis-connection.ts` — so the only question this variable
+  // answers is which trust anchor to verify against.
+  //
+  // Newlines may be literal or backslash-escaped; the builder normalises both,
+  // because Secret Manager and `env_file` each flatten a PEM to one line.
+  REDIS_TLS_CA: Joi.string()
+    .allow('')
+    .optional()
+    .when('REDIS_TLS_ENABLED', {
+      is: 'false',
+      // A CA with TLS off is not merely redundant, it is evidence that somebody
+      // configured half of an encrypted connection and believes they configured
+      // all of it.
+      then: Joi.string().valid('').messages({
+        'any.only':
+          'REDIS_TLS_CA is set but REDIS_TLS_ENABLED is false — the certificate would be ignored and the connection would be plaintext. Set REDIS_TLS_ENABLED=true and use a rediss:// URL.',
+      }),
+    }),
 
   // Whether THIS process consumes queued jobs. Producing is never gated, so
   // false yields a pure API instance that still enqueues everything.
@@ -136,7 +224,22 @@ export const envValidationSchema = Joi.object({
   // visible in the app log so local flows can be completed manually.
   // `resend` routes through resend.com and requires RESEND_API_KEY and
   // EMAIL_FROM (the latter must be a verified sender on that domain).
-  EMAIL_PROVIDER: Joi.string().valid('stub', 'resend').default('stub'),
+  //
+  // Refused in production: `StubEmailAdapter` LOGS THE RENDERED MESSAGE at info
+  // level, and that body carries the one-time codes and the
+  // `verify-email?token=…` link. Shipping it in production would reintroduce
+  // the credential-to-stdout class this template works hard to close, through
+  // a default nobody chose. Same floor as CORS_ORIGIN and TRUST_PROXY.
+  EMAIL_PROVIDER: Joi.string()
+    .valid('stub', 'resend')
+    .default('stub')
+    .when('NODE_ENV', {
+      is: 'production',
+      then: Joi.string().invalid('stub').required().messages({
+        'any.invalid':
+          'EMAIL_PROVIDER cannot be "stub" in production — the stub adapter writes the full message body, including one-time codes and verification links, to stdout. Configure a real provider.',
+      }),
+    }),
   // EMAIL_FROM / RESEND_API_KEY tolerate empty strings when EMAIL_PROVIDER is
   // not `resend`, so a committed `.env` template can ship with `RESEND_API_KEY=""`
   // placeholders without breaking boot on the stub provider. The required check
@@ -159,7 +262,19 @@ export const envValidationSchema = Joi.object({
   // TWILIO_AUTH_TOKEN, and TWILIO_FROM (an E.164 phone number you've
   // provisioned in the Twilio console, or a Messaging Service SID
   // starting with "MG…").
-  SMS_PROVIDER: Joi.string().valid('stub', 'twilio').default('stub'),
+  //
+  // Refused in production for the same reason as EMAIL_PROVIDER: the stub
+  // adapter logs the message body, which is the OTP.
+  SMS_PROVIDER: Joi.string()
+    .valid('stub', 'twilio')
+    .default('stub')
+    .when('NODE_ENV', {
+      is: 'production',
+      then: Joi.string().invalid('stub').required().messages({
+        'any.invalid':
+          'SMS_PROVIDER cannot be "stub" in production — the stub adapter writes the message body, which is the one-time code, to stdout. Configure a real provider.',
+      }),
+    }),
   // The Twilio fields tolerate empty strings when SMS_PROVIDER=stub so a
   // committed `.env` template can ship with `TWILIO_FROM=""` placeholders
   // without breaking dev/test boot. The format/required checks only kick
@@ -186,35 +301,57 @@ export const envValidationSchema = Joi.object({
     otherwise: Joi.string().allow('').optional(),
   }),
 
-  // File storage provider selection. `stub` (default) logs and returns
-  // fake `stub://...` URLs — useful for local dev and tests where the
-  // upload flow needs to exercise but no real persistence is wanted.
-  // `s3` routes through AWS S3 (or any S3-compatible: Cloudflare R2,
-  // DigitalOcean Spaces, MinIO) and requires STORAGE_S3_BUCKET +
-  // STORAGE_S3_REGION + standard AWS credentials in the SDK chain
-  // (env vars, shared config, or instance/task IAM roles).
-  STORAGE_PROVIDER: Joi.string().valid('stub', 's3').default('stub'),
+  // ── Object storage ─────────────────────────────────────────────────────────
+  // `stub` (default) persists nothing and returns `stub://…` URLs, so a fresh
+  // clone and the whole test suite run with no cloud account and no credential.
+  // `s3` (AWS S3 and every S3-compatible backend), `gcs` and `azure` are equal
+  // citizens — no provider is privileged and only the selected one's SDK is
+  // loaded at runtime.
+  //
+  // NOTICE WHAT IS ABSENT: there is no variable for an access key, a
+  // service-account JSON, an account key or a connection string, for any
+  // provider. Each adapter authenticates through its platform's keyless
+  // identity chain (IAM role / instance profile / IRSA, Application Default
+  // Credentials, Managed Identity). Long-lived cloud credentials are not an
+  // input this application accepts.
+  //
+  // Each provider's fields are required ONLY when that provider is selected, so
+  // choosing one never forces the others' configuration to exist.
+  STORAGE_PROVIDER: Joi.string()
+    .valid('stub', 's3', 'gcs', 'azure')
+    .default('stub'),
+
+  // Applies to EVERY provider. Leave unset unless the bucket/container really
+  // is world-readable or CDN-fronted: unset means `resolvePublicUrl` returns
+  // null and callers must mint a short-lived signed URL instead, which is the
+  // safe default and the one this template assumes.
+  STORAGE_PUBLIC_URL_BASE: Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .pattern(/[^/]$/, { name: 'no-trailing-slash' })
+    .allow('')
+    .optional(),
+
+  // Default lifetime of a signed read URL. Clamped to [30s, 1h] in code
+  // whatever is set here — a signed URL is an unrevocable bearer credential, so
+  // its lifetime is the entire security boundary and is not left to
+  // configuration alone.
+  STORAGE_SIGNED_URL_TTL_SECONDS: Joi.number()
+    .integer()
+    .min(30)
+    .max(3600)
+    .default(300),
+
+  // S3 and S3-compatible (AWS S3, Cloudflare R2, DigitalOcean Spaces, MinIO).
   STORAGE_S3_BUCKET: Joi.string().when('STORAGE_PROVIDER', {
     is: 's3',
     then: Joi.string().min(3).required(),
     otherwise: Joi.string().allow('').optional(),
   }),
-  STORAGE_S3_REGION: Joi.string().when('STORAGE_PROVIDER', {
-    is: 's3',
-    then: Joi.string().required(),
-    otherwise: Joi.string().allow('').optional(),
-  }),
-  // Optional public URL base. Defaults to the standard
-  // https://<bucket>.s3.<region>.amazonaws.com when unset. Set to your
-  // CDN hostname (CloudFront, Cloudflare, R2 public bucket URL) when
-  // fronting the bucket with a CDN.
-  STORAGE_S3_PUBLIC_URL_BASE: Joi.string()
-    .uri({ scheme: ['http', 'https'] })
-    .pattern(/[^/]$/, { name: 'no-trailing-slash' })
-    .allow('')
-    .optional(),
-  // S3-compatible endpoint override. Set when using R2 / MinIO / Spaces;
-  // leave empty for real AWS S3.
+  // Optional even for `s3`: the SDK resolves the region from AWS_REGION, the
+  // shared config file or instance metadata. Requiring it here would break the
+  // hosts that already answer the question.
+  STORAGE_S3_REGION: Joi.string().allow('').optional(),
+  // Set for an S3-compatible backend; leave empty for AWS S3 itself.
   STORAGE_S3_ENDPOINT: Joi.string()
     .uri({ scheme: ['http', 'https'] })
     .allow('')
@@ -223,6 +360,39 @@ export const envValidationSchema = Joi.object({
     .valid('true', 'false')
     .allow('')
     .default('false'),
+
+  // Google Cloud Storage.
+  STORAGE_GCS_BUCKET: Joi.string().when('STORAGE_PROVIDER', {
+    is: 'gcs',
+    then: Joi.string().min(3).required(),
+    otherwise: Joi.string().allow('').optional(),
+  }),
+  // Optional: supplied it pins the project, omitted ADC decides — which is what
+  // a local `gcloud auth` session expects.
+  STORAGE_GCS_PROJECT_ID: Joi.string().allow('').optional(),
+
+  // Azure Blob Storage.
+  STORAGE_AZURE_ACCOUNT_NAME: Joi.string().when('STORAGE_PROVIDER', {
+    is: 'azure',
+    then: Joi.string().required(),
+    otherwise: Joi.string().allow('').optional(),
+  }),
+  STORAGE_AZURE_CONTAINER: Joi.string().when('STORAGE_PROVIDER', {
+    is: 'azure',
+    then: Joi.string().required(),
+    otherwise: Joi.string().allow('').optional(),
+  }),
+
+  // Whether `/api/docs` is served. Only ever NARROWS: production is hard-off in
+  // `configuration.ts` regardless of this value, so setting it to `true` there
+  // does nothing. It exists so a staging deployment with no reverse proxy in
+  // front of it can hide the docs from the internet without a code change —
+  // the Basic Auth that used to do that job lives in a Caddyfile, and a managed
+  // container platform has no Caddyfile.
+  SWAGGER_ENABLED: Joi.string()
+    .valid('true', 'false')
+    .allow('')
+    .default('true'),
 
   // In production, refuse the wildcard origin — Same-Origin with
   // credentials: true is broken in browsers against `*`, and leaving the

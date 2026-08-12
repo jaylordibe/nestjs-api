@@ -2,20 +2,27 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import { formatErrorMessage } from '../util/error-message.util';
+import { buildRedisConnectionOptions } from './redis-connection';
 
 // Shared Redis client for app-level use (JWT revocation blocklist, etc.).
 // The throttler maintains its own separate client via
 // @nest-lab/throttler-storage-redis — both point at the same Redis instance
 // but don't share the connection object. Acceptable: two connections per
 // pod is negligible, and letting the throttler stay self-contained avoids
-// the refactor.
+// the refactor. Both are built from `buildRedisConnectionOptions`, so they
+// cannot disagree about credentials or TLS.
 @Injectable()
 export class RedisService implements OnModuleDestroy {
   private readonly logger = new Logger(RedisService.name);
   readonly client: Redis;
 
   constructor(config: ConfigService) {
-    this.client = new Redis(config.getOrThrow<string>('redis.url'), {
+    this.client = new Redis({
+      // Transport (host, auth, logical database, TLS) comes from the single
+      // builder; the two options below are this client's own behaviour and are
+      // deliberately NOT shared with BullMQ, whose blocking commands require
+      // `maxRetriesPerRequest: null`.
+      ...buildRedisConnectionOptions(config),
       // Lazy connect so tests that never hit Redis don't trigger a
       // connection attempt at module load. The first actual command
       // triggers the connect.

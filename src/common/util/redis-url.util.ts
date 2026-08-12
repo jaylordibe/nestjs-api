@@ -10,7 +10,12 @@
 // connections from options rather than a URL string, so the URL has to be
 // parsed here — this function is the seam that keeps queue state isolated per
 // worker.
-export interface RedisConnectionOptions {
+//
+// This module parses ONLY what the URL carries. TLS material (the CA, the
+// verification policy) comes from separate environment variables and is merged
+// in by `buildRedisTransportOptions` in `src/common/redis/redis-connection.ts`,
+// which is the one place every Redis client in the app is configured from.
+export interface ParsedRedisUrl {
   host: string;
   port: number;
   username?: string;
@@ -18,17 +23,16 @@ export interface RedisConnectionOptions {
   // Logical database index (`SELECT n`). Redis ships 16 by default; 0 when the
   // URL carries no path segment.
   db: number;
-  // ioredis enables TLS only when this key is present, so it stays undefined
-  // for plain `redis://` rather than being set to `false`.
-  tls?: Record<string, never>;
+  // `rediss:` rather than `redis:`. Reported rather than turned into a `tls`
+  // object here: whether TLS is actually used, and with which trust anchor, is
+  // decided by REDIS_TLS_ENABLED / REDIS_TLS_CA alongside this.
+  isSecureScheme: boolean;
 }
 
 const DEFAULT_REDIS_PORT = 6379;
 const DEFAULT_REDIS_DATABASE_INDEX = 0;
 
-export function parseRedisConnectionOptions(
-  url: string,
-): RedisConnectionOptions {
+export function parseRedisUrl(url: string): ParsedRedisUrl {
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(url);
@@ -84,7 +88,7 @@ export function parseRedisConnectionOptions(
       databaseSegment.length > 0
         ? Number.parseInt(databaseSegment, 10)
         : DEFAULT_REDIS_DATABASE_INDEX,
-    ...(parsedUrl.protocol === 'rediss:' ? { tls: {} } : {}),
+    isSecureScheme: parsedUrl.protocol === 'rediss:',
   };
 }
 

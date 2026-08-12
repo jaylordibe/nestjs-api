@@ -2,91 +2,96 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   DeleteObjectCommand,
+  GetObjectCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
-import { randomUUID } from 'crypto';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { NodeHttpHandler } from '@smithy/node-http-handler';
 import * as path from 'path';
+import { formatErrorMessage } from '../../util/error-message.util';
+import { buildObjectName } from '../../util/storage-object-name.util';
 import {
   FileStorageAdapter,
-  SavedFile,
+  StoredObject,
 } from './file-storage-adapter.interface';
 
-// AWS S3 (or S3-compatible: Cloudflare R2, MinIO, DigitalOcean Spaces) adapter.
-// Selected when STORAGE_PROVIDER=s3.
+// S3 and every S3-compatible backend: AWS S3, Cloudflare R2, DigitalOcean
+// Spaces, Backblaze B2, MinIO, Ceph. Selected with STORAGE_PROVIDER=s3.
 //
-// Auth: standard AWS credential chain — env vars (`AWS_ACCESS_KEY_ID` +
-// `AWS_SECRET_ACCESS_KEY`), shared config files, or instance/task IAM
-// roles when running on AWS-hosted compute. The SDK figures it out; this
-// class just passes `region` (and optionally `endpoint` for R2 / MinIO /
-// Spaces).
+// This file is the ONLY place in the application that imports an AWS SDK, and
+// it is loaded only when this provider is selected (`file-storage.module.ts`
+// imports it dynamically). Nothing above the `FileStorageAdapter` interface
+// knows S3 exists.
 //
-// Bucket access: for the public URLs we return to be directly fetchable,
-// either (a) make the bucket public-read, or (b) set
-// `STORAGE_S3_PUBLIC_URL_BASE` to a CloudFront / R2 / Cloudflare-CDN
-// hostname that fronts the bucket. We don't return signed URLs by design —
-// caller code embeds these URLs into DB rows; signed URLs would expire.
+// CREDENTIALS come from the SDK's default provider chain, which is the keyless
+// path on every host that offers one: an EC2 instance profile, an ECS task
+// role, an EKS service account (IRSA), or a developer's local
+// `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. This adapter never reads or
+// accepts a credential of its own, so there is no configuration key here that
+// could tempt a long-lived access key into the application's own config.
 //
-// `storageKey` is the S3 object key (e.g. "<uuid>.png").
-// `url` defaults to `https://<bucket>.s3.<region>.amazonaws.com/<key>`,
-// or `STORAGE_S3_PUBLIC_URL_BASE/<key>` when set.
+// R2 / MinIO / Spaces need `STORAGE_S3_ENDPOINT`, and some self-hosted servers
+// additionally need `STORAGE_S3_FORCE_PATH_STYLE=true`.
 @Injectable()
 export class S3FileStorageAdapter implements FileStorageAdapter {
+  readonly providerName = 's3';
+
   private readonly logger = new Logger(S3FileStorageAdapter.name);
   private readonly client: S3Client;
   private readonly bucket: string;
-  private readonly publicUrlBase: string;
+  private readonly publicUrlBase: string | null;
 
   constructor(configService: ConfigService) {
     this.bucket = configService.getOrThrow<string>('storage.s3.bucket');
-    const region = configService.getOrThrow<string>('storage.s3.region');
+    this.publicUrlBase =
+      configService.get<string>('storage.publicUrlBase') ?? null;
+
+    const region = configService.get<string>('storage.s3.region');
     const endpoint = configService.get<string>('storage.s3.endpoint');
-    const forcePathStyle =
-      configService.get<boolean>('storage.s3.forcePathStyle') ?? false;
-    this.publicUrlBase = (
-      configService.get<string>('storage.s3.publicUrlBase') ??
-      `https://${this.bucket}.s3.${region}.amazonaws.com`
-    ).replace(/\/+$/, '');
+    const requestTimeoutMs = configService.getOrThrow<number>(
+      'storage.requestTimeoutMs',
+    );
     this.client = new S3Client({
-      region,
-      // `endpoint` is the escape hatch for S3-compatible providers
-      // (Cloudflare R2: `https://<account-id>.r2.cloudflarestorage.com`;
-      // DigitalOcean Spaces: `https://<region>.digitaloceanspaces.com`;
-      // MinIO: `http://localhost:9000`). Leave unset for real AWS.
+      // Without an explicit handler the SDK applies NO request or connection
+      // timeout, so a slow bucket holds the caller — and its database
+      // connection — indefinitely.
+      requestHandler: new NodeHttpHandler({
+        requestTimeout: requestTimeoutMs,
+        connectionTimeout: requestTimeoutMs,
+      }),
+      // Omitted rather than defaulted when unset, so the SDK's own resolution
+      // (AWS_REGION, the instance metadata, the shared config file) still
+      // applies. Passing a made-up default would override all of it.
+      ...(region ? { region } : {}),
       ...(endpoint ? { endpoint } : {}),
-      // Path-style addressing (`https://endpoint/bucket/key`) instead of
-      // virtual-host style (`https://bucket.endpoint/key`). Required by
-      // some S3-compatible servers (older MinIO, some self-hosted setups).
-      forcePathStyle,
+      forcePathStyle:
+        configService.get<boolean>('storage.s3.forcePathStyle') ?? false,
     });
   }
 
-  async save(file: Express.Multer.File, subdir: string): Promise<SavedFile> {
-    const ext = path.extname(file.originalname).toLowerCase();
-    // `subdir = ''` is supported and means "save flat at the bucket
-    // root". Without this guard the object key would have a leading `/`
-    // which S3 treats as part of the literal key — `bucket//uuid.png` is
-    // technically valid but breaks the public URL.
-    const cleanSubdir = subdir.replace(/^\/+|\/+$/g, '');
-    const key = cleanSubdir
-      ? `${cleanSubdir}/${randomUUID()}${ext}`
-      : `${randomUUID()}${ext}`;
+  async save(
+    file: Express.Multer.File,
+    subdirectory: string,
+  ): Promise<StoredObject> {
+    const storageKey = buildObjectName(
+      subdirectory,
+      path.extname(file.originalname).toLowerCase(),
+    );
     await this.client.send(
       new PutObjectCommand({
         Bucket: this.bucket,
-        Key: key,
+        Key: storageKey,
         Body: file.buffer,
         ContentType: file.mimetype,
-        // Cache aggressively at the CDN — uploaded objects are
-        // immutable (UUID-named, never overwritten). 1 year + immutable
-        // hint lets any fronting CDN keep them indefinitely.
+        // Uploaded objects are immutable — the name is a fresh UUID and nothing
+        // ever overwrites one — so a fronting CDN can keep them indefinitely.
+        // `private` is deliberate and is not overridden by this header: an ACL
+        // is never set here, so the bucket's own policy decides readability.
         CacheControl: 'public, max-age=31536000, immutable',
       }),
     );
-    return {
-      storageKey: key,
-      url: `${this.publicUrlBase}/${key}`,
-    };
+    return { storageKey, publicUrl: this.resolvePublicUrl(storageKey) };
   }
 
   async delete(storageKey: string): Promise<void> {
@@ -96,15 +101,23 @@ export class S3FileStorageAdapter implements FileStorageAdapter {
       );
     } catch (error) {
       this.logger.warn(
-        `Failed to delete s3://${this.bucket}/${storageKey}: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to delete s3://${this.bucket}/${storageKey}: ${formatErrorMessage(error)}`,
       );
     }
   }
 
-  async deleteByUrl(url: string): Promise<void> {
-    if (!url.startsWith(`${this.publicUrlBase}/`)) return;
-    const key = url.slice(this.publicUrlBase.length + 1);
-    if (key.length === 0) return;
-    await this.delete(key);
+  createSignedReadUrl(storageKey: string, ttlSeconds: number): Promise<string> {
+    // SigV4 presigning is computed locally from the resolved credentials — no
+    // network call, and no permission beyond the `s3:GetObject` the signer
+    // already holds.
+    return getSignedUrl(
+      this.client,
+      new GetObjectCommand({ Bucket: this.bucket, Key: storageKey }),
+      { expiresIn: ttlSeconds },
+    );
+  }
+
+  resolvePublicUrl(storageKey: string): string | null {
+    return this.publicUrlBase ? `${this.publicUrlBase}/${storageKey}` : null;
   }
 }

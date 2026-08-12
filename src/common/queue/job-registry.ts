@@ -22,6 +22,7 @@ import type { JobRetryPolicy } from './queue-registry';
 //      reach production.
 export enum JobName {
   MAINTENANCE_QUEUE_HEARTBEAT_V1 = 'maintenance.queue-heartbeat.v1',
+  AUTH_REFRESH_TOKEN_RETENTION_V1 = 'auth.refresh-token-retention.v1',
 }
 
 export interface JobRegistration {
@@ -48,6 +49,20 @@ export const JOB_REGISTRATIONS: Record<JobName, JobRegistration> = {
       attempts: 1,
       backoffStrategy: 'fixed',
       initialBackoffMilliseconds: 0,
+    },
+  },
+  [JobName.AUTH_REFRESH_TOKEN_RETENTION_V1]: {
+    queueName: QueueName.MAINTENANCE,
+    payloadVersion: 1,
+    description:
+      'Deletes refresh tokens past their expiry. Data minimisation: an expired row still holds a user id, an IP and a user-agent. Idempotent — the delete is bounded by `expiresAt < now`.',
+    // Fewer attempts than the queue default and a short backoff: the sweep runs
+    // nightly, so a failure that outlives three quick retries is better left to
+    // tomorrow's tick than retried for the next twenty minutes.
+    retryPolicy: {
+      attempts: 3,
+      backoffStrategy: 'exponential',
+      initialBackoffMilliseconds: 60_000,
     },
   },
 };

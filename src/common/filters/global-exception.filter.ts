@@ -13,6 +13,7 @@ import {
   ErrorResponseBody,
 } from '../errors/app-exception';
 import { ErrorCode } from '../errors/error-code.enum';
+import { redactUrlSecrets } from '../util/redact-url-secrets.util';
 
 // Single global filter. Catches every uncaught throwable and emits the
 // standard error envelope (see src/common/errors/README.md). Priority
@@ -93,7 +94,12 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       errorCode: translated.errorCode,
       message: translated.message,
       details: translated.details ?? null,
-      path: request.url,
+      // Redacted for the same reason as the log line, and it matters here too:
+      // clients feed error envelopes straight into their own error trackers, so
+      // an unredacted `path` puts the credential in a third-party system the
+      // moment an email-verification link expires. The field still answers what
+      // it exists to answer — which endpoint failed.
+      path: redactUrlSecrets(request.url),
       timestamp: new Date().toISOString(),
       requestId: this.extractRequestId(request),
     };
@@ -288,14 +294,20 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       .replace(/^./, (firstCharacter) => firstCharacter.toUpperCase());
   }
 
+  // The URL is redacted here as well as in the pino request serializer, because
+  // this line is built by hand and would otherwise sail straight past it. A
+  // failed `GET /auth/verify-email?token=…` is exactly the request that reaches
+  // this method, so the unredacted form would put a bearer credential in the
+  // logs on every expired-link click.
   private log(status: number, request: Request, exception: unknown): void {
+    const safeUrl = redactUrlSecrets(request.url);
     if (status >= 500) {
       this.logger.error(
-        `${request.method} ${request.url} -> ${status}`,
+        `${request.method} ${safeUrl} -> ${status}`,
         exception instanceof Error ? exception.stack : String(exception),
       );
     } else {
-      this.logger.warn(`${request.method} ${request.url} -> ${status}`);
+      this.logger.warn(`${request.method} ${safeUrl} -> ${status}`);
     }
   }
 }

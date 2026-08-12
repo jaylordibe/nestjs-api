@@ -1,6 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
+import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { truncateAll } from './setup/db';
 import { seedRbacCatalog } from './setup/rbac';
@@ -126,6 +127,58 @@ describe('Request metadata (e2e)', () => {
       // …and the replacement is what gets persisted, so the log and the audit
       // row still agree.
       expect((await auditEnvelope()).requestId).toBe(headerId);
+    });
+  });
+
+  // The audit envelope is the DURABLE URL sink. Four other sinks (pino's
+  // `req.url`, pino's `req.query`, the exception filter's log line and the error
+  // envelope's `path`) were redacted while this one was not, so a query-string
+  // credential still reached the database — the table an incident responder
+  // reads, and every backup of it.
+  describe('secrets in the query string', () => {
+    // A SUCCESSFUL verification, deliberately. An invalid token throws before
+    // any audit row is written, so driving this with a junk token would assert
+    // against a row that does not exist — which is exactly how the first
+    // version of this test passed while proving nothing.
+    it('redacts a query-string credential out of the persisted audit path', async () => {
+      const email = 'audit-path-redaction@example.com';
+      await registerWith({}, email).expect(201);
+
+      const userId = (
+        await app.get(PrismaService).user.findFirstOrThrow({ where: { email } })
+      ).id;
+      const token = app
+        .get(JwtService)
+        .sign({ sub: userId, purpose: 'email_verify' }, { expiresIn: '10m' });
+
+      await request(app.getHttpServer())
+        .get(`/api/auth/verify-email?token=${encodeURIComponent(token)}`)
+        .expect(302);
+
+      // The row this request wrote — NOT the registration row.
+      const row = await app.get(PrismaService).auditLog.findFirstOrThrow({
+        where: { action: 'user.email_verified' },
+        orderBy: { createdAt: 'desc' },
+      });
+      const persistedPath = (
+        (row.metadata as { request?: RequestEnvelope }).request ?? {}
+      ).path;
+
+      expect(persistedPath).toBe('/api/auth/verify-email?token=[redacted]');
+      expect(persistedPath).not.toContain(token);
+    });
+
+    // The error envelope goes back to the client and straight into client-side
+    // error trackers, so it is a second distribution channel for the same
+    // credential.
+    it('redacts the credential out of the error envelope path', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/api/auth/verify-email?token=NOT-A-REAL-TOKEN-VALUE')
+        .expect(400);
+
+      const body = response.body as { path: string };
+      expect(body.path).toBe('/api/auth/verify-email?token=[redacted]');
+      expect(body.path).not.toContain('NOT-A-REAL-TOKEN-VALUE');
     });
   });
 

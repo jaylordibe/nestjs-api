@@ -194,8 +194,15 @@ async upload(
   @UploadedFiles() files: Express.Multer.File[],
   @Body('data', new ParseJsonPipe(CreateOrderDto)) dto: CreateOrderDto,
 ) {
-  const { url, storageKey } = await this.fileStorage.save(files[0], 'orders');
-  // persist `url`; on DB failure call this.fileStorage.delete(storageKey) to roll back
+  const { storageKey } = await this.fileStorage.save(files[0], 'orders');
+  // Persist `storageKey` — NOT a URL. A URL embeds the bucket, the provider and
+  // the access model; a key survives all three changing. On DB failure call
+  // this.fileStorage.delete(storageKey) to roll back.
+  //
+  // To serve it later: authorize the caller FIRST, then
+  // `this.fileStorage.createSignedReadUrl(storageKey)` — a short-lived URL, not
+  // a permanent public one. `resolvePublicUrl()` returns null unless the
+  // deployment has explicitly declared the bucket public.
 }
 ```
 
@@ -225,9 +232,20 @@ export class ReminderJob {
     }
   }
 
-  @Cron(CronExpression.EVERY_30_MINUTES)
-  handleCron(): Promise<void> {
-    return this.sendDueReminders();
+  // The queue entrypoint. Declare the job in `job-registry.ts`, its cadence in
+  // `recurring-schedule-registry.ts`, and register this class as a provider in
+  // your feature module — `QueueJobHandlerRegistry` discovers it and fails the
+  // boot if the wiring is incomplete. There is no in-process cron; a decorator
+  // fires once per PROCESS, which a horizontally-scaled API multiplies.
+  async handle(): Promise<JobOutcome> {
+    await this.sendDueReminders();
+    return completedJob();
   }
 }
 ```
+
+Note the two halves that survive from the cron shape and matter more here: the
+public `sendDueReminders()` seam a spec can call directly, and the
+`reminderSentAt` column. A scheduler tick is at-least-once and a failed job is
+retried, so the dedupe column is what stops a retry re-sending every reminder in
+the batch. See [`src/common/queue/README.md`](../src/common/queue/README.md).

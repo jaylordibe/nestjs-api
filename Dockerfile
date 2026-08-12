@@ -10,10 +10,9 @@ RUN apk add --no-cache libc6-compat openssl
 COPY package.json yarn.lock ./
 RUN yarn install --frozen-lockfile
 
-# Build stage keeps the FULL dev toolchain (prisma CLI, nest CLI). It is
-# used directly as the `migrate` service's image (docs/<env>/docker-compose.yml,
-# `target: build`, runs `yarn prisma:deploy`), so it must retain devDeps —
-# do NOT prune here.
+# Build stage keeps the FULL dev toolchain (prisma CLI, nest CLI). The `migrate`
+# stage below is built from it and runs `yarn prisma:deploy`, so it must retain
+# devDeps — do NOT prune here.
 #
 # GIT_SHA is embedded in the RUN command so its value participates in the
 # build cache key: every commit produces a unique instruction and forces a
@@ -25,6 +24,34 @@ COPY . .
 RUN : "git_sha=${GIT_SHA}" \
  && yarn prisma generate \
  && yarn build
+
+# Migration image. Schema changes are applied by a SEPARATE, short-lived
+# container that runs to completion and exits — never on API startup and never
+# on worker startup. Ten API instances booting concurrently would otherwise race
+# `migrate deploy` against each other, and an instance whose migration failed
+# would restart-loop while the previous release was already stopped.
+#
+#   docker build --target migrate -t <registry>/<service>-migrate:<sha> .
+#
+# Run it as whatever the platform calls a run-to-completion container (a job, a
+# task, a one-off `docker run`) as a deploy step before the new API revision
+# receives traffic. It needs DATABASE_URL and network reach to the database,
+# nothing else.
+#
+# Runs as root, unlike the runtime image below: this stage is the build
+# environment, whose `node_modules` is root-owned, and re-chowning it would add
+# a full copy of the tree to every build. Acceptable for a container that exists
+# for seconds, runs one known command, and serves no traffic — but it is the
+# reason this stage must never be used to serve the API.
+FROM build AS migrate
+# BOTH steps, and in this order. The schema migration alone is not a complete
+# deploy step: the permission catalog in src/common/authorization is the source
+# of truth and the database is its projection, and the application REFUSES TO
+# BOOT when the two disagree. A release that adds a permission would therefore
+# migrate successfully, report success, and then crash-loop the API and the
+# worker — after the previous release had already been replaced. `rbac:sync` is
+# idempotent, so running it on every deploy costs nothing when nothing changed.
+CMD ["sh", "-c", "yarn prisma:deploy && yarn rbac:sync"]
 
 # Pruned production dependencies for the runtime image. Separate stage so the
 # `build` target above keeps its devDeps. `--ignore-scripts` is safe: bcrypt's
@@ -60,6 +87,20 @@ COPY --from=build     --chown=app:app /app/node_modules/.prisma ./node_modules/.
 COPY --from=build     --chown=app:app /app/dist                 ./dist
 COPY --from=build     --chown=app:app /app/package.json         ./package.json
 USER app
+# Documentation only — EXPOSE binds nothing and no runtime reads it to choose a
+# port. 3000 because that is the PORT default in `.env.example` and the port the
+# compose files map. A platform that injects its own PORT simply wins (8080 is a
+# common choice) and the app listens on whatever it is given, so this line is
+# deliberately NOT changed to match any one platform: doing so would make it
+# disagree with every other environment while still not affecting behaviour.
 EXPOSE 3000
+# tini as PID 1 so SIGTERM reaches node rather than being swallowed. This is
+# what makes graceful shutdown work at all: Nest's shutdown hooks (API) and the
+# explicit drain in dist/worker.js both hang off that signal, and a platform
+# that SIGKILLs after its grace period would otherwise cut active jobs off
+# mid-flight.
 ENTRYPOINT ["/sbin/tini", "--"]
+# The API runtime. The worker runtime is the SAME IMAGE with a different
+# command and QUEUE_WORKER_ENABLED=true:
+#   command: ["node", "dist/worker.js"]
 CMD ["node", "dist/main.js"]

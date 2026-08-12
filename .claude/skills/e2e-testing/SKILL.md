@@ -1,7 +1,7 @@
 ---
 name: e2e-testing
 description: This repository's e2e harness — createTestApp/truncateAll, the template-database clone per Jest worker, the per-worker Redis logical database, shared RBAC fixtures, error-envelope assertions, and the focused-versus-full run cadence.
-when_to_use: Use when creating or changing test/*.e2e-spec.ts, debugging parallel or Redis-related flakes, testing API contracts, authorization, audit columns, BullMQ handlers, scheduled sweeps, migrations in the isolated test environment, or deciding which tests to run.
+when_to_use: Use when creating or changing test/*.e2e-spec.ts, debugging parallel or Redis-related flakes, testing API contracts, authorization, audit columns, BullMQ handlers, recurring job schedulers, migrations in the isolated test environment, or deciding which tests to run.
 user-invocable: false
 ---
 

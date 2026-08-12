@@ -7,12 +7,11 @@ startTelemetry();
 
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
-import { SchedulerRegistry } from '@nestjs/schedule';
 import type { INestApplicationContext } from '@nestjs/common';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 import { formatErrorMessage } from './common/util/error-message.util';
-import { removeAllScheduledTasks } from './common/util/scheduled-task-teardown.util';
+import { QueueWorkerRegistrar } from './common/queue/queue-worker.registrar';
 
 // How long a shutting-down worker waits for its active jobs before giving up
 // and logging an incomplete shutdown. Deliberately under the 30s
@@ -27,37 +26,26 @@ const WORKER_SHUTDOWN_TIMEOUT_MILLISECONDS = 25_000;
 // BullMQ queues and nothing else. Run it with `yarn start:worker`
 // (`node dist/worker`).
 //
-// By default the worker runs inside the api container
-// (QUEUE_WORKER_ENABLED=true there, one process doing both). This entrypoint is
-// what makes splitting them a deployment change rather than a rewrite: when job
-// volume justifies a dedicated worker, add a service to the compose file with
-// `command: node dist/worker.js`, set QUEUE_WORKER_ENABLED=false on the api
-// service, and point its healthcheck at the queue heartbeat. No code changes.
+// This is one half of a two-runtime deployment, and the halves are distinguished
+// by exactly one variable:
+//
+//   API runtime      QUEUE_WORKER_ENABLED=false  →  node dist/main.js
+//   Worker runtime   QUEUE_WORKER_ENABLED=true   →  node dist/worker.js
+//
+// The API never consumes a job and never installs a recurring schedule; this
+// process does both. Locally, one process may still do everything —
+// `QUEUE_WORKER_ENABLED=true` with `yarn start:dev` — because there is no
+// autoscaler to duplicate the work.
 //
 // Requires QUEUE_WORKER_ENABLED=true — a worker process that does not consume
 // is a process doing nothing, so this refuses to start rather than idling
 // silently and looking healthy.
-
-// createApplicationContext instantiates every module in AppModule, including
-// ScheduleModule — so without this the @Cron jobs would run HERE as well as in
-// the api container, double-firing every sweep. Unregistering them makes this
-// process a pure queue consumer.
 //
-// Note this happens AFTER boot, so a sub-minute schedule could in principle
-// fire in the window. Keep cron cadences at a minute or longer and that stays
-// latent rather than live.
-function removeScheduledTasks(
-  applicationContext: INestApplicationContext,
-  logger: Logger,
-): void {
-  const removedTaskCount = removeAllScheduledTasks(
-    applicationContext.get(SchedulerRegistry),
-  );
-  logger.log(
-    `Removed ${removedTaskCount} scheduled task(s) — they belong to the API process`,
-    'Worker',
-  );
-}
+// There is no in-process scheduler to disarm here. Recurring work is BullMQ job
+// schedulers living in Redis (`common/queue/recurring-schedule-registry.ts`),
+// installed by `RecurringScheduleInstaller` — which is gated on this same flag,
+// so the schedules belong to this runtime by construction rather than by a
+// teardown step that had to be remembered.
 
 // Nest's enableShutdownHooks() closes the context on SIGTERM but gives no way
 // to bound how long that takes or to say what was still running when the
@@ -93,8 +81,15 @@ function registerShutdownHandlers(
     // other handle has drained, which would let the process exit 0 and report a
     // clean shutdown for a worker that abandoned active jobs.
 
+    // BullMQ FIRST, then the context. Nest's own ordering runs
+    // `onModuleDestroy` — which ends the Postgres pool and quits Redis — before
+    // `onApplicationShutdown`, where @nestjs/bullmq closes its workers. Draining
+    // after that point would mean finishing jobs against a closed pool, which is
+    // not a graceful stop however calmly it is logged.
     applicationContext
-      .close()
+      .get(QueueWorkerRegistrar)
+      .drainWorkers()
+      .then(() => applicationContext.close())
       // Flush telemetry AFTER the context closes, so spans emitted while jobs
       // were draining are included rather than cut off mid-shutdown.
       .then(() => stopTelemetry())
@@ -135,7 +130,6 @@ async function bootstrapWorker(): Promise<void> {
     process.exit(1);
   }
 
-  removeScheduledTasks(applicationContext, logger);
   registerShutdownHandlers(applicationContext, logger);
 
   // Reports the DEFAULT, not the effective value — a queue with its own

@@ -7,22 +7,78 @@ business module.
 
 ---
 
-## Which mechanism does my job belong on?
+## There is exactly one mechanism
 
-The app has two scheduling mechanisms and they are not competitors. Pick with
-this table, not by habit:
+**BullMQ is the only way background work runs in this application.** There is no
+in-process scheduler — `@nestjs/schedule` is not a dependency, and adding one
+back would reintroduce the failure it was removed for.
 
-| Your job… | Use | Why |
+| Your job… | Use | Where it is declared |
 |---|---|---|
-| Runs once, for one entity, at a computed future instant | **Delayed queue job** | A `@Cron` sweep can only approximate it — a 30-minute sweep fires up to 30 minutes late |
-| Runs now but must not block the HTTP response | **Immediate queue job** | Keeps a provider round trip off the request path |
-| Needs retries with backoff on transient failure | **Queue job** | `@Cron` has no retry — it just waits for the next tick |
-| Must be cancellable or reschedulable when the entity changes | **Queue job** | There is nothing to cancel in a sweep |
-| Sweeps *all* rows matching a condition on a fixed cadence | **`@Cron`** (`src/common/scheduled-jobs/`) | A sweep is one query; the queue equivalent is one job per row and buys nothing |
-| Is process-local housekeeping, safe to miss and safe to repeat | **`@Cron`** | Persistence has a cost and no benefit here |
+| Runs now but must not block the HTTP response | Immediate job — `enqueue` | `job-registry.ts` |
+| Runs once, for one entity, at a computed future instant | Delayed job — `enqueueAt` | `job-registry.ts` |
+| Repeats on a fixed cadence or a cron expression | **Recurring job scheduler** | `recurring-schedule-registry.ts` |
+| Sweeps *all* rows matching a condition, periodically | A recurring job whose handler runs the one sweep query | `recurring-schedule-registry.ts` |
+| Needs retries with backoff on transient failure | Any of the above — the retry policy is per job | `job-registry.ts` |
+| Must be cancellable or reschedulable when the entity changes | Delayed job with a deterministic ID | `queue-producer.service.ts` |
 
-**`@Cron` is not deprecated.** Adding the queue did not make sweeps obsolete —
-it gave per-entity, retryable, cancellable work somewhere correct to live.
+### Why no in-process scheduler
+
+An `@Cron` decorator fires once per PROCESS. That is fine on one long-lived
+container and wrong everywhere this template now targets:
+
+- **Horizontal autoscaling multiplies it.** Ten API instances means ten copies of
+  every nightly sweep, all at once, racing each other over the same rows.
+- **It dies with the process.** A scale-in, a redeploy or a crash during the
+  scheduled minute means the tick simply never happened, with nothing recording
+  that it did not.
+- **It cannot be split.** Confining crons to one runtime means either a third
+  deployment whose only job is to hold a timer, or a flag that every scheduled
+  service has to remember to check.
+
+A BullMQ job scheduler lives in **Redis**. It produces exactly one job per tick
+regardless of how many workers exist, survives the replacement of every process
+that ever touched it, and lands on the same retry, correlation and lifecycle
+machinery as every other job.
+
+### Which runtime does what
+
+```
+API runtime                      Worker runtime
+QUEUE_WORKER_ENABLED=false       QUEUE_WORKER_ENABLED=true
+node dist/main.js                node dist/worker.js
+  ├── serves HTTP                  ├── consumes every registered queue
+  ├── enqueues jobs                ├── installs + reconciles job schedulers
+  ├── never consumes               └── enqueues too (handlers may chain work)
+  └── never installs schedulers
+```
+
+Producing is never gated. Consuming and scheduler installation are both gated on
+`QUEUE_WORKER_ENABLED`, so an API instance can enqueue anything and will act on
+nothing. Locally one process does both — there is no autoscaler to duplicate the
+work.
+
+### How the gate is enforced
+
+`QueueModule` sets `extraOptions: { manualRegistration: true }` on the BullMQ
+root. That is `@nestjs/bullmq`'s own switch: it stops the explorer constructing
+a `Worker` per `@Processor` during `onModuleInit`, and nothing consumes until
+something calls `BullRegistrar.register()`.
+
+`QueueWorkerRegistrar` is the only caller, and it calls only when
+`QUEUE_WORKER_ENABLED` is true. So in the API runtime **no Worker object is ever
+constructed** — no Redis connection is opened for one, and there is nothing to
+close. Measured on the shipped image: the API holds 1 Redis connection where the
+worker holds 4.
+
+Queue PRODUCERS are unaffected. Queue providers come from
+`BullModule.registerQueue`, not from the explorer, so an API instance still
+enqueues everything.
+
+Processor CLASSES stay registered in both runtimes on purpose: the boot-time
+check that every queue has a processor must keep running on the API, which is
+the runtime where a queue nobody consumes is hardest to notice. Providing a
+class is not the same as running a Worker.
 
 ---
 
@@ -48,12 +104,22 @@ runs.
 
 ### What ships out of the box
 
-One queue (`maintenance`) and one job (`maintenance.queue-heartbeat.v1`), which
-is the infrastructure heartbeat behind `GET /api/health/workers`. That is
-deliberate, not a stub: only queues with a real producer are registered, and
-`QueueJobHandlerRegistry` fails the boot for a queue with no processor precisely
-so an aspirational lane cannot sit there looking alive. Add your queues as you
-have work for them.
+One queue (`maintenance`) and two recurring jobs:
+
+| Job | Schedule | What it does |
+|---|---|---|
+| `maintenance.queue-heartbeat.v1` | every 5 minutes | Writes the Redis key behind `GET /api/health/workers`. Carries no domain meaning and must never acquire any. |
+| `auth.refresh-token-retention.v1` | `0 0 * * *` UTC | Deletes refresh tokens past their expiry. Data minimisation — an expired row still holds a user id, an IP and a user-agent. |
+
+Only one queue is deliberate, not a stub: only queues with a real producer are
+registered, and `QueueJobHandlerRegistry` fails the boot for a queue with no
+processor precisely so an aspirational lane cannot sit there looking alive. Add
+your queues as you have work for them.
+
+Note where the retention job's handler lives — `src/modules/auth/`, beside the
+table it sweeps, not in this folder. Shared queue infrastructure contains no
+domain logic; a feature owns its handler and contributes it by registering a
+`@RegisterQueueJobHandler()` provider in its own module.
 
 ### Redis key namespace
 
@@ -179,10 +245,15 @@ is the whole change — there is no bootstrap class to write.
 }
 ```
 
-`RecurringScheduleInstaller` reconciles this list against Redis on every boot:
-it upserts everything declared (idempotent by scheduler ID, so scaled instances
-converge on one definition) **and removes any scheduler on a registered queue
-that the list does not declare**.
+`RecurringScheduleInstaller` reconciles this list against Redis **on every
+worker boot** — gated on `QUEUE_WORKER_ENABLED`, so the API runtime never writes
+here. It upserts everything declared (idempotent by scheduler ID, so N worker
+instances starting at once converge on one definition rather than N) **and
+removes any scheduler on a registered queue that the list does not declare**.
+
+The gate is not cosmetic. Because reconciliation *deletes* undeclared
+schedulers, an API instance doing it would fight the worker pool for the
+contents of Redis on any day the two ran different releases.
 
 That second half is why the registry exists. BullMQ job schedulers live in
 **Redis, not in the code** — without reconciliation, deleting the code that
@@ -191,11 +262,17 @@ release recognises, each failing permanently, on a schedule, with nothing left
 anywhere to explain where they come from. Because the registry is authoritative,
 **deleting an entry is genuinely enough**.
 
-Reconciliation makes the *running* release authoritative. Deploys stop the old
-container before starting the new one, so there is no overlap. Were two releases
-ever to run concurrently they would briefly disagree about a schedule added or
-removed between them, converging once the deploy finishes — and the transient
-jobs fail safely as unknown job names rather than doing anything.
+Reconciliation makes the *running* release authoritative. A rolling worker
+replacement can briefly run two releases at once, which will disagree about a
+schedule added or removed between them; they converge as soon as the old
+revision drains, and the transient jobs fail safely as unknown job names rather
+than doing anything.
+
+**A recurring job's handler must be idempotent.** A scheduler tick is
+at-least-once, the tick and the work it triggers are not transactional with each
+other, and a retry re-runs the same job. If the handler does something
+irreversible — sends a message, charges money, calls a third party — it needs
+its own already-done check; a schedule is not one.
 
 ---
 
@@ -214,8 +291,9 @@ export class BookingsQueueProcessor extends QueueProcessor {
 ```
 
 Use `@ProcessesQueue`, never a bare `@Processor`. It carries `autorun: false`,
-which is what lets `QUEUE_WORKER_ENABLED=false` produce a pure API instance —
-and forgetting that option fails silently in both directions.
+so a constructed Worker does not start consuming before
+`QueueWorkerRegistrar` has set its concurrency and attached its error and
+stalled listeners.
 
 3. Add it to `QueueModule`'s providers. Forgetting this **fails the boot**:
    `QueueJobHandlerRegistry` asserts every registered queue has a processor,
@@ -366,8 +444,13 @@ the load balancer.
 The heartbeat is written by `maintenance.queue-heartbeat.v1`, the one job this
 infrastructure ships. It proves the whole loop (scheduler → Redis → worker →
 side effect) continuously rather than only when a test runs, and it is the
-liveness signal a worker container will probe once the worker is split out — a
-process with no HTTP server has no other way to answer a healthcheck.
+liveness signal for the worker runtime — a process with no HTTP server has no
+other way to answer a healthcheck.
+
+It is also how a failed scheduler installation becomes visible. The heartbeat is
+itself one of the recurring schedules, so if `RecurringScheduleInstaller` never
+lands its writes, the heartbeat stops and this endpoint goes stale within three
+intervals (~15 minutes).
 
 ---
 
@@ -375,29 +458,32 @@ process with no HTTP server has no other way to answer a healthcheck.
 
 | Runtime | How |
 |---|---|
-| Combined (local dev, and prod/staging by default) | `yarn start:dev` — `QUEUE_WORKER_ENABLED=true` |
-| API-only | `QUEUE_WORKER_ENABLED=false` — produces, never consumes |
-| Worker-only | `yarn start:worker` (`node dist/worker`) — needs `QUEUE_WORKER_ENABLED=true` |
+| Combined (local dev) | `yarn start:dev` — `QUEUE_WORKER_ENABLED=true` |
+| API-only (deployed API service) | `node dist/main.js` with `QUEUE_WORKER_ENABLED=false` |
+| Worker-only (deployed worker pool) | `node dist/worker.js` with `QUEUE_WORKER_ENABLED=true` |
 
-`src/worker.ts` bootstraps the same `AppModule` with no HTTP server. It **deletes
-the registered `@Cron` jobs**, because `createApplicationContext` instantiates
-`ScheduleModule` too and the sweeps belong to the API process — left alive they
-would double-fire every one.
+`src/worker.ts` bootstraps the same `AppModule` with no HTTP server. There is
+nothing to disarm in it: recurring work is job schedulers in Redis, and the
+installer is gated on the same `QUEUE_WORKER_ENABLED` flag, so the schedules
+belong to this runtime by construction rather than by a teardown step somebody
+had to remember.
 
-### Splitting the worker into its own container
+### Deploying the two runtimes
 
-Not needed at low volume. When it is, it is a deployment change only — no code
-change, because BullMQ's `Worker` API is identical either way:
+Same image, two commands, one variable:
 
-1. Add a `worker` service to `docs/prod/docker-compose.yml` and
-   `docs/staging/docker-compose.yml`, same build context and image as `api`,
-   with `command: node dist/worker.js`.
-2. Healthcheck it against the queue heartbeat rather than an HTTP endpoint.
-3. Set `QUEUE_WORKER_ENABLED=false` on the `api` service.
-4. Mirror the api service's build/stop/recreate steps in the deploy workflows.
-5. Give it a `stop_grace_period` above
-   `WORKER_SHUTDOWN_TIMEOUT_MILLISECONDS` (25s), so shutdown reports what it
-   abandoned rather than being SIGKILLed mid-sentence.
+| | API | Worker |
+|---|---|---|
+| Command | `node dist/main.js` | `node dist/worker.js` |
+| `QUEUE_WORKER_ENABLED` | `false` | `true` |
+| Health probe | `GET /api/health/readiness` | `GET /api/health/workers` on the API, or the heartbeat key directly |
+| Scaling signal | request concurrency | queue depth |
+
+Two deployments of the same image on whatever runs containers — two services,
+two Deployments, two Compose services. Give the worker a termination grace
+period above `WORKER_SHUTDOWN_TIMEOUT_MILLISECONDS` (25s) so shutdown reports
+what it abandoned rather than being SIGKILLed mid-sentence. The full contract is
+in `docs/deployment/README.md`.
 
 ### Graceful shutdown
 

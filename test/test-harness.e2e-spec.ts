@@ -1,6 +1,5 @@
 import { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { SchedulerRegistry } from '@nestjs/schedule';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { createTestApp } from './setup/test-app';
@@ -37,20 +36,15 @@ describe('E2E harness invariants', () => {
     expect(server.address()).toEqual(addressBefore);
   });
 
-  // Cron jobs fire on wall-clock boundaries. Alive during a spec run they mutate
-  // the same database the assertions read — writing rows, stamping columns,
-  // contending with truncateAll's lock — so a suite that happens to straddle a
-  // boundary fails somewhere unrelated. Job logic stays covered: every job's
-  // seam is a plain method its spec calls directly.
-  it('registers no cron jobs, so nothing is driven by the wall clock', () => {
-    expect(app.get(SchedulerRegistry).getCronJobs().size).toBe(0);
-  });
-
   // `.env.test` sets QUEUE_WORKER_ENABLED=false, so no spec except the queue's
-  // own gets a live consumer acting on the database its assertions read. Same
-  // reasoning as the cron teardown above, and the same failure mode if it
-  // regresses — background writes landing mid-assertion, in a different spec
-  // each run.
+  // own gets a live consumer acting on the database its assertions read. The
+  // failure mode if it regresses is the expensive kind — background writes
+  // landing mid-assertion, in a different spec each run.
+  //
+  // This is also the flag that separates the two production runtimes, so the
+  // default test app IS an API-only instance: it enqueues, and it neither
+  // consumes jobs nor installs recurring job schedulers. Both halves of that
+  // claim are asserted against real Redis in `queue.e2e-spec.ts`.
   it('runs no queue worker, so nothing consumes jobs mid-assertion', () => {
     expect(
       app.get(ConfigService).getOrThrow<boolean>('queue.workerEnabled'),

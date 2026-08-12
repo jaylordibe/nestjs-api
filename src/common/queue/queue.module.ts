@@ -2,12 +2,13 @@ import { Global, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
 import { DiscoveryModule } from '@nestjs/core';
-import { parseRedisConnectionOptions } from '../util/redis-url.util';
+import { buildRedisConnectionOptions } from '../redis/redis-connection';
 import { QueueHeartbeatHandler } from './heartbeat/queue-heartbeat.handler';
 import { MaintenanceQueueProcessor } from './processors/maintenance-queue.processor';
 import { QueueAccessor } from './queue-accessor.service';
 import { QueueWorkerLivenessService } from './heartbeat/queue-worker-liveness.service';
 import { RecurringScheduleInstaller } from './recurring-schedule.installer';
+import { QueueWorkerRegistrar } from './queue-worker.registrar';
 import { QueueJobHandlerRegistry } from './queue-job-handler.registry';
 import { QueueLifecycleLogger } from './queue-lifecycle.logger';
 import { QueueProcessorContext } from './queue-processor-context.service';
@@ -41,19 +42,35 @@ import {
     BullModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
+      // Nothing consumes until `QueueWorkerRegistrar` calls
+      // `BullRegistrar.register()`. Without this, @nestjs/bullmq's explorer
+      // constructs a Worker per @Processor during its own onModuleInit — in
+      // EVERY runtime, including the HTTP API, which must never consume.
+      //
+      // This is the framework's own switch for the producer/consumer split, and
+      // it is stronger than starting a Worker and stopping it again: the API
+      // now holds no Worker object and opens no Redis connection for one.
+      // Queue providers come from `registerQueue` rather than the explorer, so
+      // producing is untouched.
+      extraOptions: { manualRegistration: true },
       useFactory: (configService: ConfigService) => ({
+        // Transport comes from the single builder every Redis client in the app
+        // uses (`common/redis/redis-connection.ts`) — same host, credentials,
+        // logical database and TLS material, so a managed Redis with AUTH and
+        // in-transit encryption cannot be configured for one client and missed
+        // for another.
+        //
         // Built from REDIS_URL rather than the discrete REDIS_HOST/REDIS_PORT
         // vars because only the URL carries the logical database index, which
-        // is what isolates each parallel e2e worker's queue state. See
-        // parseRedisConnectionOptions.
+        // is what isolates each parallel e2e worker's queue state.
         connection: {
-          ...parseRedisConnectionOptions(
-            configService.getOrThrow<string>('redis.url'),
-          ),
+          ...buildRedisConnectionOptions(configService),
           // BullMQ's blocking commands (BRPOPLPUSH and friends) sit on a
           // connection for as long as they wait, so a per-request retry ceiling
           // would tear that connection down mid-wait. ioredis requires null
-          // here and BullMQ refuses to start without it.
+          // here and BullMQ refuses to start without it — which is exactly why
+          // the shared builder returns transport only and each consumer adds
+          // its own behavioural options.
           maxRetriesPerRequest: null,
         },
         // Every Redis key BullMQ writes is namespaced by the service. Set ONCE
@@ -92,15 +109,19 @@ import {
     QueueInspectionService,
     QueueJobHandlerRegistry,
     QueueProcessorContext,
-    // Processors are registered unconditionally and started conditionally —
-    // each is declared `autorun: false` and only calls run() when
-    // QUEUE_WORKER_ENABLED is true. Gating the PROVIDER instead would mean
-    // reading env outside configuration.ts, since a module's provider list is
-    // fixed before ConfigService exists.
+    // Processor CLASSES are always provided, in both runtimes, and that is
+    // deliberate: `QueueJobHandlerRegistry` verifies at boot that every
+    // registered queue has a processor, and moving the classes behind a
+    // conditional module would silently retire that check on the API — the
+    // runtime where a queue nobody consumes is hardest to notice.
+    //
+    // Providing the class is not the same as running a Worker. Whether a Worker
+    // is ever constructed is decided by `QueueWorkerRegistrar`.
     MaintenanceQueueProcessor,
     QueueHeartbeatHandler,
     QueueWorkerLivenessService,
     RecurringScheduleInstaller,
+    QueueWorkerRegistrar,
   ],
   // BullModule is re-exported so consumers (e.g. e2e specs and the health
   // module) can inject a queue by token without re-registering it.

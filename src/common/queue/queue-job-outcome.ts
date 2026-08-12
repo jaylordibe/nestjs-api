@@ -17,8 +17,16 @@ export interface JobOutcome {
   readonly reason?: string;
 }
 
-export function completedJob(): JobOutcome {
-  return { status: JobOutcomeStatus.COMPLETED };
+// The reason is optional here and mandatory on a skip. A completed job needs no
+// explanation, but one that DID something worth counting ("purged 412 rows")
+// can say so, and the lifecycle log carries it. Omitted rather than set to
+// `undefined` so the stored return value stays exactly `{ status: 'completed' }`
+// when there is nothing to add.
+export function completedJob(reason?: string): JobOutcome {
+  return {
+    status: JobOutcomeStatus.COMPLETED,
+    ...(reason ? { reason } : {}),
+  };
 }
 
 export function skippedJob(reason: string): JobOutcome {

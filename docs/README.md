@@ -1,19 +1,57 @@
 # Deployment
 
-Per-environment infra files live in subdirectories — each one is fully
-self-contained (compose, Caddyfile, env template, backup script, README)
-so the two environments can drift to fit their host platform without
-leaking config into the other.
+The application is **cloud-provider neutral**. It depends on generic
+capabilities — an HTTP runtime, PostgreSQL, a Redis-compatible backend, object
+storage, runtime-injected secrets, a worker runtime, stdout logging and HTTP
+health checks — and on nothing that ties it to one vendor.
+
+Three commands deploy it anywhere:
+
+| Runtime | Command | `QUEUE_WORKER_ENABLED` |
+|---|---|---|
+| API | `node dist/main.js` | `false` |
+| Worker | `node dist/worker.js` | `true` |
+| Migration | the Prisma deploy script | n/a |
+
+| Document | What it is |
+|---|---|
+| **[`deployment/`](./deployment/README.md)** | **The contract.** Runtime commands, container, database, Redis, storage, secrets, health and environment — provider-neutral, with AWS / Google Cloud / Azure / Kubernetes / Compose shown only as example mappings. **Start here.** |
+| [`prod/`](./prod/README.md), [`staging/`](./staging/README.md) | A complete **single-VM** Docker Compose deployment behind Cloudflare + Caddy. |
+| [`operations.md`](./operations.md) | Which operational controls are actually enforced versus only scaffolded. |
+
+## Read this before using `prod/` or `staging/`
+
+Those two directories describe **one VM running everything**: the API, a
+worker in the same process, Postgres, Redis and Caddy as containers on one
+host. That is a legitimate way to run this template and the files are not
+abandoned — but they encode assumptions the generic contract does not
+share, and a few of them are actively wrong if you copy them onto a
+managed container platform:
+
+- **One process runs both API and worker.** Those compose files set no
+  `QUEUE_WORKER_ENABLED`, so it defaults to `true` and one container does
+  everything. Correct on one box with no autoscaler; wrong the moment the
+  API scales horizontally, because every API instance would then consume
+  jobs and race to reconcile the same recurring schedules.
+- **Redis is plaintext on a private docker network.** No TLS, because
+  nothing off the host can reach it. A managed Redis needs
+  `REDIS_TLS_ENABLED=true` and a `rediss://` URL.
+- **The Swagger gate is Caddy Basic Auth.** A managed container platform has
+  no Caddy in front of it, so use `SWAGGER_ENABLED` instead.
+- **Object storage credentials.** Those READMEs still discuss supplying static
+  access keys. The application no longer accepts any long-lived cloud
+  credential for any provider — every storage adapter authenticates through
+  its platform's keyless identity chain. Both env templates have been updated;
+  prefer [`deployment/`](./deployment/README.md) for the current contract.
+
+The per-environment files remain self-contained (compose, Caddyfile, env
+template, backup script, README) so the two VM environments can drift to
+fit their host without leaking config into each other.
 
 | Environment | Folder | Branch | Notes |
 |-------------|--------|--------|-------|
 | Production  | [`prod/`](./prod/README.md)       | `main`    | Swagger hidden at the Nest layer |
 | Staging     | [`staging/`](./staging/README.md) | `staging` | Swagger reachable, gated behind Caddy Basic Auth |
-
-Both environments target a **generic Linux VM behind Cloudflare + Caddy**.
-The template does not bake in a cloud-credential strategy for the api's
-external SDKs (object storage etc.) — pick instance/workload identity or
-static keys per the **decision point** in each environment's README.
 
 CI auto-syncs each environment's `docker-compose.yml` and `Caddyfile`
 into `/srv/<service>/` on every API deploy (`<service>` = your

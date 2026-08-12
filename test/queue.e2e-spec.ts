@@ -97,20 +97,61 @@ describe('Queue infrastructure (e2e)', () => {
   // Declared FIRST so its app is created and closed before the worker-enabled
   // app exists — two apps consuming the same queue would race for the jobs this
   // block asserts stay untouched.
+  //
+  // This block IS the production API runtime contract: QUEUE_WORKER_ENABLED=false
+  // must produce a process that enqueues and does nothing else. Both halves are
+  // asserted, because each fails silently on its own — a consuming API looks
+  // fine until it duplicates a worker's work, and an API that installs job
+  // schedulers looks fine until a second release starts deleting the first's.
   describe('with the worker disabled (an API-only instance)', () => {
     let app: INestApplication<App>;
 
     beforeAll(async () => {
       process.env.QUEUE_WORKER_ENABLED = 'false';
       app = await createTestApp();
+      // Flushed BEFORE the assertion window opens, and deliberately NOT after
+      // the app is exercised: `truncateAll` issues a `flushdb`, so flushing
+      // after boot would erase whatever an ungated installer had just written
+      // and let the "installs no schedulers" assertion below pass for the wrong
+      // reason. Anything present at assertion time was necessarily written
+      // after this point.
       await truncateAll(app);
     });
     afterAll(async () => {
       await app.close();
     });
 
-    it('constructs the worker but never starts it', () => {
-      expect(app.get(MaintenanceQueueProcessor).worker.isRunning()).toBe(false);
+    // A STRONGER claim than "the worker is not running": with
+    // `manualRegistration: true` and no `BullRegistrar.register()` call, no
+    // Worker object exists at all, so this process opens no Redis connection
+    // for one and has nothing to close. @nestjs/bullmq's WorkerHost throws on
+    // access before registration, which is exactly the evidence wanted here.
+    it('constructs no worker at all', () => {
+      expect(() => app.get(MaintenanceQueueProcessor).worker).toThrow(
+        /has not yet been initialized/,
+      );
+    });
+
+    // Reconciliation REMOVES schedulers the running release does not declare,
+    // so an API instance doing it would fight the worker pool for the contents
+    // of Redis whenever the two ran different releases. `truncateAll` above
+    // flushed the logical database, so anything present here was installed by
+    // this app's own bootstrap.
+    it('installs no recurring job schedulers — the worker runtime owns them', async () => {
+      const producer = app.get(QueueProducerService);
+
+      // The GATED entry point, invoked deliberately — not `reconcileNow()`,
+      // which is the ungated test seam and would install the schedules this
+      // asserts are absent. Calling it a second time here means the assertion
+      // is about the gate rather than about whether the fire-and-forget
+      // bootstrap hook happened to have run yet.
+      app.get(RecurringScheduleInstaller).onApplicationBootstrap();
+      // Generous enough that an ungated installer would certainly have written.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      expect(
+        await producer.listRecurringScheduleIds(QueueName.MAINTENANCE),
+      ).toEqual([]);
     });
 
     it('still enqueues — the job simply waits for a consumer', async () => {
@@ -120,10 +161,9 @@ describe('Queue infrastructure (e2e)', () => {
       const queue = app.get<Queue>(getQueueToken(QueueName.MAINTENANCE));
       // Long enough that a running worker would certainly have taken it.
       await new Promise((resolve) => setTimeout(resolve, 750));
-      // Asserted on THIS job's state rather than a queue-wide count: the
-      // heartbeat scheduler registers itself without blocking boot, so its
-      // first job can land at any point around this test and a count would be
-      // racy. "The job I enqueued was not consumed" is the actual claim.
+      // Asserted on THIS job's state rather than a queue-wide count, because
+      // the claim is "the job I enqueued was not consumed" — which stays exact
+      // regardless of what else happens to be on the queue.
       expect(await (await queue.getJob(jobId))?.getState()).toBe('waiting');
 
       // And the side effect definitively did not happen.

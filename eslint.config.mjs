@@ -4,6 +4,53 @@ import eslintPluginPrettierRecommended from 'eslint-plugin-prettier/recommended'
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
+// ── no-restricted-imports fragments ──────────────────────────────────────────
+// ESLint flat config merges rules BY NAME, last match wins: a later block that
+// configures `no-restricted-imports` silently DISCARDS every earlier one. That
+// is not hypothetical here — a cloud-SDK restriction written as its own
+// `src/**` block was verified to be completely inert inside `src/common/`,
+// which is exactly where the storage code lives.
+//
+// So the fragments live here once and each block composes the set it needs.
+// Adding a restriction means adding it to a fragment, not to a block.
+
+// The cloud-neutrality boundary. A provider SDK is reachable from exactly one
+// file per provider, which is what lets this template deploy to a different
+// cloud without a business-logic change. It also protects the LAZINESS in
+// file-storage.module.ts, which `require`s adapters inside factories so only
+// the selected provider's SDK is ever loaded — a static import anywhere else
+// pulls all three back into every cold start and no test would notice.
+const CLOUD_SDK_IMPORT_RESTRICTION = {
+  group: ['@aws-sdk/*', '@google-cloud/*', '@azure/*'],
+  message:
+    'A cloud provider SDK may only be imported by its own adapter in src/common/storage/adapters/. Depend on FileStorageService (or the FileStorageAdapter interface) instead — that boundary is what keeps this template deployable to another cloud without an application change.',
+};
+
+// A @Cron fires once per PROCESS, so a horizontally-scaled API runs every sweep
+// N times and a restart during the scheduled minute skips it silently. BullMQ
+// job schedulers live in Redis and replace it.
+const IN_PROCESS_SCHEDULER_IMPORT_RESTRICTION = {
+  name: '@nestjs/schedule',
+  message:
+    'There is no in-process scheduler. A @Cron fires once per PROCESS, so a horizontally-scaled API runs every sweep N times and a restart during the scheduled minute skips it silently. Declare a BullMQ job scheduler in src/common/queue/recurring-schedule-registry.ts instead — see src/common/queue/README.md.',
+};
+
+const CASL_PRISMA_IMPORT_RESTRICTION = {
+  name: '@casl/prisma',
+  message:
+    'Do not build Prisma filters from an ability by hand — an empty `OR: []` nested inside `AND` is silently dropped by Prisma and leaks every row. Use AbilityScopedQueryService. See src/common/authorization/README.md.',
+};
+
+const COMMON_LAYER_IMPORT_RESTRICTION = {
+  group: ['**/modules/*', '**/modules/**'],
+  message:
+    'src/common/ must not import from src/modules/ — common is the leaf layer that modules build on. Move code that needs a service into src/modules/.',
+};
+
+function restrictedImports({ paths = [], patterns = [] }) {
+  return ['error', { paths, patterns }];
+}
+
 export default tseslint.config(
   {
     ignores: ['eslint.config.mjs'],
@@ -191,29 +238,48 @@ export default tseslint.config(
   // `modules/authorization/guards/`. Pure metadata — decorators, DTOs, enums,
   // errors, the permission catalog — stays in `common/` precisely because it
   // depends on nothing.
+  // Everything under src/, including src/modules/.
+  {
+    files: ['src/**/*.ts'],
+    rules: {
+      'no-restricted-imports': restrictedImports({
+        paths: [IN_PROCESS_SCHEDULER_IMPORT_RESTRICTION],
+        patterns: [CLOUD_SDK_IMPORT_RESTRICTION],
+      }),
+    },
+  },
+  // The leaf layer adds the CASL and layering restrictions, and RESTATES the
+  // two above — dropping them here would un-restrict them for all of
+  // src/common/, which is where the storage adapters live.
   {
     files: ['src/common/**/*.ts'],
     ignores: ['src/common/authorization/app-ability.ts'],
     rules: {
-      'no-restricted-imports': [
-        'error',
-        {
-          paths: [
-            {
-              name: '@casl/prisma',
-              message:
-                'Do not build Prisma filters from an ability by hand — an empty `OR: []` nested inside `AND` is silently dropped by Prisma and leaks every row. Use AbilityScopedQueryService. See src/common/authorization/README.md.',
-            },
-          ],
-          patterns: [
-            {
-              group: ['**/modules/*', '**/modules/**'],
-              message:
-                'src/common/ must not import from src/modules/ — common is the leaf layer that modules build on. Move code that needs a service into src/modules/.',
-            },
-          ],
-        },
-      ],
+      'no-restricted-imports': restrictedImports({
+        paths: [
+          CASL_PRISMA_IMPORT_RESTRICTION,
+          IN_PROCESS_SCHEDULER_IMPORT_RESTRICTION,
+        ],
+        patterns: [
+          COMMON_LAYER_IMPORT_RESTRICTION,
+          CLOUD_SDK_IMPORT_RESTRICTION,
+        ],
+      }),
+    },
+  },
+  // The ONE exemption: each provider adapter is the single file allowed to
+  // import its own SDK. Everything else the leaf layer forbids still applies —
+  // restated, because this block replaces the one above for these files.
+  {
+    files: ['src/common/storage/adapters/*-file-storage.adapter.ts'],
+    rules: {
+      'no-restricted-imports': restrictedImports({
+        paths: [
+          CASL_PRISMA_IMPORT_RESTRICTION,
+          IN_PROCESS_SCHEDULER_IMPORT_RESTRICTION,
+        ],
+        patterns: [COMMON_LAYER_IMPORT_RESTRICTION],
+      }),
     },
   },
 

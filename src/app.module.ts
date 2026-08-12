@@ -5,24 +5,27 @@ import {
 } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
-import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import type { Request } from 'express';
 import Redis from 'ioredis';
-import type { IncomingMessage, ServerResponse } from 'http';
 import { ClsModule } from 'nestjs-cls';
 import { LoggerModule } from 'nestjs-pino';
 import { UAParser } from 'ua-parser-js';
 import { AuditModule } from './common/audit/audit.module';
 import { Errors } from './common/errors/errors';
 import { flattenValidationErrors } from './common/errors/flatten-validation-errors';
+import { buildPinoHttpOptions } from './common/logging/pino-http-options';
+import { redactUrlSecrets } from './common/util/redact-url-secrets.util';
+// Still used by the CLS middleware's idGenerator below; the logger's own copy
+// moved into buildPinoHttpOptions, and both call this same memoised resolver so
+// the two cannot disagree about a request's id.
 import { resolveRequestId } from './common/util/request-id.util';
 import { EmailModule } from './common/email/email.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { QueueModule } from './common/queue/queue.module';
+import { buildRedisConnectionOptions } from './common/redis/redis-connection';
 import { RedisModule } from './common/redis/redis.module';
-import { ScheduledJobsModule } from './common/scheduled-jobs/scheduled-jobs.module';
 import { TelemetryShutdownService } from './common/telemetry/telemetry-shutdown.service';
 import { SmsModule } from './common/sms/sms.module';
 import { FileStorageModule } from './common/storage/file-storage.module';
@@ -171,7 +174,15 @@ import { UsersModule } from './modules/users/users.module';
               }
 
               cls.set('method', request.method);
-              cls.set('path', request.originalUrl || request.url);
+              // Redacted like every other URL sink. This one is the
+              // DURABLE sink: AuditService merges it into
+              // `audit_logs.metadata.request.path`, so an unredacted value
+              // persists a query-string credential in the database — the table
+              // an incident responder reads, and every backup of it.
+              cls.set(
+                'path',
+                redactUrlSecrets(request.originalUrl || request.url),
+              );
             },
           },
         };
@@ -185,40 +196,19 @@ import { UsersModule } from './modules/users/users.module';
     // APP_GUARD = ThrottlerGuard.)
     LoggerModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => {
-        const isProd = configService.get<string>('nodeEnv') === 'production';
-        const isTest = configService.get<string>('nodeEnv') === 'test';
-        return {
-          pinoHttp: {
-            level: isTest ? 'silent' : isProd ? 'info' : 'debug',
-            transport:
-              !isProd && !isTest
-                ? { target: 'pino-pretty', options: { singleLine: true } }
-                : undefined,
-            genReqId: (request: IncomingMessage, response: ServerResponse) => {
-              // Shared with the CLS middleware below. Memoised per request, so
-              // whichever of the two runs first decides the value and the other
-              // agrees — the header echoed here, the `requestId` in the error
-              // envelope, and `audit_logs.metadata.request.requestId` are then
-              // the same string by construction rather than by coincidence.
-              const id = resolveRequestId(request);
-              response.setHeader('X-Request-Id', id);
-              return id;
-            },
-            redact: {
-              paths: [
-                'request.headers.authorization',
-                'request.headers.cookie',
-                'request.body.password',
-                'request.body.newPassword',
-                'request.body.currentPassword',
-                'request.body.otp',
-              ],
-              censor: '[redacted]',
-            },
-          },
-        };
-      },
+      useFactory: (configService: ConfigService) => ({
+        // Options live in `common/logging/pino-http-options.ts` so they can be
+        // driven through a real pino-http instance by a spec. They used to be
+        // inline here, and the redact paths were addressed to `request.*` /
+        // `response.*` while pino-http logs under `req` / `res` — so every path
+        // matched nothing and Authorization and Cookie headers were written to
+        // stdout in clear, while the config, a comment and the docs all claimed
+        // otherwise. Inline options nobody can execute is how that survived.
+        pinoHttp: buildPinoHttpOptions({
+          isProduction: configService.get<string>('nodeEnv') === 'production',
+          isTest: configService.get<string>('nodeEnv') === 'test',
+        }),
+      }),
     }),
     // Redis-backed throttler storage — each pod sees the same counter, so
     // a user hitting N pods in parallel still respects the per-IP limit.
@@ -240,22 +230,31 @@ import { UsersModule } from './modules/users/users.module';
           storage: isTest
             ? undefined
             : new ThrottlerStorageRedisService(
-                new Redis(configService.getOrThrow<string>('redis.url')),
+                // Same builder as RedisService and BullMQ — see
+                // src/common/redis/redis-connection.ts. This client used to be
+                // constructed from the bare URL, which would have silently
+                // skipped TLS on a managed Redis the other two reached over an
+                // encrypted connection.
+                new Redis({
+                  ...buildRedisConnectionOptions(configService),
+                  // Lazy, matching RedisService. The worker runtime builds the
+                  // same AppModule and therefore this same client, but never
+                  // serves an HTTP request and so never reads a rate-limit
+                  // counter — without this, every worker instance holds a
+                  // connection open to a store it will not use.
+                  lazyConnect: true,
+                }),
               ),
         };
       },
     }),
-    // Cron host. Schedulers register themselves via @Cron decorators in
-    // services. forRoot() is enough — there's no per-environment gating
-    // because each scheduled job is responsible for being a no-op in
-    // test (e.g. checking NODE_ENV) or just being idempotent.
-    //
-    // @Cron is one of TWO scheduling mechanisms and they are not competitors:
-    // a cron sweep is right for "run this query on a fixed cadence", the queue
-    // is right for per-entity work needing retries, cancellation or a precise
-    // future instant. The decision table in src/common/queue/README.md picks
-    // between them.
-    ScheduleModule.forRoot(),
+    // There is no in-process scheduler. BullMQ is the SINGLE mechanism for all
+    // background work — immediate, delayed, recurring, retried — and its
+    // recurring half (job schedulers, declared in
+    // `common/queue/recurring-schedule-registry.ts`) lives in Redis rather than
+    // in a process. That is what lets the HTTP API scale horizontally without N
+    // instances each firing the same sweep, and what makes a recurring job
+    // survive the restart of the instance that installed it.
     PrismaModule,
     RedisModule,
     QueueModule,
@@ -263,7 +262,6 @@ import { UsersModule } from './modules/users/users.module';
     SmsModule,
     AuditModule,
     FileStorageModule,
-    ScheduledJobsModule,
     AuthorizationModule,
     AuthModule,
     UsersModule,

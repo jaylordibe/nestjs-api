@@ -1,4 +1,4 @@
-import { Logger, type OnApplicationBootstrap } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
@@ -23,15 +23,18 @@ import { QUEUE_REGISTRATIONS, type QueueName } from './queue-registry';
 
 // Declares a class as the processor for one queue.
 //
-// Use this instead of `@Processor` directly. `autorun: false` is load-bearing —
-// it constructs the Worker without starting consumption, which is what lets
-// QUEUE_WORKER_ENABLED=false produce a pure API instance — and a convention
-// that must be remembered is a convention that will eventually be forgotten.
-// Forgetting it fails SILENTLY in both directions: with the worker disabled the
-// Worker consumes until onApplicationBootstrap closes it, and with it enabled
-// `run()` rejects with "already running" into the catch below, logging that the
-// worker STOPPED consuming a queue it is in fact consuming. Wrapping the option
-// in a factory makes that unwritable rather than documented.
+// `autorun: false` is load-bearing and pairs with `manualRegistration: true` in
+// `queue.module.ts`. The two do different jobs:
+//
+//   - `manualRegistration` decides WHETHER a Worker is constructed at all. The
+//     API runtime never calls `BullRegistrar.register()`, so it holds no Worker
+//     and no Redis connection for one.
+//   - `autorun: false` decides whether a constructed Worker starts consuming
+//     immediately. It must not: `startConsuming()` sets concurrency and attaches
+//     the error/stalled listeners first, and a Worker that autoran would have
+//     already taken a job by then.
+//
+// Wrapping the option in a factory makes it unwritable rather than documented.
 export const ProcessesQueue = (queueName: QueueName): ClassDecorator =>
   Processor(queueName, { autorun: false });
 
@@ -48,10 +51,7 @@ export const ProcessesQueue = (queueName: QueueName): ClassDecorator =>
 //       super(QueueName.MAINTENANCE, context);
 //     }
 //   }
-export abstract class QueueProcessor
-  extends WorkerHost
-  implements OnApplicationBootstrap
-{
+export abstract class QueueProcessor extends WorkerHost {
   private readonly logger: Logger;
 
   // Public so the boot-time wiring check can confirm every registered queue
@@ -69,33 +69,15 @@ export abstract class QueueProcessor
     this.logger = new Logger(`QueueProcessor:${queueName}`);
   }
 
-  onApplicationBootstrap(): void {
-    // onApplicationBootstrap, not onModuleInit: @nestjs/bullmq's explorer
-    // assigns `this.worker` during its own onModuleInit, and module init order
-    // between two modules is not something to bet on.
-    const isWorkerEnabled = this.context.configService.getOrThrow<boolean>(
-      'queue.workerEnabled',
-    );
-
-    if (!isWorkerEnabled) {
-      // Close rather than merely leave it un-run, so an API-only instance holds
-      // no idle Redis connection for a queue it will never consume. `close()`
-      // is idempotent, so the framework closing it again at shutdown is fine.
-      //
-      // Handled, not floated: close() rejects if Redis is still coming up
-      // during a deploy, and an unhandled rejection would kill the HTTP API at
-      // boot over a queue this process does not even consume.
-      this.worker.close().catch((error: unknown) => {
-        this.logger.warn(
-          `Could not close the unused worker for queue "${this.queueName}": ${formatErrorMessage(error)}`,
-        );
-      });
-      this.logger.log(
-        `Worker disabled by configuration — this process produces to "${this.queueName}" but does not consume it`,
-      );
-      return;
-    }
-
+  // Called by `QueueWorkerRegistrar` AFTER `BullRegistrar.register()` has
+  // constructed the Worker, and only in a runtime that consumes.
+  //
+  // Ordering is explicit rather than lifecycle-dependent on purpose: `this.worker`
+  // does not exist until registration runs, so a lifecycle hook racing the
+  // registrar would throw "Worker has not yet been initialized". An explicit call
+  // makes the sequence readable and impossible to get wrong by reordering
+  // providers.
+  startConsuming(): void {
     this.worker.concurrency =
       QUEUE_REGISTRATIONS[this.queueName].concurrency ??
       this.context.configService.getOrThrow<number>('queue.workerConcurrency');

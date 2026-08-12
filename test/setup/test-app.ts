@@ -1,9 +1,7 @@
 import { INestApplication } from '@nestjs/common';
-import { SchedulerRegistry } from '@nestjs/schedule';
 import { Test, TestingModuleBuilder } from '@nestjs/testing';
 import helmet from 'helmet';
 import { AppModule } from '../../src/app.module';
-import { removeAllScheduledTasks } from '../../src/common/util/scheduled-task-teardown.util';
 
 // Optional hook for swapping providers in a single spec (e.g. stubbing a
 // third-party client so tests make no outbound HTTP calls, or wrapping a queue
@@ -40,18 +38,17 @@ export async function createTestApp(
   // parallel jest workers cannot collide.
   await app.listen(0);
 
-  // Cron jobs are registered by `ScheduleModule.forRoot()` in AppModule and
-  // fire on WALL-CLOCK boundaries. Left alive, a long spec file that straddles
-  // a boundary runs background jobs against the very database the tests are
-  // asserting on — writing rows, stamping columns, and contending with
-  // `truncateAll`'s lock. Tests must be driven by their own arrange step, never
-  // by the clock. Job LOGIC stays fully testable: each job's seam (`runOnce()`,
-  // …) is a plain method a spec calls directly.
+  // Nothing is disarmed here, and nothing needs to be. There is no in-process
+  // scheduler: all background work — including recurring work — runs on BullMQ,
+  // and `.env.test` sets QUEUE_WORKER_ENABLED=false, so a test app neither
+  // consumes jobs nor installs job schedulers. Tests are driven by their own
+  // arrange step, never by the clock.
   //
-  // Shared with `src/worker.ts`, which needs the identical guarantee for the
-  // identical reason — and which would otherwise drift the day an @Interval is
-  // added.
-  removeAllScheduledTasks(app.get(SchedulerRegistry));
-
+  // `queue.e2e-spec.ts` is the deliberate exception: it flips the flag for
+  // itself before compiling the module, and is the only spec with a live
+  // consumer acting on the database its assertions read.
+  //
+  // Job LOGIC stays fully testable regardless: each handler's seam
+  // (`runOnce()`, …) is a plain method a spec calls directly.
   return app;
 }

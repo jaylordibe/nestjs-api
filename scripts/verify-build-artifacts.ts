@@ -79,9 +79,11 @@ const ASSET_DIRECTORY_CONTRACTS: readonly AssetDirectoryContract[] = [
 export const CONTAINER_ENTRYPOINT_RELATIVE_PATH = 'main.js';
 
 /**
- * Nothing deploys the worker today — there is no worker service in either
- * compose file — but `start:worker` in package.json runs it and it broke
- * identically in the outage.
+ * The worker runtime's entrypoint. It is a first-class deployment target, not a
+ * convenience script: the same image runs `dist/main.js` as the HTTP API and
+ * `dist/worker.js` as the queue-consuming worker pool, so a build that produced
+ * only one of the two would deploy an API with nothing behind it — and every
+ * signal except the queue heartbeat would stay green.
  */
 export const WORKER_ENTRYPOINT_RELATIVE_PATH = 'worker.js';
 

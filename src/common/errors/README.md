@@ -24,7 +24,7 @@ This API emits a single, predictable envelope on every error response — regard
 | `errorCode` | **Stable machine-readable identifier.** The contract. See catalog below. |
 | `message` | Human-readable, may be re-worded or localized. For UI display. |
 | `details` | Structured supplementary data; `null` when not applicable. Shape depends on `errorCode` — see catalog. |
-| `path` | Request URL. |
+| `path` | Request URL, **with secret-bearing query parameters replaced by `[redacted]`**. Clients feed error envelopes into their own error trackers, so an unredacted value would ship a credential to a third-party system every time an email-verification or password-reset link fails. The parameter names are in `common/util/redact-url-secrets.util.ts`; the path itself is untouched, so the field still answers what it exists to answer — which endpoint failed. |
 | `timestamp` | ISO-8601 server time. |
 | `requestId` | Echoes `X-Request-Id` (or generated UUID). Quote this in support tickets to correlate with logs. |
 

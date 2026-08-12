@@ -34,8 +34,10 @@ Every e2e spec runs against a **real Postgres and Redis** — no mocks, no in-me
 - **Swagger docs** at `/api/docs`, auto-generated from DTOs (no `@ApiProperty` boilerplate needed — the compiler plugin introspects class-validator).
 - **Global exception filters** — Prisma-aware (P2002 → 409, P2003 → 400, P2025 → 404) with a catch-all fallback that never leaks internal error messages in 5xx responses.
 - **Config validated at boot** via Joi. Production enforces non-wildcard `CORS_ORIGIN`, explicit `TRUST_PROXY`, and rejects the default `JWT_SECRET`.
-- **Background jobs** via BullMQ — immediate, delayed and recurring, with retries + backoff, cancellation, rescheduling, bounded retention, and one logfmt line per lifecycle transition. Three registries (queue / job / recurring schedule) are the single source of truth, and the boot fails on a job with no handler, a queue with no processor, or a recurring schedule Redis still holds that the code no longer declares. Runs in-process by default; `QUEUE_WORKER_ENABLED=false` + `yarn start:worker` splits API and worker with no code change. See [`src/common/queue/README.md`](src/common/queue/README.md).
-- **Scheduled jobs** via `@nestjs/schedule` for fixed-cadence sweeps. The decision table at the top of the queue README says which of the two mechanisms a given job belongs on.
+- **Background jobs** via BullMQ — **the single mechanism** for immediate, delayed and recurring work, with retries + backoff, cancellation, rescheduling, bounded retention, and one logfmt line per lifecycle transition. Three registries (queue / job / recurring schedule) are the single source of truth, and the boot fails on a job with no handler, a queue with no processor, or a recurring schedule Redis still holds that the code no longer declares. See [`src/common/queue/README.md`](src/common/queue/README.md).
+- **Recurring jobs** are BullMQ **job schedulers living in Redis**, not in-process crons. There is no `@nestjs/schedule`: a decorator-driven cron fires once per process, so a horizontally-scaled API runs every sweep N times and a restart during the scheduled minute skips it silently. A job scheduler produces exactly one job per tick however many workers exist, and survives the replacement of every process that ever touched it.
+- **Two deployed runtimes, one image, one variable.** `QUEUE_WORKER_ENABLED=false` + `node dist/main.js` serves HTTP and enqueues; `QUEUE_WORKER_ENABLED=true` + `node dist/worker.js` consumes queues and owns the job schedulers. The API never processes a job. Locally, one process does both.
+- **Cloud-provider neutral.** The app depends on generic capabilities — an HTTP runtime, PostgreSQL, a Redis-compatible backend, object storage, runtime-injected env secrets, a worker runtime, stdout logging, HTTP health checks — and nothing vendor-specific. Object storage has four adapters (`stub`/`s3`/`gcs`/`azure`) behind one interface, each SDK confined to its own file and loaded only when selected; **no adapter accepts a long-lived cloud credential**. There is no secret-manager SDK anywhere. Same image and same three commands on AWS, Google Cloud, Azure, Kubernetes, Compose or a VM — see [`docs/deployment/README.md`](docs/deployment/README.md).
 - **Health checks** — `/api/health/liveness` (k8s liveness, no DB) + `/api/health/readiness` (DB ping + queue connectivity) + `/api/health/workers` (queue-worker heartbeat, deliberately *off* readiness so a restarting worker can't pull the API out of rotation). All three are unauthenticated, so a failing check logs the real cause and returns a fixed string — Prisma's `P1001`/`P1000` quote your internal host and database user, and an ioredis failure quotes host and port (CWE-209). Enforced by co-located specs on both indicators.
 - **Docker** — pinned Postgres 18 + Redis 8 for dev; 3-stage production Dockerfile (non-root, tini, npm stripped).
 - **CI** — lint + build + unit + sharded e2e + dependency audit + Trivy image scan on every PR. The audit gate fails on any high/critical advisory *except* ones with a documented, dated exception in `.github/scripts/audit-gate.mjs` — so one genuinely-unfixable finding can't force the choice between a permanently red build and deleting the gate. It also nags when an exception goes stale or past review.
@@ -187,7 +189,6 @@ src/
     audit/                   # AuditService (@Global)
     redis/                   # RedisService (@Global, shared ioredis client)
     queue/                   # @Global BullMQ layer: registries, producer, processor base, handlers
-    scheduled-jobs/          # @Cron host for fixed-cadence sweeps
     util/                    # pure helpers (+ co-located *.util.spec.ts)
   modules/
     auth/                    # AuthService, AuthController, JwtStrategy, JwtAuthGuard
@@ -238,8 +239,13 @@ Before the first real deploy, confirm:
 - [ ] `EMAIL_PROVIDER=resend` + `RESEND_API_KEY` + `EMAIL_FROM` (on a verified domain with DKIM/SPF/DMARC in DNS).
 - [ ] Error tracker wired (Sentry / Datadog / Axiom — not included; plug into pino or bootstrap).
 - [ ] Managed Postgres PITR enabled.
-- [ ] Secrets served from a secret manager (AWS Secrets Manager / Vault / k8s secrets) rather than plaintext env.
-- [ ] Retention cron scheduled for hard-deleting soft-deleted users after N days (cascades to `device_tokens` via FK).
+- [ ] Secrets served from a secret manager (GCP Secret Manager / Vault / k8s secrets) rather than plaintext env.
+- [ ] `QUEUE_WORKER_ENABLED=false` on the API deployment and `true` on the worker deployment — the API must never process jobs, and only the worker installs recurring schedules.
+- [ ] `DATABASE_POOL_MAX` × max instances (API **and** worker) + the migration job kept under the database's connection limit. The arithmetic is worked through in `.env.example`.
+- [ ] `REDIS_TLS_ENABLED=true` with a `rediss://` URL against any managed Redis. Boot fails if the flag and the scheme disagree, so a half-configured TLS setup cannot ship silently.
+- [ ] Storage bucket kept **private** (the default) and reads served through short-lived signed URLs, with authorization performed before signing. Set `STORAGE_PUBLIC_URL_BASE` only if the bucket really is public or CDN-fronted.
+- [ ] Migrations run as a separate job before the new revision takes traffic — never on API or worker startup.
+- [ ] Retention job scheduled for hard-deleting soft-deleted users after N days (cascades to `device_tokens` via FK).
 - [ ] Redis runs with AOF persistence, a durable volume and backups — **queued jobs are exactly as durable as the Redis they live in**, and there is no in-memory fallback by design.
 - [ ] `GET /api/health/workers` monitored (it is off readiness on purpose, so nothing else will tell you the worker died).
 
@@ -250,8 +256,8 @@ Before the first real deploy, confirm:
 - **Language** — TypeScript (strict, `isolatedModules`, `emitDecoratorMetadata`)
 - **DB** — PostgreSQL 18 + Prisma 7 via `@prisma/adapter-pg`
 - **Cache / sessions** — Redis 8 (ioredis)
-- **Background jobs** — BullMQ via `@nestjs/bullmq` (same Redis, AOF-persisted)
-- **Cron** — `@nestjs/schedule`
+- **Background jobs** — BullMQ via `@nestjs/bullmq` (same Redis, AOF-persisted). Recurring work uses BullMQ job schedulers; there is no separate cron library.
+- **Object storage** — pluggable adapters: S3/S3-compatible, Google Cloud Storage, Azure Blob, or a no-op stub. Keyless auth only (instance/task role, ADC, managed identity)
 - **Auth** — `@nestjs/jwt` + `passport-jwt`, bcrypt (cost 12)
 - **Validation** — class-validator + class-transformer
 - **Logging** — pino via `nestjs-pino`

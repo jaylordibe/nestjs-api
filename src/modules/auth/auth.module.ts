@@ -5,7 +5,7 @@ import { PassportModule } from '@nestjs/passport';
 import { UsersModule } from '../users/users.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
-import { RefreshTokenRetentionService } from './refresh-token-retention.service';
+import { RefreshTokenRetentionHandler } from './refresh-token-retention.handler';
 import { RefreshTokenService } from './refresh-token.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 
@@ -38,7 +38,10 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     AuthService,
     JwtStrategy,
     RefreshTokenService,
-    RefreshTokenRetentionService,
+    // A BullMQ job handler, not a scheduled service. `QueueJobHandlerRegistry`
+    // discovers it through this registration and fails the boot if the job it
+    // claims has no entry in JOB_REGISTRATIONS (or vice versa).
+    RefreshTokenRetentionHandler,
   ],
   // Re-export JwtModule so UsersService can inject JwtService (used to
   // sign email-verification links). Keeps the JWT sign config in one

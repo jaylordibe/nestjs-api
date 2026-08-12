@@ -1,5 +1,18 @@
 # Production Deployment
 
+> **SINGLE-VM DEPLOYMENT SHAPE.** This describes one **Linux VM** running
+> everything in Docker Compose. It works and is maintained, but it predates the
+> provider-neutral runtime contract in
+> [`docs/deployment/README.md`](../deployment/README.md), which is where to
+> start for any container platform.
+>
+> Two things below differ from that contract: **one container runs both the API
+> and the queue worker here** (`QUEUE_WORKER_ENABLED` defaults to `true`,
+> correct only where nothing autoscales), and the **object-storage prose still
+> discusses static cloud access keys** — the application now accepts no
+> long-lived credential for any storage provider, and the `.env.example` in this
+> folder reflects that even where the surrounding text does not.
+
 Runs on a generic Linux VM behind Cloudflare + Caddy. Two app
 services — `api` + `web` — plus `postgres` + `redis`, all on
 one docker-compose stack. Staging mirrors this exactly: see
@@ -14,34 +27,32 @@ propagate to the live `.env` / `backup.sh` automatically (see
 Throughout this doc, replace `<service>` with your `SERVICE_NAME`
 (default `nestjs`) and `example.com` with your real domain.
 
-## Cloud-credential decision point (read before step 3)
+## Object-storage credential decision point (read before step 3)
 
-This template does **not** bake in a cloud-credential strategy. The
-`api` service reaches external clouds (S3-compatible object storage,
-and any future SDK that reads Application Default Credentials) and you
-must pick how it authenticates. Two standard options:
+The `api` service can persist uploads to **S3 (or any S3-compatible service),
+Google Cloud Storage, or Azure Blob Storage** — one adapter each, selected by
+`STORAGE_PROVIDER`. It can also run with `stub`, which persists nothing.
 
-- **Option A — instance / workload identity (recommended where
-  available).** If the VM has an attached identity (AWS instance IAM
-  role, GCE workload service account, etc.), the SDK's default
-  credential chain pulls short-lived tokens from the instance metadata
-  server. No static key file on disk, less to rotate. For S3, leave
-  `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` blank in `.env` and
-  grant the role write access to the bucket.
+**This template supplies no variable for a long-lived cloud credential, for any
+provider.** No access key, no service-account JSON, no account key, no
+connection string. Each adapter authenticates through its platform's keyless
+identity chain, so the decision here is which identity the VM presents:
 
-- **Option B — static service-account key / access key (works on any
-  host).** On a generic VPS with no attached identity, supply static
-  credentials. For S3, set `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`
-  in `.env`. For an SDK that reads a JSON key file, SCP the file to
-  `/srv/<service>/`, bind-mount it read-only into the `api` container
-  (add a `volumes:` entry under `services.api` in this folder's
-  `docker-compose.yml`), and point the SDK's env var (e.g.
-  `GOOGLE_APPLICATION_CREDENTIALS`) at the in-container path. Add the
-  filename to the repo `.gitignore` so it can never be committed.
+- **The VM already has a cloud identity** (an attached instance role or service
+  account). Nothing to configure — the SDK's default chain picks it up from the
+  instance metadata service.
+- **The VM has no cloud identity** — the usual case for a generic VPS. Use
+  workload identity federation: the host exchanges an OIDC token it already has
+  for short-lived cloud credentials. Write the federation config into
+  `/srv/<service>/`, bind-mount it read-only into the `api` container, and point
+  the provider's standard discovery variable at it. That file describes *how to
+  obtain* credentials and holds no secret material.
+- **Neither is available.** Run an S3-compatible object store you control
+  (MinIO) alongside the stack, with `STORAGE_PROVIDER=s3` and
+  `STORAGE_S3_ENDPOINT`, rather than downloading a static key.
 
-The rest of this runbook assumes **Option A** (no key file). If you
-pick Option B, also do the bind-mount + key-file steps inline where
-noted.
+Grant whichever identity you end up with write access to that one bucket, scoped
+to it alone.
 
 ## One-time setup
 
@@ -90,17 +101,18 @@ git clone <api-repo-url>   <service>-api
 git clone <web-repo-url>   <service>-web
 ```
 
-### 3. Object storage (S3-compatible)
+### 3. Object storage
 
-Create a prod-only bucket so staging tests can't touch prod data, grant
-the api's identity write access (per the decision point above), and make
-object reads public if you serve `<img src="...">` straight from the
-bucket. The exact commands depend on your provider (AWS S3, Cloudflare
-R2, DigitalOcean Spaces, MinIO). Then set `STORAGE_S3_BUCKET` /
-`STORAGE_S3_REGION` (+ `STORAGE_S3_ENDPOINT` for non-AWS) in `.env`.
+Create a prod-only bucket so staging tests can't touch prod data, and grant the
+api's identity write access to it (per the decision point above). Then set
+`STORAGE_PROVIDER` to `s3`, `gcs` or `azure` and that provider's two or three
+variables — see the object-storage block in this folder's `.env.example`.
 
-If you picked **Option B**, also add the static `AWS_*` keys to `.env`
-(or bind-mount a JSON key file — see the decision point).
+**Decide the bucket's read policy deliberately.** The default is PRIVATE: with
+`STORAGE_PUBLIC_URL_BASE` unset the API returns no public URL and reads go
+through short-lived signed URLs. Set that variable only if the bucket really is
+world-readable or fronted by a CDN — it is an explicit assertion, not a
+convenience.
 
 ### 4. Cloudflare
 
@@ -171,7 +183,7 @@ openssl rand -hex 48     # → JWT_SECRET
 openssl rand -base64 32  # → DB_PASSWORD
 openssl rand -base64 32  # → REDIS_PASSWORD
 
-nano .env                # paste secrets, fill hostnames, STORAGE_S3_*,
+nano .env                # paste secrets, fill hostnames, STORAGE_GCS_*,
                          # RESEND_API_KEY, EMAIL_FROM, TWILIO_*, SEED_*
 chmod 600 .env
 ```
@@ -449,7 +461,7 @@ change only, no code change — `src/worker.ts` already bootstraps the same
 | Jobs fail immediately without retrying | Permanent failure by design — unknown job name, or a payload version this release doesn't accept (usually a half-finished rolling deploy) | `docker compose logs api \| grep 'event=failed'` — the `reason=` field names it |
 | A recurring job fires that no code declares | Orphaned BullMQ scheduler left in Redis | Boot reconciliation removes it; look for `Removing orphaned recurring schedule` in the api logs |
 | Per-IP rate limiting acts globally / all clients same IP | `TRUST_PROXY` wrong | Should be `2` (Cloudflare + Caddy) |
-| S3 uploads fail with 403 | Identity missing bucket write perms, or wrong static keys | Verify the IAM role / `AWS_*` keys and bucket policy |
+| GCS uploads fail with 403 | Runtime identity lacks `roles/storage.objectAdmin` on the bucket, or ADC resolved a different project | Check the binding on the bucket and that `STORAGE_GCS_PROJECT_ID` names the project that owns it |
 | Disk filling up | Docker logs / dangling images | `docker image prune -f`, `docker system df` |
 
 ## Updating infra files

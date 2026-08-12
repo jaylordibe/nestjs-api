@@ -16,12 +16,38 @@ export interface AppConfig {
   database: {
     url: string;
     name: string;
+    // Connections THIS process may hold open to Postgres. Explicit because the
+    // API autoscales horizontally: the cluster's real demand is
+    // `max instances × poolMax`, plus every worker instance's pool, plus
+    // whatever a migration job takes — and that total has to stay under the
+    // database's own connection limit. An implicit default is a number nobody
+    // chose being multiplied by an autoscaler.
+    poolMax: number;
+    // How long a caller waits for a free connection before failing. Bounded so
+    // a saturated pool surfaces as a fast error rather than a request that
+    // hangs until the client gives up.
+    connectionTimeoutMs: number;
+    // How long an idle connection is kept before being returned to the
+    // database. Short enough that a scaled-down instance stops occupying
+    // connections other instances need.
+    idleTimeoutMs: number;
   };
   redis: {
     host: string;
     port: number;
     password: string;
     url: string;
+    tls: {
+      // Whether to dial over TLS. Must agree with REDIS_URL's scheme — see
+      // `common/redis/redis-connection.ts`, which refuses a disagreement rather
+      // than picking a winner.
+      enabled: boolean;
+      // PEM-encoded CA bundle. Required for a managed Redis whose server
+      // certificate is signed by a private or per-instance CA; omit when the
+      // certificate chains to a publicly-trusted root. Certificate
+      // verification is NOT configurable and is always on.
+      certificateAuthority: string | undefined;
+    };
   };
   queue: {
     // Whether THIS process consumes queued jobs. False makes it a pure
@@ -81,22 +107,68 @@ export interface AppConfig {
     twilioFrom: string | undefined;
   };
   storage: {
-    provider: 'stub' | 's3';
+    // Which object-storage adapter is active. `stub` persists nothing and is
+    // the default, so a fresh clone and the whole test suite need no cloud
+    // account. The rest are equal citizens — no provider is privileged, and
+    // only the selected one's SDK is ever loaded.
+    provider: 'stub' | 's3' | 'gcs' | 'azure';
+    // Public URL prefix for stored objects, applied by EVERY adapter.
+    //
+    // Undefined is the default and the safe case: `resolvePublicUrl` then
+    // returns null and callers must use a signed URL. Setting this is an
+    // explicit assertion that the bucket/container is world-readable or
+    // CDN-fronted. Nothing in this application makes storage public.
+    publicUrlBase: string | undefined;
+    // Default lifetime for a signed read URL. Clamped by
+    // `resolveSignedUrlTtlSeconds` regardless of what is configured here — a
+    // signed URL cannot be revoked, so its lifetime is its whole security
+    // boundary.
+    signedUrlTtlSeconds: number;
+    // Ceiling on any single call to the storage backend. Explicit because
+    // CLAUDE.md requires one on every remote operation, and because the failure
+    // it guards is a SLOW backend rather than a dead one: an upload handler
+    // awaiting a hung request holds its Postgres connection for as long as it
+    // waits, so a stalled bucket saturates the database pool and takes down
+    // requests that never touched storage.
+    requestTimeoutMs: number;
+    // Provider-specific blocks. Each is read ONLY by its own adapter, and only
+    // when that adapter is selected. Notice what is absent from all three:
+    // credentials. Every adapter authenticates through its platform's keyless
+    // identity chain, so there is no place here for a long-lived key to live.
     s3: {
       bucket: string | undefined;
+      // Optional — the SDK resolves it from AWS_REGION, shared config or
+      // instance metadata when unset.
       region: string | undefined;
-      // Optional public URL prefix. Defaults to
-      // https://<bucket>.s3.<region>.amazonaws.com when unset. Override
-      // when fronting the bucket with CloudFront / Cloudflare / R2 under
-      // a custom hostname so the URLs returned go through the CDN.
-      publicUrlBase: string | undefined;
-      // S3-compatible endpoint (Cloudflare R2, MinIO, DigitalOcean
-      // Spaces). Leave unset for real AWS S3.
+      // Set for an S3-compatible backend (Cloudflare R2, DigitalOcean Spaces,
+      // MinIO, Ceph). Leave unset for AWS S3 itself.
       endpoint: string | undefined;
-      // Path-style addressing (`https://endpoint/bucket/key`). Required
-      // by some S3-compatible servers (older MinIO setups).
+      // Path-style addressing (`https://endpoint/bucket/key`). Required by some
+      // self-hosted S3-compatible servers.
       forcePathStyle: boolean;
     };
+    gcs: {
+      bucket: string | undefined;
+      // Optional. Supplied explicitly it pins the project; omitted, ADC decides
+      // — which is what a local `gcloud auth` session expects.
+      projectId: string | undefined;
+    };
+    azure: {
+      accountName: string | undefined;
+      container: string | undefined;
+    };
+  };
+  swagger: {
+    // Whether `/api/docs` is served. Production is hard-OFF and cannot be
+    // turned on by configuration — the schema dump describes every DTO and
+    // every route to anonymous traffic, and there is no deployment of this
+    // template where that belongs on the customer-facing host.
+    //
+    // SWAGGER_ENABLED only lets a NON-production environment turn it off. It
+    // exists because staging used to be protected by Basic Auth at the reverse
+    // proxy, and a staging service on a platform with no proxy in front of it
+    // has no such protection — so the switch has to live in the application.
+    enabled: boolean;
   };
   cors: {
     origin: string;
@@ -131,12 +203,31 @@ export default (): AppConfig => ({
   database: {
     url: process.env.DATABASE_URL!,
     name: process.env.DB_NAME!,
+    poolMax: parseInt(process.env.DATABASE_POOL_MAX ?? '10', 10),
+    connectionTimeoutMs: parseInt(
+      process.env.DATABASE_CONNECTION_TIMEOUT_MS ?? '5000',
+      10,
+    ),
+    idleTimeoutMs: parseInt(
+      process.env.DATABASE_IDLE_TIMEOUT_MS ?? '30000',
+      10,
+    ),
   },
   redis: {
     host: process.env.REDIS_HOST!,
     port: parseInt(process.env.REDIS_PORT!, 10),
     password: process.env.REDIS_PASSWORD!,
     url: process.env.REDIS_URL!,
+    tls: {
+      // Trimmed and lowercased rather than compared to a bare 'true', for the
+      // same reason as `queue.workerEnabled` below: Joi's coerced boolean does
+      // not necessarily reach `process.env`, so the RAW string is what arrives
+      // here and ` True ` must not read as false.
+      enabled:
+        (process.env.REDIS_TLS_ENABLED ?? 'false').trim().toLowerCase() ===
+        'true',
+      certificateAuthority: process.env.REDIS_TLS_CA || undefined,
+    },
   },
   queue: {
     // Trimmed and lowercased before comparing, NOT compared to a bare
@@ -191,14 +282,42 @@ export default (): AppConfig => ({
     twilioFrom: process.env.TWILIO_FROM || undefined,
   },
   storage: {
-    provider: (process.env.STORAGE_PROVIDER as 'stub' | 's3') ?? 'stub',
+    provider:
+      (process.env.STORAGE_PROVIDER as AppConfig['storage']['provider']) ??
+      'stub',
+    publicUrlBase: process.env.STORAGE_PUBLIC_URL_BASE || undefined,
+    signedUrlTtlSeconds: parseInt(
+      process.env.STORAGE_SIGNED_URL_TTL_SECONDS ?? '300',
+      10,
+    ),
+    requestTimeoutMs: parseInt(
+      process.env.STORAGE_REQUEST_TIMEOUT_MS ?? '15000',
+      10,
+    ),
     s3: {
       bucket: process.env.STORAGE_S3_BUCKET || undefined,
       region: process.env.STORAGE_S3_REGION || undefined,
-      publicUrlBase: process.env.STORAGE_S3_PUBLIC_URL_BASE || undefined,
       endpoint: process.env.STORAGE_S3_ENDPOINT || undefined,
-      forcePathStyle: process.env.STORAGE_S3_FORCE_PATH_STYLE === 'true',
+      forcePathStyle:
+        (process.env.STORAGE_S3_FORCE_PATH_STYLE ?? 'false')
+          .trim()
+          .toLowerCase() === 'true',
     },
+    gcs: {
+      bucket: process.env.STORAGE_GCS_BUCKET || undefined,
+      projectId: process.env.STORAGE_GCS_PROJECT_ID || undefined,
+    },
+    azure: {
+      accountName: process.env.STORAGE_AZURE_ACCOUNT_NAME || undefined,
+      container: process.env.STORAGE_AZURE_CONTAINER || undefined,
+    },
+  },
+  swagger: {
+    // Two independent conditions, and the production one is not a default that
+    // can be overridden — it is a floor. An operator can only ever narrow this.
+    enabled:
+      (process.env.NODE_ENV ?? 'development') !== 'production' &&
+      (process.env.SWAGGER_ENABLED ?? 'true').trim().toLowerCase() !== 'false',
   },
   cors: {
     origin: process.env.CORS_ORIGIN ?? '*',

@@ -1,5 +1,18 @@
 # Staging Deployment
 
+> **SINGLE-VM DEPLOYMENT SHAPE.** This describes one **Linux VM** running
+> everything in Docker Compose. It works and is maintained, but it predates the
+> provider-neutral runtime contract in
+> [`docs/deployment/README.md`](../deployment/README.md), which is where to
+> start for any container platform.
+>
+> Two things below differ from that contract: **one container runs both the API
+> and the queue worker here** (`QUEUE_WORKER_ENABLED` defaults to `true`,
+> correct only where nothing autoscales), and the **object-storage prose still
+> discusses static cloud access keys** — the application now accepts no
+> long-lived credential for any storage provider, and the `.env.example` in this
+> folder reflects that even where the surrounding text does not.
+
 Runs on a generic Linux VM behind Cloudflare + Caddy — the same shape as
 production. Two app services (`api` + `web`) plus
 `postgres` + `redis` on one docker-compose stack. Production mirrors this:
@@ -20,13 +33,10 @@ Throughout this doc, replace `<service>` with your `SERVICE_NAME`
 ## Cloud-credential decision point
 
 Same as production — the template doesn't bake in a cloud-credential
-strategy for the api's external SDKs (S3 storage etc.). Pick **Option A**
-(instance / workload identity, recommended where available) or
-**Option B** (static keys / mounted key file). See
-[`docs/prod/README.md`](../prod/README.md#cloud-credential-decision-point-read-before-step-3)
-for the full write-up. For staging, **Option B** with a dedicated
-staging-only bucket + staging-only credentials is the common choice so
-test data and access are isolated from prod.
+credential strategy for object storage. The application accepts **no**
+long-lived cloud credential for any provider — see the object-storage decision
+point in [`docs/prod/README.md`](../prod/README.md), which applies unchanged to
+staging. Use a staging-only bucket so test uploads never reach prod data.
 
 ## One-time setup
 
@@ -75,13 +85,14 @@ git clone <api-repo-url>   <service>-api
 git clone <web-repo-url>   <service>-web
 ```
 
-### 3. Object storage (S3-compatible)
+### 3. Object storage
 
 Create a staging-only bucket so test uploads can't touch prod data,
-grant the api's identity (Option A) or static keys (Option B) write
+grant the identity chosen in the prod README's decision point write
 access, and make object reads public if you serve images straight from
-the bucket. Then set `STORAGE_S3_BUCKET` / `STORAGE_S3_REGION`
-(+ `STORAGE_S3_ENDPOINT` for non-AWS, + `AWS_*` for static keys) in
+the bucket. Then set `STORAGE_PROVIDER` to `s3`, `gcs` or `azure` and that
+provider's variables (there is no key variable for any of them — see the prod
+README's decision point) in
 `.env`. Consider a lifecycle rule that auto-deletes staging uploads
 after ~30 days so they don't accumulate.
 
@@ -149,7 +160,7 @@ openssl rand -hex 48     # → JWT_SECRET
 openssl rand -base64 32  # → DB_PASSWORD
 openssl rand -base64 32  # → REDIS_PASSWORD
 
-nano .env                # paste secrets, fill hostnames, STORAGE_S3_*,
+nano .env                # paste secrets, fill hostnames, STORAGE_GCS_*,
                          # SWAGGER_BASIC_AUTH_*, SEED_*
 chmod 600 .env
 ```
@@ -353,4 +364,4 @@ docker compose logs api | grep 'event=failed'
 | `web` service fails to build on first deploy | Sibling SPA repo not cloned yet (step 2) | Clone the repo into `/srv/<service>/<service>-<name>` and re-run `docker compose up -d --build <name>` |
 | Migrations exit non-zero | Schema drift / missing migration on disk | `docker compose --profile migrate run --rm migrate` (re-run, read output) |
 | Per-IP rate limiting acts globally | `TRUST_PROXY` wrong | Should be `2` (Cloudflare + Caddy) |
-| S3 uploads fail with 401/403 | Wrong/revoked keys, or identity missing bucket perms | Verify the IAM role / `AWS_*` keys and bucket policy |
+| GCS uploads fail with 401/403 | Runtime identity lacks `roles/storage.objectAdmin` on the bucket, or ADC resolved a different project | Check the binding on the bucket and that `STORAGE_GCS_PROJECT_ID` names the project that owns it |
