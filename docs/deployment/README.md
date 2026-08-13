@@ -375,6 +375,15 @@ minutes.
 | `API_BASE_URL`, `WEB_BASE_URL` | public hostnames |
 | `CORS_ORIGIN` | explicit list; `*` is refused in production |
 | `TRUST_PROXY` | `1` behind one proxy hop; `false`/`true` refused in production |
+| `EMAIL_PROVIDER`, `SMS_PROVIDER` | **required in production** — they default to `stub`, and `stub` is refused there. Their own settings are in the adapter table below |
+
+`EMAIL_PROVIDER` and `SMS_PROVIDER` are listed here rather than only under the
+adapter table because in production they are not optional: the default is
+`stub`, `stub` is refused, and there is no third value that needs no
+configuration. A production environment assembled from this table alone would
+otherwise crash-loop on the first boot with `"EMAIL_PROVIDER" is required`.
+`STORAGE_PROVIDER` is genuinely optional — it defaults to `stub` in every
+environment, including production.
 
 ### Runtime-distinguishing
 
