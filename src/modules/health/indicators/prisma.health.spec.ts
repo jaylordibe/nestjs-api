@@ -77,6 +77,41 @@ describe('PrismaHealthIndicator', () => {
     );
   });
 
+  // The failure mode this bound exists for: the socket is established, so the
+  // pool's own connection timeout never applies, and the query simply never
+  // answers. Unbounded, the readiness endpoint would hang instead of reporting
+  // 503 — terminus applies no deadline of its own to a custom indicator.
+  describe('when the database accepts the query but never answers', () => {
+    beforeEach(() => jest.useFakeTimers());
+    afterEach(() => jest.useRealTimers());
+
+    it('fails the check rather than hanging the readiness endpoint', async () => {
+      runRawQuery.mockReturnValueOnce(new Promise(() => undefined));
+
+      const pending = indicator.pingCheck('database');
+      await jest.advanceTimersByTimeAsync(2_000);
+      await pending;
+
+      expect(markDown).toHaveBeenCalledWith({
+        message: 'Database unreachable',
+      });
+      expect(markUp).not.toHaveBeenCalled();
+    });
+
+    it('keeps the timeout budget out of the public payload but in the logs', async () => {
+      runRawQuery.mockReturnValueOnce(new Promise(() => undefined));
+
+      const pending = indicator.pingCheck('database');
+      await jest.advanceTimersByTimeAsync(2_000);
+      await pending;
+
+      expect(logError).toHaveBeenCalledWith(
+        expect.stringContaining('did not answer within'),
+      );
+      expect(publicFailurePayload()).not.toContain('did not answer');
+    });
+  });
+
   it('logs the underlying errno when the driver wraps it as a cause', async () => {
     runRawQuery.mockRejectedValueOnce(
       new Error('Cannot connect to database', {

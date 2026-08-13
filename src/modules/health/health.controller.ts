@@ -68,9 +68,11 @@ export class HealthController {
   // pulling the HTTP API out of rotation. Answers "is anything consuming the
   // queues?" by checking how recently a worker last beat.
   //
-  // Also the probe a dedicated worker container will use when the worker is
-  // split into its own process — it has no HTTP server of its own, so a
-  // heartbeat key in Redis is the only liveness signal available to it.
+  // Also the probe that covers the dedicated worker runtime
+  // (`node dist/worker.js`): it has no HTTP server of its own, so a heartbeat
+  // key in Redis is the only liveness signal available to it. Served by the API
+  // but reporting on the WORKERS, which is why a stale heartbeat must not fail
+  // readiness on the instance that answered.
   @Get('workers')
   @Public()
   @HealthCheck()

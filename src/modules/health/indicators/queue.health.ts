@@ -47,8 +47,11 @@ export class QueueHealthIndicator {
   // HTTP API out of the load balancer, because the API can still serve every
   // request and queue the work for whenever a consumer returns.
   //
-  // This is also the probe a dedicated worker container will use once the
-  // worker is split out — it has no HTTP server of its own to healthcheck.
+  // This is also the probe that covers the dedicated worker runtime
+  // (`node dist/worker.js`), which has no HTTP server of its own to healthcheck.
+  // The heartbeat key in Redis is the only liveness signal it emits, so this
+  // endpoint is served by the API and reports on the WORKERS — not on the
+  // instance answering the request.
   async workerHeartbeatCheck(key: string): Promise<HealthIndicatorResult> {
     const indicator = this.healthIndicatorService.check(key);
     try {

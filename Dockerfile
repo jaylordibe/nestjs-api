@@ -86,6 +86,18 @@ COPY --from=prod-deps --chown=app:app /app/node_modules         ./node_modules
 COPY --from=build     --chown=app:app /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=build     --chown=app:app /app/dist                 ./dist
 COPY --from=build     --chown=app:app /app/package.json         ./package.json
+# Strip the .js.map files. `tsconfig.json` sets `sourceMap: true` for local
+# debugging, but NOTHING in the runtime image consumes them: `source-map-support`
+# is a devDependency and so is absent from the pruned tree, and the container
+# runs plain `node dist/main.js` with no `--enable-source-maps`. So they are
+# inert weight that also embeds the original TypeScript — comments included — in
+# a production artifact. Deleted here rather than by disabling `sourceMap`, which
+# would take local debugging with it.
+#
+# If readable stack traces are wanted in production, this is the line to remove
+# — and `--enable-source-maps` must be added to the CMD in the same change, or
+# the maps go back to being unread.
+RUN find ./dist -name '*.js.map' -delete
 USER app
 # Documentation only — EXPOSE binds nothing and no runtime reads it to choose a
 # port. 3000 because that is the PORT default in `.env.example` and the port the
