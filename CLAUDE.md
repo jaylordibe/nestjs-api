@@ -66,6 +66,22 @@ Everything runs on the host; only PostgreSQL and Redis live in containers.
 
 **There is no separate type-check script** — `yarn build` is it. Report type checking as covered by the build, never as a missing gate.
 
+## High-risk paths
+
+A change touching one of these is classified at least **High** risk,
+whatever the diff looks like. This raises ceremony and widens the review
+panel; it blocks no edit.
+
+- `*/src/modules/auth/*`
+- `*/src/modules/authorization/*`
+- `*/src/common/authorization/*`
+- `*/src/common/errors/*`
+- `*/src/modules/queue-admin/*`
+- `*/prisma/schema.prisma`
+- `*/prisma/migrations/*`
+
+This repository is the GitHub template every new API project is forked from, so a defect here propagates into every fork rather than affecting one system. One PostgreSQL database serves every tenant, and tenant isolation is enforced in the query through AbilityScopedQueryService — never by a guard and never at the connection level, because a guard runs before the row is loaded and CASL ignores conditions on a subject-type check. A read that forgets to scope leaks across businesses with no other layer to catch it. Permissions are a code catalog (src/common/authorization/permission-catalog.ts) that the database projects; the application refuses to boot on drift or on a route declaring no authorization metadata. Soft delete is a convenience, never a security boundary. The queue-admin module is an administrative control surface over BullMQ whose handlers retry and cancel jobs under `administrative: true` permissions, so a defect there is privileged action on other tenants' background work rather than a read. Uniqueness on users.email, users.username and businesses.slug lives in partial indexes Prisma cannot see, so those columns are not unique selectors and findUnique on them is a bug. Two compose stacks run side by side and the e2e globalSetup issues a real DROP DATABASE, so anything that confuses the test stack (5434/6380) with the dev stack (5433/6378) destroys the developer's own data. Editing an already-applied migration is never safe: its checksum is recorded in _prisma_migrations, so a change breaks `migrate deploy` everywhere it has run — add a new migration instead, and re-baseline the template's single init migration only before any deploy has applied it.
+
 ## Consumers
 
 _(none — this repository is the GitHub template every new API project is forked from, so it has no clients of its own. **A fork must replace this paragraph with a table of its real consumers — repo, audience, owner — before its first contract change.**)_
