@@ -78,23 +78,31 @@ jobs:
       # low/moderate transitive findings stay visible without red-lighting
       # every PR.
       #
-      # Known moderates, each blocked by a range its parent PINS (verified
-      # 2026-08-06 — anything whose fix is in-range gets the lockfile refresh
-      # instead of a note here):
-      #   - uuid       `resend > svix > uuid` — svix declares ^10.0.0, fix is
-      #                11.1.1+, and uuid 11+ is ESM-only so it breaks the CJS
-      #                `require` path svix uses. Blocked until svix bumps.
-      #   - valibot    `prisma > @prisma/dev > valibot` — pinned to an exact
-      #                1.2.0, fix is 1.4.2+. Blocked until Prisma bumps.
-      #   - @hono/node-server  `prisma > @prisma/dev` — our own `resolutions`
-      #                entry pins ^1.19.13; the fix is 2.0.5, a major bump of a
-      #                Prisma dev-tooling transitive. Revisit with the next
-      #                Prisma upgrade rather than forcing it here.
+      # NO known moderates as of 2026-08-24. The three that stood here — uuid,
+      # valibot, @hono/node-server — were cleared rather than re-dated, and two
+      # of their stated blockers had simply stopped being true:
+      #   - valibot / @hono/node-server  both sat behind `prisma > @prisma/dev`.
+      #                An in-range `prisma` bump to 7.9.1 moved valibot to the
+      #                patched 1.4.2 and dropped @hono/node-server out of the
+      #                tree entirely, retiring our `resolutions` pin for it too.
+      #   - uuid       the note claimed uuid 11+ was ESM-only and so unusable on
+      #                the CJS `require` chain its consumers use. It is not:
+      #                11.1.1 ships a `require` condition, and the ONLY API any
+      #                consumer in this tree touches is `v4`. An in-range
+      #                `resend` bump dropped `svix` (and its uuid) outright; the
+      #                surviving `@google-cloud/storage > gaxios` path pins uuid
+      #                ^9.0.1 with no in-range fix, so it takes a `resolutions`
+      #                entry at ^11.1.1.
       #
-      # None of the three ships in the pruned runtime image (`prisma` and
-      # `resend > svix` dev/CLI paths). Runtime-path moderates are NOT accepted
-      # this way — `qs` reached production via `platform-express > express` and
-      # was fixed by refreshing the lockfile, not documented as known.
+      # Runtime-path moderates are NOT accepted as "known" — `qs` reached
+      # production via `platform-express > express` and was fixed by refreshing
+      # the lockfile, not documented as known. The uuid entry had breached that
+      # rule while appearing to honour it: it was filed as a `resend > svix`
+      # dev/CLI path, but `resend` AND `@google-cloud/storage` are both runtime
+      # `dependencies`. So a note here must name the path AND check it against
+      # package.json `dependencies` — "dev/CLI only" is a claim to verify, not
+      # an assumption, and an unfixable-looking blocker is one to re-test rather
+      # than carry forward.
       - name: Dependency audit (informational)
         run: yarn audit --level moderate || true
 
@@ -125,6 +133,21 @@ jobs:
       # override (only when a parent pins a vulnerable range, and note when it
       # can be removed) → documented allowlist entry (only when NO compatible
       # patched version exists at all, e.g. an ESM-only fix on a CJS chain).
+      #
+      # Highs currently cleared by a `resolutions` override rather than a
+      # parent bump (verified 2026-08-24):
+      #   - deepmerge-ts  `prisma > @prisma/config > deepmerge-ts`
+      #                [GHSA-ggr8-5vv4-36mx / CVE-2026-40345 — stack exhaustion
+      #                merging recursive object graphs]. Patched only in
+      #                >=8.0.0, and @prisma/config still pins an EXACT 7.1.5 at
+      #                7.9.1 — the version this repo now resolves — so rung 1
+      #                does not exist here and the lockfile is not merely stale.
+      #                Our `resolutions` entry forces ^8.0.2. Safe because
+      #                @prisma/config calls plain `deepmerge` (one dynamic
+      #                import in its config loader), while v8's breaking changes
+      #                are confined to `deepmergeInto` mutation semantics and
+      #                custom-merge type renames — neither on that path.
+      #                Remove the entry once @prisma/config depends on 8.x.
       - name: Dependency audit (blocks on high+)
         run: |
           yarn audit --level high --json > yarn-audit.json || true
