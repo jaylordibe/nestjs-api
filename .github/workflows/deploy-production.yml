@@ -1,17 +1,33 @@
 name: Deploy to Production
 
 on:
-  # Auto-deploy on pushes to main.
-  push:
-    branches:
-      - main
-  # Manual re-deploy button in the Actions UI — useful for retries
-  # after transient infra failures without needing a new commit.
+  # MANUAL ONLY. There is deliberately no `push:` trigger — merging to `main`
+  # does NOT deploy. Someone has to open Actions → Deploy to Production → Run
+  # workflow and pick `main`.
+  #
+  # Three consequences worth knowing before changing this:
+  #
+  #   1. The "Run workflow" button only appears when THIS FILE exists on the
+  #      repository's default branch. On a branch it is invisible and production
+  #      cannot be deployed from the UI at all.
+  #
+  #   2. `workflow_dispatch` offers a branch/tag dropdown that accepts ANY ref,
+  #      not just `main`. The `push:` trigger used to be the only thing limiting
+  #      which branch could reach production, so the `guard` job below now does
+  #      that explicitly. Do not delete it.
+  #
+  #   3. Nothing runs on a push to `main` any more. That is not a CI gap:
+  #      test.yml and security.yml both trigger on `pull_request` into `main`,
+  #      so the commit was already tested before the merge — and dispatching
+  #      this workflow re-runs both against the ref being deployed.
+  #
+  # To go back to deploying on every merge, restore the `push:` block above and
+  # drop the `guard` job (the trigger then restricts the branch on its own).
   workflow_dispatch:
 
-# Serialize production deploys so two pushes in quick succession don't
+# Serialize production deploys so two clicks in quick succession don't
 # race. `cancel-in-progress: false` — an in-flight prod deploy must
-# finish, not be killed mid-flight. Newer pushes queue.
+# finish, not be killed mid-flight. A second run queues.
 concurrency:
   group: deploy-production
   cancel-in-progress: false
@@ -20,30 +36,64 @@ permissions:
   contents: read
 
 jobs:
+  # Restricts which ref may reach production. `workflow_dispatch` will happily
+  # run this workflow from `develop`, a feature branch or a tag, and with no
+  # `push:` trigger there is nothing else limiting that.
+  #
+  # A GitHub environment can enforce the same rule (Settings → Environments →
+  # production → Deployment branches), which is the better place for it — but
+  # that is a paid-plan feature on private repositories, so this job is what
+  # makes the restriction hold on every plan. Keep both where both are available.
+  #
+  # It runs BEFORE test and security rather than as a step inside `deploy`, so a
+  # dispatch from the wrong ref fails in seconds instead of after the full suite.
+  #
+  # Note this guards the ref the RUNNER checks out. The deploy step below hard-
+  # resets the server to `origin/main` regardless, so the two agree only while
+  # this job pins `refs/heads/main` — change one and change the other.
+  guard:
+    name: Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Refuse to deploy a ref other than main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::refusing to deploy to production from '${REF}'. Production deploys run from refs/heads/main only — re-run this workflow with 'main' selected in the branch dropdown."
+            exit 1
+          fi
+          echo "ref is refs/heads/main"
+
   test:
     name: Test
+    needs: guard
     # Production deploys require the full test suite to pass.
     uses: ./.github/workflows/test.yml
 
   # Dependency advisories and the Trivy filesystem scan. A separate workflow so
   # a slow or noisy scan never blocks the deterministic test signal — but called
   # here so it still gates the deploy. Without this job the audit runs on pull
-  # requests and on the weekly cron only, and a push straight to `main` deploys
-  # with no dependency scanning at all.
+  # requests and on the weekly cron only, and whatever is sitting on `main` at
+  # dispatch time would ship with no dependency scanning at all.
   security:
     name: Security
+    needs: guard
     uses: ./.github/workflows/security.yml
 
   deploy:
     name: Deploy
-    # Deploy is OPT-IN. The template ships the `DEPLOY_ENABLED` repo
-    # variable UNSET, so pushes to the template itself (or any fresh clone)
-    # run CI but SKIP the deploy — no failed runs from missing
-    # secrets/server. In a real project, enable deploys by EITHER deleting
-    # this `if:` line (+ this comment) OR setting repo variable
-    # DEPLOY_ENABLED=true (Settings → Secrets and variables → Actions →
-    # Variables) — once the server + PRODUCTION_* secrets are provisioned.
-    # See docs/prod/README.md.
+    # Deploy is OPT-IN, and it is the SECOND gate — the first is that somebody
+    # has to dispatch this workflow at all. The template ships the
+    # `DEPLOY_ENABLED` repo variable UNSET, so a dispatch on the template
+    # itself (or any fresh clone) runs guard + CI and SKIPS the deploy — no
+    # failed runs from missing secrets/server. In a real project, enable
+    # deploys by EITHER deleting this `if:` line (+ this comment) OR setting
+    # repo variable DEPLOY_ENABLED=true (Settings → Secrets and variables →
+    # Actions → Variables) — once the server + PRODUCTION_* secrets are
+    # provisioned. See docs/prod/README.md.
     if: ${{ vars.DEPLOY_ENABLED == 'true' }}
     needs: [test, security]
     runs-on: ubuntu-latest
@@ -52,9 +102,18 @@ jobs:
     # GitHub environment — configure in Settings → Environments →
     # production to:
     #   1. Require reviewer approval before the job runs (strongly
-    #      recommended for prod — enforces a human check).
-    #   2. Scope secrets (PRODUCTION_*) to this environment only.
-    #   3. Restrict which branches can deploy to it (main).
+    #      recommended for prod — enforces a human check). Dispatching this
+    #      workflow manually is a DELIBERATENESS gate, not a permission one:
+    #      anyone with write access can press the button. Required reviewers
+    #      is what makes it a two-person operation, and it is a paid-plan
+    #      feature on private repositories.
+    #   2. Scope secrets (PRODUCTION_*) to this environment only. That is also
+    #      what the `environment:` key below is for — a job without it reads
+    #      repository secrets ONLY, and an environment secret silently
+    #      resolves to an empty string.
+    #   3. Restrict which branches can deploy to it (main). The `guard` job
+    #      above enforces the same rule on plans where this setting is
+    #      unavailable; where both exist, keep both.
     # The `url:` is shown in the Actions UI as a clickable link to the
     # deployed environment after a successful run.
     environment:
