@@ -211,9 +211,9 @@ test/                        # e2e tests (real Postgres + Redis, no mocks)
 
 ## Working with Claude Code (optional)
 
-Contributors using [Claude Code](https://code.claude.com) get a **requirement-to-diff pipeline** from the [`engineering-framework`](https://github.com/jaylordibe/claude-engineering-framework) plugin — `/engineering-framework:work-item <key | URL | requirement>` drives work from repository mapping → plan → implement → review → validate → present, stopping at a plan-approval gate and a human Git gate. Install it with `/plugin marketplace add jaylordibe/claude-engineering-framework` then `/plugin install engineering-framework@jaylordibe`.
+Contributors using [Claude Code](https://code.claude.com) get a **requirement-to-diff pipeline** from the [`himoa`](https://github.com/jaylordibe/himoa) plugin — `/himoa:work-item <key | URL | requirement>` drives work from repository mapping → plan → implement → review → validate → present, stopping at a plan-approval gate and a human Git gate. Install it with `/plugin marketplace add jaylordibe/himoa` then `/plugin install himoa@jaylordibe`.
 
-This repository commits the other half of that contract in `.claude/`: the permission floor (`settings.json`), the repository policy file (`engineering-framework.json`), and five domain playbooks describing *this* API's auth, authorization, resource, sweep, and e2e-harness conventions. See [`CLAUDE.md`](./CLAUDE.md) → **Deep references** for how those pieces fit together. The only per-machine step is a one-time issue-tracker login (`/mcp` → authenticate **atlassian**), and none of it is required to build, run, or test the API.
+This repository commits the other half of that contract in `.claude/`: the permission floor (`settings.json`, the repository's own — himoa ships none) and five domain playbooks describing *this* API's auth, authorization, resource, sweep, and e2e-harness conventions. Repository truth — canonical commands, high-risk paths — lives in [`CLAUDE.md`](./CLAUDE.md) (himoa has no separate policy file); see its **Deep references** for how those pieces fit together. The only per-machine step is a one-time issue-tracker login (`/mcp` → authenticate **atlassian**), and none of it is required to build, run, or test the API.
 
 ## Adding a new resource
 
