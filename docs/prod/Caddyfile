@@ -79,6 +79,11 @@
 	import common_headers
 	encode zstd gzip
 
+	# CORP same-origin on the responses Caddy serves itself on this host (the
+	# Swagger basic_auth 401, edge 404s), which never reach helmet in the app.
+	# Scoped to the API host, not common_headers, so the SPA host is untouched.
+	header Cross-Origin-Resource-Policy "same-origin"
+
 	# Swagger HTML/JSON is built once at app boot and embeds the deploy
 	# SHA in the version banner. Cloudflare's default cache happily serves
 	# the previous deploy's docs page for hours after a release. Tell both
