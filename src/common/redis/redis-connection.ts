@@ -4,8 +4,8 @@ import { parseRedisUrl, redactRedisUrl } from '../util/redis-url.util';
 
 // ── THE Redis connection builder ─────────────────────────────────────────────
 // Every Redis client in this application is configured from here: the shared
-// app client (`RedisService`), the throttler's storage client (`app.module.ts`)
-// and BullMQ's connection (`queue.module.ts`). There is deliberately no second
+// app client (`RedisService`, which the throttler's storage also uses) and
+// BullMQ's connection (`queue.module.ts`). There is deliberately no second
 // place that calls `new Redis(url)` — a managed Redis with AUTH and in-transit
 // encryption fails CLOSED on a client that forgot the TLS half, and the failure
 // arrives as a connection error nobody can attribute to a missing option.

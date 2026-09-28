@@ -4,13 +4,9 @@ import Redis from 'ioredis';
 import { formatErrorMessage } from '../util/error-message.util';
 import { buildRedisConnectionOptions } from './redis-connection';
 
-// Shared Redis client for app-level use (JWT revocation blocklist, etc.).
-// The throttler maintains its own separate client via
-// @nest-lab/throttler-storage-redis — both point at the same Redis instance
-// but don't share the connection object. Acceptable: two connections per
-// pod is negligible, and letting the throttler stay self-contained avoids
-// the refactor. Both are built from `buildRedisConnectionOptions`, so they
-// cannot disagree about credentials or TLS.
+// Shared Redis client for app-level use: the JWT revocation blocklist, the
+// rate-limit counters (ThrottlerModule in app.module.ts), and so on. This class
+// owns the client's shutdown; nothing else may close it.
 @Injectable()
 export class RedisService implements OnModuleDestroy {
   private readonly logger = new Logger(RedisService.name);

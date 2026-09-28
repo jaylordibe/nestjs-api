@@ -8,7 +8,6 @@ import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import type { Request } from 'express';
-import Redis from 'ioredis';
 import { ClsModule } from 'nestjs-cls';
 import { LoggerModule } from 'nestjs-pino';
 import { UAParser } from 'ua-parser-js';
@@ -24,8 +23,8 @@ import { resolveRequestId } from './common/util/request-id.util';
 import { EmailModule } from './common/email/email.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { QueueModule } from './common/queue/queue.module';
-import { buildRedisConnectionOptions } from './common/redis/redis-connection';
 import { RedisModule } from './common/redis/redis.module';
+import { RedisService } from './common/redis/redis.service';
 import { TelemetryShutdownService } from './common/telemetry/telemetry-shutdown.service';
 import { SmsModule } from './common/sms/sms.module';
 import { FileStorageModule } from './common/storage/file-storage.module';
@@ -213,8 +212,11 @@ import { UsersModule } from './modules/users/users.module';
     // Redis-backed throttler storage — each pod sees the same counter, so
     // a user hitting N pods in parallel still respects the per-IP limit.
     ThrottlerModule.forRootAsync({
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => {
+      inject: [ConfigService, RedisService],
+      useFactory: (
+        configService: ConfigService,
+        redisService: RedisService,
+      ) => {
         const isTest = configService.get<string>('nodeEnv') === 'test';
         return {
           throttlers: [
@@ -229,22 +231,11 @@ import { UsersModule } from './modules/users/users.module';
           // via Redis.
           storage: isTest
             ? undefined
-            : new ThrottlerStorageRedisService(
-                // Same builder as RedisService and BullMQ — see
-                // src/common/redis/redis-connection.ts. This client used to be
-                // constructed from the bare URL, which would have silently
-                // skipped TLS on a managed Redis the other two reached over an
-                // encrypted connection.
-                new Redis({
-                  ...buildRedisConnectionOptions(configService),
-                  // Lazy, matching RedisService. The worker runtime builds the
-                  // same AppModule and therefore this same client, but never
-                  // serves an HTTP request and so never reads a rate-limit
-                  // counter — without this, every worker instance holds a
-                  // connection open to a store it will not use.
-                  lazyConnect: true,
-                }),
-              ),
+            : // The shared app client, not one of its own. The library closes
+              // only clients it constructed itself, so a client handed in is
+              // never closed by it — RedisService owns this one's shutdown (see
+              // its onModuleDestroy), is lazy, and uses the same builder.
+              new ThrottlerStorageRedisService(redisService.client),
         };
       },
     }),

@@ -137,7 +137,7 @@ jobs:
           echo "::add-mask::$TOKEN"
           echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
 
-      # OpenAPI-driven scan: ZAP reads /api/docs-json and exercises every
+      # OpenAPI-driven scan: ZAP reads /api/docs/json and exercises every
       # declared endpoint — far better coverage than spidering a headless API.
       #  --network host  -> the ZAP container reaches the app on localhost:3001
       #  -f openapi      -> import the definition as OpenAPI
@@ -176,7 +176,7 @@ jobs:
             -v "$PWD/zap-out:/zap/wrk:rw" \
             ghcr.io/zaproxy/zaproxy:stable \
             zap-api-scan.py \
-              -t http://localhost:3001/api/docs-json \
+              -t http://localhost:3001/api/docs/json \
               -f openapi \
               -I \
               -c rules.tsv \

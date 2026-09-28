@@ -174,7 +174,8 @@ All routes under `/api`. See Swagger at `/api/docs` for full specs.
 
 ```
 src/
-  main.ts                    # bootstrap: helmet, /api prefix, CORS, trust proxy, Swagger
+  main.ts                    # bootstrap: configureHttpApp, shutdown hooks, listen
+  configure-http-app.ts      # HTTP edge: helmet, /api prefix, CORS, trust proxy, gated Swagger
   worker.ts                  # second entrypoint: same AppModule, no HTTP server, consumes queues
   app.module.ts              # global modules + APP_PIPE/INTERCEPTOR/FILTER/GUARD registration
   config/                    # configuration.ts (typed factory), env.validation.ts (Joi)

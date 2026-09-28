@@ -39,7 +39,7 @@ import { ResendVerificationDto } from './dto/resend-verification.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
 
 // Device provenance recorded against an issued refresh token, for the audit
-// trail. `request.ip` already honours `trust proxy` (set in main.ts), so this
+// trail. `request.ip` already honours `trust proxy` (set in configure-http-app.ts), so this
 // is the client address rather than the load balancer's. Both fields are
 // best-effort: a missing header must never be a reason to fail a login.
 function readRefreshTokenContext(request: Request): RefreshTokenContext {

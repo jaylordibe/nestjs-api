@@ -64,7 +64,9 @@ Every change: `yarn build` + `yarn lint` + the affected e2e specs. Full
 
 ```
 src/
-  main.ts        HTTP entrypoint (helmet, /api prefix, CORS, gated Swagger)
+  main.ts        HTTP entrypoint: configureHttpApp + listen
+  configure-http-app.ts  the HTTP edge (helmet, /api prefix, CORS, trust
+                 proxy, gated Swagger under /api/docs); the e2e harness uses it
   worker.ts      queue-only entrypoint into the same AppModule
   app.module.ts  global pipe, serializer, one exception filter, throttler
   config/        configuration.ts (typed) + env.validation.ts (Joi)
@@ -164,9 +166,9 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
 
 | Consumer | Repository / location | Audience | Owner |
 |---|---|---|---|
-| (none — internal only: GitHub template with no clients of its own) | | | |
+| application-security-framework | `../application-security-framework` (`.github/workflows/reference-apps.yml`, `internal/openapi/openapi.go` `WellKnownPaths`) | Reference-app CI: clones this repo's default branch unpinned and reads the OpenAPI document at `/api/docs/json` | jaylordibe |
 
-A fork must replace this row with its real consumers before its first
+A fork must replace these rows with its real consumers before its first
 contract change. A contract change (DTO field, `errorCode`, enum value,
 status, nullability, pagination, event payload) is done only when every
 consumer is updated or recorded as unaffected, with the deploy order stated.

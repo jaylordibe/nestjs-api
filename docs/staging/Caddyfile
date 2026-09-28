@@ -84,12 +84,16 @@
 	# the previous deploy's docs page for hours after a release. Tell both
 	# the CDN and the browser to never cache these paths so a redeploy is
 	# visible immediately.
-	@docs path /api/docs /api/docs/* /api/docs-json /api/docs-json/*
+	# ONE subtree: the UI, its init script (which embeds the whole schema) and
+	# the raw JSON/YAML documents all live under /api/docs — see
+	# src/configure-http-app.ts. Match the subtree, never a list of files:
+	# a list silently misses whatever it does not name.
+	@docs path /api/docs /api/docs/*
 	header @docs Cache-Control "no-store"
 
 	# Staging Swagger is gated behind HTTP Basic Auth so anyone who
 	# guesses the staging hostname hits a login prompt before the schema.
-	# Production has Swagger disabled at the Nest layer (see main.ts), so
+	# Production has Swagger disabled at the Nest layer (see src/configure-http-app.ts), so
 	# this directive only lives in the staging Caddyfile. Devs paste the
 	# shared credential into the browser prompt once per session.
 	#
@@ -102,7 +106,17 @@
 		{$SWAGGER_BASIC_AUTH_USER} {$SWAGGER_BASIC_AUTH_PASSWORD_HASH}
 	}
 
-	reverse_proxy api:3000
+	# The client address. Without this, Caddy REPLACES X-Forwarded-For with its
+	# own peer — always a Cloudflare edge IP here — so per-IP rate limiting
+	# and the audit trail key on Cloudflare instead of the caller. Taking it
+	# from CF-Connecting-IP is safe on this site only: cloudflare_only and the
+	# origin_tls client-certificate check above guarantee the peer is a
+	# Cloudflare edge (any Cloudflare account — the origin-pull CA is shared),
+	# and Cloudflare sets that header itself, overwriting any value the
+	# caller sent.
+	reverse_proxy api:3000 {
+		header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}
+	}
 }
 
 # ─── Customer-facing web SPA ───────────────────────────────────────────────

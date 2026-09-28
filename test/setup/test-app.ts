@@ -1,7 +1,8 @@
 import { INestApplication } from '@nestjs/common';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Test, TestingModuleBuilder } from '@nestjs/testing';
-import helmet from 'helmet';
 import { AppModule } from '../../src/app.module';
+import { configureHttpApp } from '../../src/configure-http-app';
 
 // Optional hook for swapping providers in a single spec (e.g. stubbing a
 // third-party client so tests make no outbound HTTP calls, or wrapping a queue
@@ -16,9 +17,9 @@ export async function createTestApp(
   }
   const moduleRef = await builder.compile();
 
-  const app = moduleRef.createNestApplication();
-  app.use(helmet());
-  app.setGlobalPrefix('api');
+  const app = moduleRef.createNestApplication<NestExpressApplication>();
+  // The production HTTP edge, not a copy of it — see configure-http-app.ts.
+  configureHttpApp(app);
 
   // LOAD-BEARING: `listen(0)` here, not a bare `init()`.
   //

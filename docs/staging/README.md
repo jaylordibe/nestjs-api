@@ -363,5 +363,5 @@ docker compose logs api | grep 'event=failed'
 | Swagger Basic Auth always rejects / Compose warns "variable is not set" | bcrypt hash double-quoted or unquoted in .env | Single-quote `SWAGGER_BASIC_AUTH_PASSWORD_HASH`, then `docker compose up -d caddy` |
 | `web` service fails to build on first deploy | Sibling SPA repo not cloned yet (step 2) | Clone the repo into `/srv/<service>/<service>-<name>` and re-run `docker compose up -d --build <name>` |
 | Migrations exit non-zero | Schema drift / missing migration on disk | `docker compose --profile migrate run --rm migrate` (re-run, read output) |
-| Per-IP rate limiting acts globally | `TRUST_PROXY` wrong | Should be `2` (Cloudflare + Caddy) |
+| Per-IP rate limiting acts globally | `TRUST_PROXY` wrong, or the Caddyfile's `header_up X-Forwarded-For` line missing | `TRUST_PROXY` should be `2` (Cloudflare + Caddy); Caddy must forward `CF-Connecting-IP` as `X-Forwarded-For` |
 | GCS uploads fail with 401/403 | Runtime identity lacks `roles/storage.objectAdmin` on the bucket, or ADC resolved a different project | Check the binding on the bucket and that `STORAGE_GCS_PROJECT_ID` names the project that owns it |
