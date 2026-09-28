@@ -1,7 +1,7 @@
 # Local development and e2e only — production uses docs/prod/docker-compose.yml,
 # which publishes no data-service port at all. Ports bind to loopback so a
-# laptop on a shared network does not offer its database, Redis or MinIO (whose
-# credentials fall back to the public `minioadmin` default) to that network.
+# laptop on a shared network does not offer its database, Redis or object
+# storage (whose credentials fall back to a fixed local default) to that network.
 services:
   postgres:
     image: postgres:18.3
@@ -42,26 +42,26 @@ services:
 
   # S3-compatible object storage, so the `s3` adapter is exercised against a real
   # backend rather than only constructed. That adapter is also the self-hosted
-  # story (MinIO, Ceph) and the AWS/R2/Spaces story, so proving it proves the
-  # broadest provider path — upload, signed read, delete.
+  # story (RustFS, MinIO, Ceph) and the AWS/R2/Spaces story, so proving it
+  # proves the broadest provider path — upload, signed read, delete. RustFS,
+  # because MinIO no longer publishes community container images.
   #
   # Ships in both stacks for the same reason Postgres and Redis do: a developer
   # running `STORAGE_PROVIDER=s3` locally should not need a cloud account, and
   # the e2e suite should not skip the one test that touches real object storage.
-  minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
-    container_name: ${SERVICE_NAME}${COMPOSE_STACK_SUFFIX:-}-minio
+  s3:
+    image: rustfs/rustfs:1.0.0
+    container_name: ${SERVICE_NAME}${COMPOSE_STACK_SUFFIX:-}-s3
     restart: unless-stopped
-    command: ['server', '/data']
     environment:
-      MINIO_ROOT_USER: ${STORAGE_S3_ACCESS_KEY_ID:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${STORAGE_S3_SECRET_ACCESS_KEY:-minioadmin}
+      RUSTFS_ACCESS_KEY: ${AWS_ACCESS_KEY_ID:-s3admin}
+      RUSTFS_SECRET_KEY: ${AWS_SECRET_ACCESS_KEY:-s3admin-secret}
     ports:
-      - '127.0.0.1:${MINIO_PORT:-9000}:9000'
+      - '127.0.0.1:${S3_PORT:-9000}:9000'
     volumes:
-      - minio-data:/data
+      - s3-data:/data
     healthcheck:
-      test: ['CMD-SHELL', 'mc ready local || exit 1']
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:9000/health || exit 1']
       interval: 5s
       timeout: 5s
       retries: 10
@@ -69,4 +69,4 @@ services:
 volumes:
   postgres-data:
   redis-data:
-  minio-data:
+  s3-data:

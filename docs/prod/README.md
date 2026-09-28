@@ -48,7 +48,7 @@ identity chain, so the decision here is which identity the VM presents:
   the provider's standard discovery variable at it. That file describes *how to
   obtain* credentials and holds no secret material.
 - **Neither is available.** Run an S3-compatible object store you control
-  (MinIO) alongside the stack, with `STORAGE_PROVIDER=s3` and
+  (for example RustFS) alongside the stack, with `STORAGE_PROVIDER=s3` and
   `STORAGE_S3_ENDPOINT`, rather than downloading a static key.
 
 Grant whichever identity you end up with write access to that one bucket, scoped

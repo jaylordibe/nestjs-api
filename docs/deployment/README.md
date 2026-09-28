@@ -308,7 +308,7 @@ recovers most of that 80 MB.
 
 | Adapter | Coverage |
 |---|---|
-| `s3` | **Exercised against a real backend.** `test/storage-s3.e2e-spec.ts` runs against MinIO from the test compose stack: upload verified with `HeadObject`, a signed URL that really fetches, an unsigned read that is refused, delete, and non-collision of two identical uploads. This also covers AWS S3, R2, Spaces and Ceph, which speak the same API. |
+| `s3` | **Exercised against a real backend.** `test/storage-s3.e2e-spec.ts` runs against the test compose stack's S3 server (RustFS): upload verified with `HeadObject`, a signed URL that really fetches, an unsigned read that is refused, delete, and non-collision of two identical uploads. This also covers AWS S3, R2, Spaces and Ceph, which speak the same API. |
 | `gcs`, `azure` | **Construction only.** The selection switch and the client options are covered; `save`, `delete` and `createSignedReadUrl` have never executed against Google or Azure. Verify against a real bucket before relying on either — particularly `createSignedReadUrl`, which needs `roles/iam.serviceAccountTokenCreator` on GCS and `Storage Blob Data Contributor` on Azure. |
 | `stub` | Fully covered; persists nothing. |
 
@@ -430,7 +430,7 @@ None of these is required, and the application is identical across all of them.
 | **Google Cloud** | Cloud Run service + worker pool | Cloud SQL | Memorystore | GCS (`gcs`) |
 | **Azure** | Container Apps × 2 | Azure Database for PostgreSQL | Azure Cache | Blob (`azure`) |
 | **Kubernetes** | two Deployments | operator or managed | operator or managed | any of the three |
-| **Docker Compose / VM** | two services | `postgres` container | `redis` container | MinIO (`s3`) or `stub` |
+| **Docker Compose / VM** | two services | `postgres` container | `redis` container | RustFS or another S3-compatible server (`s3`), or `stub` |
 
 In every case: same image, same three commands, same variable names. What
 changes is which values the platform injects and which identity it attaches.

@@ -27,7 +27,7 @@ This is enforced by `id-length` + `id-denylist` in `eslint.config.mjs`, not by c
 
 Package manager: **yarn** (yarn.lock committed). Scripts: `start:dev`, `start:prod`, `start:worker`, `build`, `lint`, `lint:fix`, `test`, `test:e2e`, `stack:up`, `stack:down`, `prisma:generate`, `prisma:migrate`, `prisma:deploy`, `prisma:seed`, `prisma:studio`.
 
-**Two container stacks, one `docker-compose.yml`, one definition each for Postgres 18.3 + Redis 8.6.2 + MinIO** (MinIO is S3-compatible object storage, so the `s3` adapter is exercised for real by `test/storage-s3.e2e-spec.ts` instead of only being constructed — and a developer can run `STORAGE_PROVIDER=s3` locally with no cloud account) — which one you get is decided by the env file:
+**Two container stacks, one `docker-compose.yml`, one definition each for Postgres 18.3 + Redis 8.6.2 + RustFS** (RustFS is S3-compatible object storage, so the `s3` adapter is exercised for real by `test/storage-s3.e2e-spec.ts` instead of only being constructed — and a developer can run `STORAGE_PROVIDER=s3` locally with no cloud account) — which one you get is decided by the env file:
 
 | Stack | Command | Containers | Ports |
 |---|---|---|---|

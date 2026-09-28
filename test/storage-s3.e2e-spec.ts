@@ -18,7 +18,7 @@ import { FileStorageService } from '../src/common/storage/file-storage.service';
 // a key that does not round-trip, or a signed URL nobody can fetch all survive
 // construction perfectly.
 //
-// It runs against MinIO from the test compose stack, so it needs no cloud
+// It runs against the test compose stack's S3 server (RustFS), so it needs no cloud
 // account and no cloud credential. The `s3` adapter is deliberately the one
 // covered: it is also the AWS, Cloudflare R2, DigitalOcean Spaces, Ceph and
 // self-hosted story, so this is the broadest single path available. The GCS and
