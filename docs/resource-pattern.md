@@ -1,6 +1,6 @@
 # Resource pattern reference
 
-Copy-pasteable skeletons for the canonical resource pattern. Read the `nestjs-new-resource` skill first for the rules and rationale — this file holds the long-form code.
+Copy-pasteable skeletons for the canonical resource pattern. Read the `resource-pattern` skill first for the rules and rationale — this file holds the long-form code.
 
 ## Controller skeleton (five standard endpoints)
 
