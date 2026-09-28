@@ -11,6 +11,10 @@ Engineering methodology (gates, risk tiers, evidence language, review lenses,
 also supersedes any parent-workspace `CLAUDE.md`. No `tasks/` directory; a
 correction worth keeping becomes an edit here.
 
+**This file holds rules, not history.** Add a rule only when a change alters
+something most changes need; feature detail belongs in the code, its tests and
+`docs/`, and what changed and when belongs in the commit history.
+
 ## Project
 
 NestJS 11 (TypeScript, Express) + Prisma 7 + PostgreSQL + Redis + BullMQ.
