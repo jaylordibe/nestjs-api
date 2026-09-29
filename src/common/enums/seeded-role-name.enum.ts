@@ -27,7 +27,7 @@ export enum SeededRoleName {
   // Escalated technical support: investigates incidents and retries failed
   // work, but sees no raw job payloads and performs nothing destructive.
   PLATFORM_TECHNICAL_SUPPORT = 'platform_technical_support',
-  // Customer-facing support: account status, verification resends, unlocks,
+  // Customer-facing support: account status, verification resends,
   // session revocation. No infrastructure access.
   PLATFORM_APP_SUPPORT = 'platform_app_support',
 

@@ -252,8 +252,8 @@ TTL (`AUTHORIZATION_GRANTS_CACHE_TTL_SECONDS`, default 300) is a **backstop for
 a missed invalidation**, not the correctness mechanism. Redis being unavailable
 falls through to the database — never to "allow".
 
-Grants are **not** embedded in the JWT. This template issues 30-day tokens; a
-revoked role must take effect on the next request, not in a month.
+Grants are **not** embedded in the JWT: a revoked role takes effect on the next
+request, not when the access token expires.
 
 ---
 
@@ -427,9 +427,8 @@ secret would leave every earlier copy live in every inbox it passed through.
 
 `POST /invitations/accept` is `@AuthenticatedOnly()`, not `@Public()`. Someone
 without an account registers through the ordinary `/auth/register` first, which
-keeps **one** registration policy (disposable-email blocking, verification,
-lockout) instead of forking a second, less-guarded account-creation path behind a
-bearer token. The token survives registration.
+keeps **one** registration policy (disposable-email rejection, verification)
+instead of forking a second account-creation path behind a bearer token. The token survives registration.
 
 The caller must be the invitee, or the token alone would be sufficient and a
 forwarded invitation would let anyone join. Which check applies is decided by

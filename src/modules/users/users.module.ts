@@ -1,6 +1,11 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { BusinessesModule } from '../businesses/businesses.module';
+import {
+  EmailVerificationJobHandler,
+  PasswordChangedNoticeJobHandler,
+  PasswordResetJobHandler,
+} from './jobs/user-email.handlers';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 
@@ -10,7 +15,12 @@ import { UsersService } from './users.service';
   // "just in case" hides a real cycle the day one appears.
   imports: [forwardRef(() => AuthModule), BusinessesModule],
   controllers: [UsersController],
-  providers: [UsersService],
+  providers: [
+    UsersService,
+    EmailVerificationJobHandler,
+    PasswordResetJobHandler,
+    PasswordChangedNoticeJobHandler,
+  ],
   exports: [UsersService],
 })
 export class UsersModule {}

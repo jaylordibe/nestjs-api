@@ -10,6 +10,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -18,6 +19,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import type { Request } from 'express';
 import { ApiPaginatedResponse } from '../../common/decorators/api-paginated-response.decorator';
 import { AuthenticatedOnly } from '../../common/decorators/authenticated-only.decorator';
 import { CurrentAbility } from '../../common/decorators/current-ability.decorator';
@@ -46,6 +48,8 @@ import { UserPermissionsResponseDto } from './dto/user-permissions-response.dto'
 import { UserResponseDto } from './dto/user-response.dto';
 import { VerifyAuthUserPhoneDto } from './dto/verify-auth-user-phone.dto';
 import { UsersService } from './users.service';
+import { LoginResponseDto } from '../auth/dto/login-response.dto';
+import { readRefreshTokenContext } from '../auth/refresh-token-context';
 
 @ApiTags('Users')
 @ApiBearerAuth()
@@ -62,7 +66,7 @@ export class UsersController {
     @Body() dto: RequestPasswordResetDto,
   ): Promise<{ ok: true }> {
     await this.usersService.requestPasswordReset(dto.email);
-    // Constant response — do not reveal whether the email is registered.
+    // Same answer whether or not the address is registered.
     return { ok: true };
   }
 
@@ -169,34 +173,40 @@ export class UsersController {
     return new UserResponseDto(user);
   }
 
+  // Other sessions end; the caller gets a fresh session in the response and
+  // must replace their stored tokens.
   @Patch('me/email')
   @RequirePermission('update', 'User')
-  @ApiOkResponse({ type: UserResponseDto })
+  @ApiOkResponse({ type: LoginResponseDto })
   async updateAuthUserEmail(
     @Body() dto: UpdateAuthUserEmailDto,
     @CurrentUser() currentUser: AuthenticatedUser,
-  ): Promise<UserResponseDto> {
-    const user = await this.usersService.updateEmail(
+    @Req() request: Request,
+  ): Promise<LoginResponseDto> {
+    const { user, tokens } = await this.usersService.updateEmail(
       currentUser.id,
       dto,
-      currentUser.id,
+      readRefreshTokenContext(request),
     );
-    return new UserResponseDto(user);
+    return { ...tokens, user: new UserResponseDto(user) };
   }
 
+  // Other sessions end; the caller gets a fresh session in the response and
+  // must replace their stored tokens.
   @Patch('me/password')
   @RequirePermission('update', 'User')
-  @ApiOkResponse({ type: UserResponseDto })
+  @ApiOkResponse({ type: LoginResponseDto })
   async updateAuthUserPassword(
     @Body() dto: UpdateAuthUserPasswordDto,
     @CurrentUser() currentUser: AuthenticatedUser,
-  ): Promise<UserResponseDto> {
-    const user = await this.usersService.updateOwnPassword(
+    @Req() request: Request,
+  ): Promise<LoginResponseDto> {
+    const { user, tokens } = await this.usersService.updateOwnPassword(
       currentUser.id,
       dto,
-      currentUser.id,
+      readRefreshTokenContext(request),
     );
-    return new UserResponseDto(user);
+    return { ...tokens, user: new UserResponseDto(user) };
   }
 
   @Patch('me/profile-image')
@@ -346,24 +356,9 @@ export class UsersController {
   }
 
   // ── Support operations ─────────────────────────────────────────────────
-  //
-  // Each carries its OWN permission rather than riding on `update User`. That
-  // is what lets PLATFORM_APP_SUPPORT help an account holder without being able
-  // to change the account's email — the difference between support and account
-  // takeover.
-
-  @Post(':id/unlock')
-  @HttpCode(HttpStatus.OK)
-  @RequirePermission('unlock', 'User', { administrative: true })
-  @ApiOkResponse({ type: UserResponseDto })
-  async unlock(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @CurrentUser() currentUser: AuthenticatedUser,
-  ): Promise<UserResponseDto> {
-    return new UserResponseDto(
-      await this.usersService.unlock(id, currentUser.id),
-    );
-  }
+  // Each carries its OWN permission rather than riding on `update User`, so
+  // support can help an account holder without being able to change their
+  // email.
 
   @Post(':id/revoke-sessions')
   @RequirePermission('revokeSession', 'User', { administrative: true })

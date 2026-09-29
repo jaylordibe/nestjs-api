@@ -106,8 +106,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // No roles or permissions here. `PermissionsGuard` derives the caller's
     // ability from the database (cached in Redis, explicitly invalidated on
     // every role change), so a revoked role takes effect on the next request
-    // rather than at token expiry — which, with a 30-day JWT, would be far too
-    // late.
+    // rather than at token expiry.
     return {
       id: user.id,
       email: user.email,

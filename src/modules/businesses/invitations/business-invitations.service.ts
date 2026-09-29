@@ -418,7 +418,7 @@ export class BusinessInvitationsService {
    * Requires an authenticated caller, which is what lets this reuse the
    * platform's ONE registration policy rather than forking it: someone without
    * an account registers through `POST /auth/register` (disposable-email
-   * blocking, verification, lockout, all of it), verifies, and then presents
+   * rejection, verification), verifies, and then presents
    * the same still-valid token here. An acceptance endpoint that minted
    * accounts would be a second, less-guarded front door into user creation.
    *

@@ -6,23 +6,24 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { createTestApp } from './setup/test-app';
 import { truncateAll } from './setup/db';
 import {
+  captureEmails,
+  deliverQueuedEmails,
+  linkParameter,
+} from './setup/emails';
+import {
   createPlatformAdmin,
-  registerAndLogin,
+  registerVerifiedUser,
   seedRbacCatalog,
 } from './setup/rbac';
 
 const PASSWORD = 'correct-horse-battery-1';
 
-// Register, mark the row emailVerifiedAt=now directly (test shortcut —
-// production flow would click the email link), then log in. Returns the
-// resulting access token and the user id. Every test that needs a
-// logged-in session routes through this helper so the production
-// verification gate is exercised identically across the suite.
+// Register, mark the row verified directly, and return an access token.
 async function registerUser(
   app: INestApplication<App>,
   email = 'user@example.com',
 ): Promise<string> {
-  const { token } = await registerAndLogin(app, email);
+  const { token } = await registerVerifiedUser(app, email);
   return token;
 }
 
@@ -58,7 +59,7 @@ describe('Users (e2e)', () => {
 
   describe('self-service', () => {
     it('GET /api/users/me returns the authenticated user', async () => {
-      const { token } = await registerAndLogin(app, 'me@example.com');
+      const { token } = await registerVerifiedUser(app, 'me@example.com');
       const res = await request(app.getHttpServer())
         .get('/api/users/me')
         .set('Authorization', `Bearer ${token}`)
@@ -72,7 +73,7 @@ describe('Users (e2e)', () => {
     });
 
     it('PATCH /api/users/me updates allowed profile fields only', async () => {
-      const { token } = await registerAndLogin(app);
+      const { token } = await registerVerifiedUser(app);
       const res = await request(app.getHttpServer())
         .patch('/api/users/me')
         .set('Authorization', `Bearer ${token}`)
@@ -90,7 +91,10 @@ describe('Users (e2e)', () => {
     });
 
     it('DELETE /api/users/me soft-deletes (deletedAt + deletedBy set, isActive untouched) and blocks login', async () => {
-      const { id, token } = await registerAndLogin(app, 'self-del@example.com');
+      const { id, token } = await registerVerifiedUser(
+        app,
+        'self-del@example.com',
+      );
       await request(app.getHttpServer())
         .delete('/api/users/me')
         .set('Authorization', `Bearer ${token}`)
@@ -118,7 +122,10 @@ describe('Users (e2e)', () => {
     });
 
     it('POST /api/users/me/gdpr-erase anonymizes PII and blocks login', async () => {
-      const { id, token } = await registerAndLogin(app, 'erase@example.com');
+      const { id, token } = await registerVerifiedUser(
+        app,
+        'erase@example.com',
+      );
 
       await request(app.getHttpServer())
         .post('/api/users/me/gdpr-erase')
@@ -142,7 +149,10 @@ describe('Users (e2e)', () => {
     });
 
     it('POST /api/users/me/gdpr-erase rejects wrong password with 401', async () => {
-      const { token } = await registerAndLogin(app, 'wrong-erase@example.com');
+      const { token } = await registerVerifiedUser(
+        app,
+        'wrong-erase@example.com',
+      );
       await request(app.getHttpServer())
         .post('/api/users/me/gdpr-erase')
         .set('Authorization', `Bearer ${token}`)
@@ -151,7 +161,7 @@ describe('Users (e2e)', () => {
     });
 
     it('PATCH /api/users/me/username changes username', async () => {
-      const { token } = await registerAndLogin(app);
+      const { token } = await registerVerifiedUser(app);
       const res = await request(app.getHttpServer())
         .patch('/api/users/me/username')
         .set('Authorization', `Bearer ${token}`)
@@ -161,14 +171,14 @@ describe('Users (e2e)', () => {
     });
 
     it('PATCH /api/users/me/username returns 409 on duplicate', async () => {
-      const a = await registerAndLogin(app, 'a@example.com');
+      const a = await registerVerifiedUser(app, 'a@example.com');
       await request(app.getHttpServer())
         .patch('/api/users/me/username')
         .set('Authorization', `Bearer ${a.token}`)
         .send({ username: 'taken' })
         .expect(200);
 
-      const b = await registerAndLogin(app, 'b@example.com');
+      const b = await registerVerifiedUser(app, 'b@example.com');
       await request(app.getHttpServer())
         .patch('/api/users/me/username')
         .set('Authorization', `Bearer ${b.token}`)
@@ -176,29 +186,47 @@ describe('Users (e2e)', () => {
         .expect(409);
     });
 
-    it('PATCH /api/users/me/email updates email and resets emailVerifiedAt', async () => {
-      const { id, token } = await registerAndLogin(app, 'old@example.com');
-      // Pre-set emailVerifiedAt so we can assert it's cleared.
+    it('PATCH /api/users/me/email resets verification, emails the new address and returns a fresh session', async () => {
+      const { id, token } = await registerVerifiedUser(app, 'old@example.com');
+      await deliverQueuedEmails(app);
       const prisma = app.get(PrismaService);
-      await prisma.user.update({
-        where: { id },
-        data: { emailVerifiedAt: new Date() },
-      });
 
-      const res = await request(app.getHttpServer())
-        .patch('/api/users/me/email')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ newEmail: 'new@example.com', currentPassword: PASSWORD })
-        .expect(200);
-      expect(res.body.email).toBe('new@example.com');
-      // emailVerifiedAt is hidden from the response DTO — verify the DB instead.
-      expect(res.body).not.toHaveProperty('emailVerifiedAt');
-      const row = await prisma.user.findUniqueOrThrow({ where: { id } });
-      expect(row.emailVerifiedAt).toBeNull();
+      const emails = captureEmails(app);
+      try {
+        const res = await request(app.getHttpServer())
+          .patch('/api/users/me/email')
+          .set('Authorization', `Bearer ${token}`)
+          .send({ newEmail: 'New@example.com', currentPassword: PASSWORD })
+          .expect(200);
+        expect(res.body.user.email).toBe('new@example.com');
+        expect(res.body.user).not.toHaveProperty('emailVerifiedAt');
+        expect(res.body).toMatchObject({
+          accessToken: expect.any(String),
+          refreshToken: expect.any(String),
+          expiresIn: expect.any(Number),
+        });
+        const row = await prisma.user.findUniqueOrThrow({ where: { id } });
+        expect(row.emailVerifiedAt).toBeNull();
+
+        // The caller stays signed in on the returned token.
+        await request(app.getHttpServer())
+          .get('/api/users/me')
+          .set('Authorization', `Bearer ${res.body.accessToken as string}`)
+          .expect(200);
+
+        await deliverQueuedEmails(app);
+        expect(emails.sent).toHaveLength(1);
+        expect(emails.sent[0]).toMatchObject({
+          to: 'new@example.com',
+          template: 'email-verification-link',
+        });
+      } finally {
+        emails.restore();
+      }
     });
 
     it('PATCH /api/users/me/email rejects wrong current password with 401', async () => {
-      const { token } = await registerAndLogin(app);
+      const { token } = await registerVerifiedUser(app);
       await request(app.getHttpServer())
         .patch('/api/users/me/email')
         .set('Authorization', `Bearer ${token}`)
@@ -209,8 +237,8 @@ describe('Users (e2e)', () => {
         .expect(401);
     });
 
-    it('PATCH /api/users/me/password requires current password', async () => {
-      const { token } = await registerAndLogin(app, 'pw@example.com');
+    it('PATCH /api/users/me/password requires current password and keeps the caller signed in', async () => {
+      const { token } = await registerVerifiedUser(app, 'pw@example.com');
       await request(app.getHttpServer())
         .patch('/api/users/me/password')
         .set('Authorization', `Bearer ${token}`)
@@ -220,10 +248,15 @@ describe('Users (e2e)', () => {
         })
         .expect(401);
 
-      await request(app.getHttpServer())
+      const res = await request(app.getHttpServer())
         .patch('/api/users/me/password')
         .set('Authorization', `Bearer ${token}`)
         .send({ currentPassword: PASSWORD, newPassword: 'new-password-1' })
+        .expect(200);
+      expect(res.body.user.email).toBe('pw@example.com');
+      await request(app.getHttpServer())
+        .get('/api/users/me')
+        .set('Authorization', `Bearer ${res.body.accessToken as string}`)
         .expect(200);
 
       await request(app.getHttpServer())
@@ -233,7 +266,7 @@ describe('Users (e2e)', () => {
     });
 
     it('PATCH /api/users/me/profile-image updates the URL', async () => {
-      const { token } = await registerAndLogin(app);
+      const { token } = await registerVerifiedUser(app);
       const res = await request(app.getHttpServer())
         .patch('/api/users/me/profile-image')
         .set('Authorization', `Bearer ${token}`)
@@ -246,7 +279,7 @@ describe('Users (e2e)', () => {
       // Re-auth gate (Phase C): a stolen JWT alone must not be able to
       // redirect the user's phone number — the kickoff requires the
       // current password, mirroring the email-change request endpoint.
-      const { id, token } = await registerAndLogin(
+      const { id, token } = await registerVerifiedUser(
         app,
         'phone-bad@example.com',
       );
@@ -262,7 +295,10 @@ describe('Users (e2e)', () => {
     });
 
     it('phone-verification flow stamps phoneNumberVerifiedAt on a valid OTP', async () => {
-      const { id, token } = await registerAndLogin(app, 'phone-ok@example.com');
+      const { id, token } = await registerVerifiedUser(
+        app,
+        'phone-ok@example.com',
+      );
       const prisma = app.get(PrismaService);
       const phoneNumber = '+14155550111';
 
@@ -302,7 +338,7 @@ describe('Users (e2e)', () => {
     });
 
     it('PATCH /api/users/me/verify-phone rejects a wrong OTP with 400 (opaque)', async () => {
-      const { id, token } = await registerAndLogin(
+      const { id, token } = await registerVerifiedUser(
         app,
         'phone-otp@example.com',
       );
@@ -324,72 +360,116 @@ describe('Users (e2e)', () => {
       expect(res.body.errorCode).toBe('INVALID_OTP');
     });
 
-    it('POST /api/users/request-password-reset always returns 200 (no enumeration)', async () => {
-      await registerAndLogin(app, 'reset@example.com');
-      await request(app.getHttpServer())
-        .post('/api/users/request-password-reset')
-        .send({ email: 'reset@example.com' })
-        .expect(200);
-      await request(app.getHttpServer())
-        .post('/api/users/request-password-reset')
-        .send({ email: 'ghost@example.com' })
-        .expect(200);
-    });
+    describe('password reset link', () => {
+      // Requests a reset for `email` and returns the token from the emailed link.
+      async function requestResetToken(email: string): Promise<string> {
+        await deliverQueuedEmails(app);
+        const emails = captureEmails(app);
+        try {
+          await request(app.getHttpServer())
+            .post('/api/users/request-password-reset')
+            .send({ email })
+            .expect(200);
+          await deliverQueuedEmails(app);
+          expect(emails.sent).toHaveLength(1);
+          expect(emails.sent[0]).toMatchObject({
+            to: email,
+            template: 'password-reset-link',
+          });
+          expect(linkParameter(emails.sent[0], 'resetUrl', 'email')).toBe(
+            email,
+          );
+          return linkParameter(emails.sent[0], 'resetUrl', 'token');
+        } finally {
+          emails.restore();
+        }
+      }
 
-    it('POST /api/users/reset-password completes the flow with a valid OTP', async () => {
-      const { id } = await registerAndLogin(app, 'flow@example.com');
-      const prisma = app.get(PrismaService);
-      const otp = '654321';
-      await prisma.user.update({
-        where: { id },
-        data: {
-          otpHash: await bcrypt.hash(otp, 10),
-          otpPurpose: 'password_reset',
-          otpExpiresAt: new Date(Date.now() + 10 * 60_000),
-        },
-      });
-      await request(app.getHttpServer())
-        .post('/api/users/reset-password')
-        .send({
-          email: 'flow@example.com',
-          otp,
-          newPassword: 'brand-new-pw-1',
-        })
-        .expect(200);
-      // Old password rejected, new password works.
-      await request(app.getHttpServer())
-        .post('/api/auth/login')
-        .send({ identifier: 'flow@example.com', password: PASSWORD })
-        .expect(401);
-      await request(app.getHttpServer())
-        .post('/api/auth/login')
-        .send({ identifier: 'flow@example.com', password: 'brand-new-pw-1' })
-        .expect(200);
-    });
+      function resetPassword(email: string, token: string) {
+        return request(app.getHttpServer())
+          .post('/api/users/reset-password')
+          .send({ email, token, newPassword: 'brand-new-pw-1' });
+      }
 
-    it('POST /api/users/reset-password rejects wrong OTP with 400', async () => {
-      const { id } = await registerAndLogin(app, 'wrong-otp@example.com');
-      const prisma = app.get(PrismaService);
-      await prisma.user.update({
-        where: { id },
-        data: {
-          otpHash: await bcrypt.hash('111111', 10),
-          otpPurpose: 'password_reset',
-          otpExpiresAt: new Date(Date.now() + 10 * 60_000),
-        },
+      it('answers 200 for any address and emails only a registered one', async () => {
+        await registerVerifiedUser(app, 'reset@example.com');
+        await deliverQueuedEmails(app);
+        const emails = captureEmails(app);
+        try {
+          await request(app.getHttpServer())
+            .post('/api/users/request-password-reset')
+            .send({ email: 'reset@example.com' })
+            .expect(200);
+          await request(app.getHttpServer())
+            .post('/api/users/request-password-reset')
+            .send({ email: 'ghost@example.com' })
+            .expect(200);
+          await deliverQueuedEmails(app);
+          expect(emails.sent.map((email) => email.to)).toEqual([
+            'reset@example.com',
+          ]);
+        } finally {
+          emails.restore();
+        }
       });
-      await request(app.getHttpServer())
-        .post('/api/users/reset-password')
-        .send({
-          email: 'wrong-otp@example.com',
-          otp: '999999',
-          newPassword: 'brand-new-pw-1',
-        })
-        .expect(400);
+
+      it('stores only a hash of the token', async () => {
+        const { id } = await registerVerifiedUser(app, 'hash@example.com');
+        const token = await requestResetToken('hash@example.com');
+        const row = await app
+          .get(PrismaService)
+          .user.findUniqueOrThrow({ where: { id } });
+        expect(row.otpHash).not.toBe(token);
+        expect(row.otpHash).toMatch(/^[a-f0-9]{64}$/);
+        expect(row.otpPurpose).toBe('password_reset');
+      });
+
+      it('resets the password with the emailed token, once', async () => {
+        await registerVerifiedUser(app, 'flow@example.com');
+        const token = await requestResetToken('flow@example.com');
+
+        await resetPassword('flow@example.com', token).expect(200);
+        await request(app.getHttpServer())
+          .post('/api/auth/login')
+          .send({ identifier: 'flow@example.com', password: PASSWORD })
+          .expect(401);
+        await request(app.getHttpServer())
+          .post('/api/auth/login')
+          .send({ identifier: 'flow@example.com', password: 'brand-new-pw-1' })
+          .expect(200);
+
+        const replay = await resetPassword('flow@example.com', token).expect(
+          400,
+        );
+        expect(replay.body.errorCode).toBe('INVALID_LINK');
+      });
+
+      it("rejects a wrong token or another account's email with 400 INVALID_LINK", async () => {
+        await registerVerifiedUser(app, 'wrong-token@example.com');
+        await registerVerifiedUser(app, 'other@example.com');
+        const token = await requestResetToken('wrong-token@example.com');
+
+        const wrongToken = await resetPassword(
+          'wrong-token@example.com',
+          `${token}x`,
+        ).expect(400);
+        expect(wrongToken.body.errorCode).toBe('INVALID_LINK');
+        await resetPassword('other@example.com', token).expect(400);
+      });
+
+      it('rejects an expired token', async () => {
+        const { id } = await registerVerifiedUser(app, 'expired@example.com');
+        const token = await requestResetToken('expired@example.com');
+        await app.get(PrismaService).user.update({
+          where: { id },
+          data: { otpExpiresAt: new Date(Date.now() - 1_000) },
+        });
+        await resetPassword('expired@example.com', token).expect(400);
+      });
     });
 
     it('GET /api/users/me/export returns the user JSON', async () => {
-      const { token } = await registerAndLogin(app, 'export@example.com');
+      const { token } = await registerVerifiedUser(app, 'export@example.com');
       const res = await request(app.getHttpServer())
         .get('/api/users/me/export')
         .set('Authorization', `Bearer ${token}`)
@@ -425,10 +505,7 @@ describe('Users (e2e)', () => {
       expect(res.body.data[0]).not.toHaveProperty('password');
     });
 
-    // P2002 → 409 envelope contract. Exercised here rather than through
-    // /auth/register, which deliberately no longer surfaces a conflict (it
-    // would let an anonymous caller enumerate registered addresses). An
-    // authenticated admin, by contrast, should get the real error.
+    // P2002 → 409 envelope contract.
     it('POST /api/users emits the UNIQUE_CONSTRAINT_VIOLATION envelope on a duplicate email', async () => {
       const newUser = {
         email: 'dup-admin@example.com',
@@ -495,27 +572,86 @@ describe('Users (e2e)', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(400);
       await request(app.getHttpServer())
-        .get('/api/users?perPage=9999')
+        .get('/api/users?perPage=0')
         .set('Authorization', `Bearer ${adminToken}`)
         .expect(400);
     });
 
-    it('POST /api/users creates a user', async () => {
+    it('GET /api/users clamps perPage above 100 to 100', async () => {
       const res = await request(app.getHttpServer())
-        .post('/api/users')
+        .get('/api/users?perPage=9999')
         .set('Authorization', `Bearer ${adminToken}`)
-        .send({
+        .expect(200);
+      expect(res.body.meta.perPage).toBe(100);
+    });
+
+    it('POST /api/users creates a user and emails them a verification link', async () => {
+      await deliverQueuedEmails(app);
+      const emails = captureEmails(app);
+      try {
+        const res = await request(app.getHttpServer())
+          .post('/api/users')
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send({
+            email: 'new@example.com',
+            password: PASSWORD,
+            firstName: 'New',
+            lastName: 'Person',
+          })
+          .expect(201);
+        expect(res.body).toMatchObject({
           email: 'new@example.com',
-          password: PASSWORD,
-          firstName: 'New',
-          lastName: 'Person',
-        })
-        .expect(201);
-      expect(res.body).toMatchObject({
-        email: 'new@example.com',
-        isActive: true,
-      });
-      expect(res.body).not.toHaveProperty('password');
+          isActive: true,
+        });
+        expect(res.body).not.toHaveProperty('password');
+
+        await deliverQueuedEmails(app);
+        expect(emails.sent).toHaveLength(1);
+        expect(emails.sent[0]).toMatchObject({
+          to: 'new@example.com',
+          template: 'email-verification-link',
+        });
+      } finally {
+        emails.restore();
+      }
+    });
+
+    it('PATCH /api/users/:id with a new email resets verification and emails the new address', async () => {
+      const target = await registerVerifiedUser(app, 'before@example.com');
+      await deliverQueuedEmails(app);
+      const emails = captureEmails(app);
+      try {
+        await request(app.getHttpServer())
+          .patch(`/api/users/${target.id}`)
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send({ email: 'after@example.com' })
+          .expect(200);
+        const row = await app
+          .get(PrismaService)
+          .user.findUniqueOrThrow({ where: { id: target.id } });
+        expect(row.email).toBe('after@example.com');
+        expect(row.emailVerifiedAt).toBeNull();
+
+        await deliverQueuedEmails(app);
+        expect(emails.sent.map((email) => email.to)).toEqual([
+          'after@example.com',
+        ]);
+      } finally {
+        emails.restore();
+      }
+    });
+
+    it('PATCH /api/users/:id without an email change keeps verification', async () => {
+      const target = await registerVerifiedUser(app, 'same@example.com');
+      await request(app.getHttpServer())
+        .patch(`/api/users/${target.id}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ email: 'Same@example.com', firstName: 'Same' })
+        .expect(200);
+      const row = await app
+        .get(PrismaService)
+        .user.findUniqueOrThrow({ where: { id: target.id } });
+      expect(row.emailVerifiedAt).not.toBeNull();
     });
 
     // Audit columns (createdBy/updatedBy/deletedBy) are intentionally
@@ -642,10 +778,7 @@ describe('Users (e2e)', () => {
     });
 
     it('old token is rejected after password change (H2)', async () => {
-      const { token } = await registerAndLogin(app, 'rotate@example.com');
-      // Wait past a full second boundary so passwordChangedAt lands in a
-      // strictly later second than the token's iat.
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const { token } = await registerVerifiedUser(app, 'rotate@example.com');
       await request(app.getHttpServer())
         .patch('/api/users/me/password')
         .set('Authorization', `Bearer ${token}`)
@@ -658,7 +791,7 @@ describe('Users (e2e)', () => {
     });
 
     it('PATCH /api/users/:id/password lets admin reset without current password', async () => {
-      const target = await registerAndLogin(app, 'target@example.com');
+      const target = await registerVerifiedUser(app, 'target@example.com');
       await request(app.getHttpServer())
         .patch(`/api/users/${target.id}/password`)
         .set('Authorization', `Bearer ${adminToken}`)

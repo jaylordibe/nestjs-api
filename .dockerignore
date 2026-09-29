@@ -27,3 +27,6 @@ Dockerfile
 .dockerignore
 .prettierrc
 eslint.config.mjs
+# Private keys and certificates never belong in the image.
+*.pem
+*.key

@@ -104,17 +104,16 @@ runs.
 
 ### What ships out of the box
 
-One queue (`maintenance`) and two recurring jobs:
+Two queues:
 
-| Job | Schedule | What it does |
-|---|---|---|
-| `maintenance.queue-heartbeat.v1` | every 5 minutes | Writes the Redis key behind `GET /api/health/workers`. Carries no domain meaning and must never acquire any. |
-| `auth.refresh-token-retention.v1` | `0 0 * * *` UTC | Deletes refresh tokens past their expiry. Data minimisation — an expired row still holds a user id, an IP and a user-agent. |
+| Queue | Jobs |
+|---|---|
+| `maintenance` | `maintenance.queue-heartbeat.v1` (every 5 minutes) writes the Redis key behind `GET /api/health/workers`. `auth.refresh-token-retention.v1` (`0 0 * * *` UTC) deletes refresh tokens past their expiry. |
+| `notifications` | `user.email-verification.v1`, `user.password-reset.v1`, `user.password-changed-notice.v1` — account emails, enqueued by `UsersService` so the request never waits on the mail provider. The payload is the user id only; the worker reloads the user and renders the email, so no address or token sits in Redis. |
 
-Only one queue is deliberate, not a stub: only queues with a real producer are
-registered, and `QueueJobHandlerRegistry` fails the boot for a queue with no
-processor precisely so an aspirational lane cannot sit there looking alive. Add
-your queues as you have work for them.
+Only queues with a real producer are registered: `QueueJobHandlerRegistry`
+fails the boot for a queue with no processor, so an aspirational lane cannot sit
+there looking alive. Add your queues as you have work for them.
 
 Note where the retention job's handler lives — `src/modules/auth/`, beside the
 table it sweeps, not in this folder. Shared queue infrastructure contains no
@@ -533,9 +532,10 @@ Isolation is the harness that already exists: each jest worker owns a logical
 Redis database (`test/setup/worker-isolation.ts`) and `truncateAll` flushes it.
 
 `.env.test` sets `QUEUE_WORKER_ENABLED=false` so no other spec runs a live
-worker against the database its assertions read — the same reasoning as the cron
-teardown in `test/setup/test-app.ts`. The queue spec flips the flag for itself
-before compiling its module.
+worker against the database its assertions read. The queue spec flips the flag
+for itself before compiling its module. Specs that assert on account emails run
+the queued jobs through the real processor with `deliverQueuedEmails`
+(`test/setup/emails.ts`).
 
 Queue work is asynchronous by definition, so assertions **poll** (`waitUntil`)
 rather than sleeping a fixed amount; a fixed sleep is either flaky or slow, and

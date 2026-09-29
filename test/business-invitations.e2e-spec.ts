@@ -14,6 +14,7 @@ import {
   addMembership,
   createBusinessWithOwner,
   createRegularUser,
+  issueAccessToken,
   roleIdFor,
   seedRbacCatalog,
   SeededBusiness,
@@ -836,18 +837,10 @@ describe('Business invitations (e2e)', () => {
     });
   });
 
-  // Logs a seeded user in again after their row was created out-of-band.
+  // A session for a user whose row was created out-of-band.
   const createSessionFor = async (email: string): Promise<SeededUser> => {
     const prisma = app.get(PrismaService);
     const user = await prisma.user.findFirstOrThrow({ where: { email } });
-    const response = await request(app.getHttpServer())
-      .post('/api/auth/login')
-      .send({ identifier: email, password: TEST_PASSWORD })
-      .expect(200);
-    return {
-      id: user.id,
-      email,
-      token: (response.body as { accessToken: string }).accessToken,
-    };
+    return { id: user.id, email, token: await issueAccessToken(app, user.id) };
   };
 });

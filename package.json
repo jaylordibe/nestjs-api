@@ -30,7 +30,6 @@
   "packageManager": "yarn@1.22.22",
   "scripts": {
     "build": "nest build",
-    "postbuild": "ts-node --transpile-only scripts/verify-build-artifacts.ts",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",

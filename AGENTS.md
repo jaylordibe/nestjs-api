@@ -36,7 +36,7 @@ process does both.
 | Purpose | Command | Notes |
 |---|---|---|
 | Install | `yarn install --frozen-lockfile` | |
-| Build + type check | `yarn build` | `nest build` typechecks; `postbuild` asserts the artifact |
+| Build + type check | `yarn build` | `nest build` typechecks |
 | Lint / format check | `yarn lint` | Evidence is `lint`, never `lint:fix`; Prettier runs inside it |
 | Lint (apply fixes) | `yarn lint:fix` | Closing step only |
 | Unit tests | `yarn test` | |
@@ -117,7 +117,7 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
   `businesses.slug`): look up with `findFirst`, never `findUnique`.
 - **Lists:** five standard endpoints; read handlers are `findPaginated` /
   `findById`, one resource per controller, no unpaginated `GET /all`,
-  `perPage` ≤ 100.
+  `perPage` clamped to 100.
 - **Config:** `configService.getOrThrow()` only; no `process.env` outside
   `configuration.ts`.
 - **Swagger:** paginated handlers use `@ApiPaginatedResponse(T)`; others need
@@ -180,7 +180,7 @@ consumer is updated or recorded as unaffected, with the deploy order stated.
 | Reasoning behind every rule above | `docs/engineering-conventions.md` |
 | New CRUD resource | `resource-pattern` skill, `docs/resource-pattern.md` |
 | Permissions, roles, tenant isolation | `authorization` skill, `src/common/authorization/README.md` |
-| Auth, JWT, OTP, verification, lockout | `auth-security` skill |
+| Auth, JWT, sessions, verification, password reset | `auth-security` skill |
 | e2e specs | `e2e-testing` skill |
 | Background work (immediate, delayed, recurring) | `src/common/queue/README.md` |
 | Error envelope and `ErrorCode` catalog | `src/common/errors/README.md` |

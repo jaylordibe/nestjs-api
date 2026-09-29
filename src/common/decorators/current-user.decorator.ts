@@ -6,7 +6,7 @@ import { ExecutionContext, createParamDecorator } from '@nestjs/common';
 // caller's compiled CASL ability (`@CurrentAbility()`), derived per request
 // from `user_roles` / `business_memberships`. Caching a role here would create a
 // second source of truth that goes stale the moment a role is revoked
-// mid-session — and this template issues 30-day tokens.
+// mid-session.
 export interface AuthenticatedUser {
   id: string;
   email: string;

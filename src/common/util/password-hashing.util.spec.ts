@@ -1,9 +1,5 @@
 import * as bcrypt from 'bcrypt';
-import {
-  BCRYPT_ROUNDS,
-  burnPasswordHashingTime,
-  hashPassword,
-} from './password-hashing.util';
+import { BCRYPT_ROUNDS, hashPassword } from './password-hashing.util';
 
 describe('password-hashing util', () => {
   // bcrypt at 12 rounds costs ~250ms per call, so this suite deliberately
@@ -24,11 +20,5 @@ describe('password-hashing util', () => {
       hashPassword('Str0ngPassw0rd'),
     ]);
     expect(first).not.toBe(second);
-  });
-
-  it('burns hashing time without returning anything to leak', async () => {
-    await expect(
-      burnPasswordHashingTime('Str0ngPassw0rd'),
-    ).resolves.toBeUndefined();
   });
 });

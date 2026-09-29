@@ -86,9 +86,7 @@ cannot, without work.
 
 | Control | Status | Where |
 |---|---|---|
-| Migration-vs-data safety gate | ✅ Implemented | `.github/workflows/test.yml` → `migration-safety`. Applies the released migrations, seeds real rows, asserts the DB is non-empty, then applies the proposed migrations **on top of populated data**. |
-| Expand/contract proof | ✅ Implemented | Same job boots the **released** build against the **new** schema. Production runs old code against the new schema for the whole swap window, and nothing else tests that. |
-| Template re-baseline escape hatch | ✅ Implemented | When a released migration is edited or deleted, the job detects it, skips the two comparisons that cannot apply, prints a loud warning, and instead proves the new baseline applies to an empty database and seeds. |
+| Migration-vs-data safety gate | ❌ Not implemented | CI applies migrations to an empty database only (e2e). Whether a migration applies to populated data, and whether the released build can serve on the new schema during the swap window, is a review-time check — see `docs/prod/README.md` → "When a release is NOT backwards-compatible". |
 | Connection-pool sizing | ❌ Operator-owned | Prisma's default pool is `num_cpus * 2 + 1`. With an API and a worker on one box, both hold pools against the same Postgres — size `max_connections` accordingly or expect saturation under load rather than a clear error. |
 
 ### Expand/contract policy

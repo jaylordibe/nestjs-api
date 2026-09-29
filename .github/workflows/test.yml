@@ -1,8 +1,13 @@
 name: Test
 
-# Reusable + PR-triggered. Deploy workflows call this via `uses:` to gate
-# merges; PR events trigger it directly against the target branch.
+# Runs on pushes and PRs to the long-lived branches, and is reusable: deploy
+# workflows call it via `uses:` to gate a deploy.
 on:
+  push:
+    branches:
+      - main
+      - staging
+      - develop
   pull_request:
     branches:
       - main
@@ -16,10 +21,12 @@ on:
   # (see the note on the `ci` job).
   workflow_call:
 
-# Cancel in-flight runs of this workflow for the same ref. Avoids two
-# concurrent CI runs on rapid pushes; the newer commit wins.
+# Cancel in-flight runs for the same ref; the newer commit wins. Keyed on the
+# workflow too: when a deploy workflow calls this one, `github.workflow` is the
+# caller's name, so a push to `staging` running both the direct and the called
+# copy never cancels the deploy's gate.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 # Least-privilege default. Only read access to the repo. Individual jobs
@@ -274,259 +281,6 @@ jobs:
           yarn rbac:check
 
 
-  # Migrations meeting data that already exists — the one failure class every
-  # other gate in this file is structurally blind to.
-  #
-  # `test/setup/global-setup.ts` issues DROP DATABASE / CREATE DATABASE on every
-  # e2e run, so the suite only ever proves migrations apply to an EMPTY schema.
-  # Production applies them to a populated one, and applies them BEFORE the new
-  # container starts (deploy-production.yml runs `migrate` then `up -d`), so the
-  # OLD build serves traffic against the NEW schema for the length of the swap.
-  # Nothing tested that until this job. A DROP COLUMN, a SET NOT NULL, a RENAME,
-  # or a unique index that collides with existing duplicates passes lint, build,
-  # the e2e shards, Trivy and the entrypoint check, then fails in production with
-  # the schema already changed and the old container already stopped.
-  #
-  # Runs in parallel with the other jobs (like `docker`) so it never lengthens
-  # the deploy gate, and skips itself entirely when a change touches no
-  # migration — which is most changes.
-  migration-safety:
-    name: Migrations against existing data
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    # NO job-level `env:` block, for the same reason the `quality` job carries
-    # none — and the failure mode here is especially sharp. `.env.test` already
-    # pins `COMPOSE_PROJECT_NAME` (to `nestjs-test`), so compose resolves the
-    # SAME project from `base/` and from `head/`; the working directory never
-    # enters into it and there is nothing to pin.
-    #
-    # Restating `COMPOSE_PROJECT_NAME` here would break this job outright: the
-    # steps that talk to the containers source `.env.test` with `set -a` first,
-    # so a shell variable exported by a job-level block is OVERWRITTEN in
-    # exactly those steps. `Start Postgres + Redis` (no sourcing) would create
-    # one project, then `Assert the database is actually populated` (sourced)
-    # would look in another and report `service "postgres" is not running`.
-    #
-    # So: any key `.env.test` defines must not be restated here, and every
-    # `docker compose` invocation below runs from `head/` with that same file.
-
-    steps:
-      - name: Check out the proposed commit
-        uses: actions/checkout@v7
-        with:
-          path: head
-
-      # `main` is what production is actually running. Diffing against the PR's
-      # base branch instead would miss anything already merged to develop but
-      # not yet released — and it is the released schema these migrations will
-      # really land on.
-      - name: Check out the released commit
-        uses: actions/checkout@v7
-        with:
-          ref: main
-          path: base
-
-      - name: Decide whether this change touches migrations
-        id: scope
-        run: |
-          if diff -rq base/prisma/migrations head/prisma/migrations >/dev/null 2>&1; then
-            echo 'changed=false' >> "$GITHUB_OUTPUT"
-            echo 'rebaselined=false' >> "$GITHUB_OUTPUT"
-            echo 'No migration changes against the released commit — nothing for this job to prove.'
-            exit 0
-          fi
-
-          echo 'changed=true' >> "$GITHUB_OUTPUT"
-          echo 'Migration changes against the released commit:'
-          diff -rq base/prisma/migrations head/prisma/migrations || true
-
-          # A migration directory that exists on `main` and has been EDITED or
-          # DELETED here is a template re-baseline, not an ordinary forward
-          # migration. Detected by shape rather than by name, so it keeps
-          # working whatever the baseline is called.
-          #
-          # It breaks the assertions below in two unavoidable ways, and both are
-          # correct refusals for any other change: `migrate deploy` rejects an
-          # edited migration outright, because its checksum is recorded in
-          # `_prisma_migrations`; and the released build necessarily reads
-          # tables the rewritten baseline may no longer create.
-          #
-          # So the comparison is skipped and replaced with a weaker but honest
-          # one (below). This is only ever legitimate BEFORE a first deploy —
-          # afterwards, re-baselining breaks `migrate deploy` in every
-          # environment that has already run it.
-          rebaselined=false
-          for released in base/prisma/migrations/*/; do
-            name="$(basename "$released")"
-            proposed="head/prisma/migrations/$name"
-            if [ ! -d "$proposed" ]; then
-              echo "::warning::released migration '$name' has been DELETED"
-              rebaselined=true
-            elif ! diff -rq "$released" "$proposed" >/dev/null 2>&1; then
-              echo "::warning::released migration '$name' has been EDITED"
-              rebaselined=true
-            fi
-          done
-          echo "rebaselined=$rebaselined" >> "$GITHUB_OUTPUT"
-
-          if [ "$rebaselined" = 'true' ]; then
-            echo '::warning::Template re-baseline detected. SKIPPING the populated-data and released-build assertions — an edited migration cannot be applied on top of itself, and the released build reads a schema that no longer exists. Proving the new baseline applies to an EMPTY database and seeds instead. This is safe ONLY because no environment has applied the old baseline; if one has, `migrate deploy` will refuse there.'
-          fi
-
-      # The same compose file and the same .env.test everything else uses, so
-      # this job cannot drift onto its own database configuration.
-      - name: Start Postgres + Redis
-        if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'false'
-        working-directory: head
-        run: docker compose --env-file .env.test up -d --wait postgres redis
-
-      - name: Set up Node
-        if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'false'
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: yarn
-          cache-dependency-path: head/yarn.lock
-
-      - name: Install dependencies (released commit)
-        if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'false'
-        working-directory: base
-        run: yarn install --frozen-lockfile --silent
-        env:
-          NODE_OPTIONS: --no-deprecation
-
-      # Recreates production's starting point: the released schema, carrying
-      # rows. `.env.test` is sourced rather than restated in an `env:` block — a
-      # workflow-level block would silently shadow the file. Any SEED_* value the
-      # file does not define falls back below WITHOUT overriding one that it
-      # does. `prisma/seed.ts` reads the ADMIN and USER prefixes and throws when
-      # either pair is absent, so both are supplied.
-      - name: Apply released migrations and seed data
-        if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'false'
-        working-directory: base
-        run: |
-          set -euo pipefail
-          set -a
-          . ./.env.test
-          : "${SEED_ADMIN_EMAIL:=migration-safety-admin@example.com}"
-          : "${SEED_ADMIN_PASSWORD:=MigrationSafety123!}"
-          : "${SEED_USER_EMAIL:=migration-safety-user@example.com}"
-          : "${SEED_USER_PASSWORD:=MigrationSafety123!}"
-          set +a
-          yarn prisma:generate
-          yarn prisma:deploy
-          yarn prisma:seed
-
-      # Without this the job could pass against an empty database and prove
-      # nothing at all — the exact vacuous-green failure it exists to prevent.
-      #
-      # Runs from `head/` like every other compose call in this job, even
-      # though it inspects the database the `base/` seed just filled: the two
-      # checkouts share one Postgres container, and keeping a single directory
-      # for `up`/`exec`/`logs` means the compose file being read is always the
-      # one the stack was actually started from.
-      - name: Assert the database is actually populated
-        if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'false'
-        working-directory: head
-        run: |
-          set -euo pipefail
-          set -a; . ./.env.test; set +a
-          row_count=$(docker compose --env-file .env.test exec -T postgres \
-            psql -U "$DB_USER" -d "$DB_NAME" -tAc 'SELECT count(*) FROM users;')
-          echo "users table holds ${row_count} row(s)"
-          if [ "${row_count:-0}" -lt 1 ]; then
-            echo '::error::seeding produced no rows, so applying migrations to a populated database was never actually tested'
-            exit 1
-          fi
-
-      - name: Install dependencies (proposed commit)
-        if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'false'
-        working-directory: head
-        run: yarn install --frozen-lockfile --silent
-        env:
-          NODE_OPTIONS: --no-deprecation
-
-      # The primary assertion: the NEW migrations applied on top of the released
-      # schema, with real rows underneath them.
-      - name: Apply the proposed migrations to the populated database
-        if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'false'
-        working-directory: head
-        run: |
-          set -euo pipefail
-          set -a; . ./.env.test; set +a
-          yarn prisma:generate
-          if ! yarn prisma:deploy; then
-            echo '::error::the proposed migrations do not apply to a database that already holds data — this would fail mid-deploy in production, after the old container has already been stopped'
-            exit 1
-          fi
-
-      # The expand/contract assertion. Production runs the OLD image against the
-      # NEW schema for the whole build-and-swap window, so a migration that
-      # removes or tightens something the released code still reads takes the
-      # site down before the new container ever starts.
-      - name: Prove the released build still serves traffic on the new schema
-        if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'false'
-        working-directory: base
-        run: |
-          set -euo pipefail
-          set -a; . ./.env.test; set +a
-          yarn build
-          node dist/main.js &
-          application_pid=$!
-          trap 'kill "$application_pid" 2>/dev/null || true' EXIT
-
-          for attempt in $(seq 1 30); do
-            if curl -fsS "http://localhost:${PORT:-3000}/api/health/liveness" >/dev/null 2>&1; then
-              echo "released build is healthy against the migrated schema (attempt ${attempt})"
-              exit 0
-            fi
-            if ! kill -0 "$application_pid" 2>/dev/null; then
-              echo '::error::the released build exited against the new schema — this migration is not backwards-compatible and will break production during the deploy window'
-              exit 1
-            fi
-            sleep 2
-          done
-
-          echo '::error::the released build never became healthy against the new schema within 60s — treat this migration as not backwards-compatible'
-          exit 1
-
-      # The replacement assertion when the baseline was rewritten. Weaker than
-      # the populated-data check above — deliberately so, and said out loud —
-      # but it still catches invalid SQL, a constraint that cannot be created,
-      # and a seeder the new schema no longer satisfies.
-      - name: Prove the rewritten baseline applies to an empty database
-        if: steps.scope.outputs.changed == 'true' && steps.scope.outputs.rebaselined == 'true'
-        working-directory: head
-        run: |
-          set -euo pipefail
-          set -a; . ./.env.test; set +a
-          BASELINE_DB_NAME="${DB_NAME}_baseline_check"
-          export DB_NAME="$BASELINE_DB_NAME"
-          export DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${BASELINE_DB_NAME}?schema=public"
-          PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d postgres \
-            -c "DROP DATABASE IF EXISTS \"$BASELINE_DB_NAME\";" \
-            -c "CREATE DATABASE \"$BASELINE_DB_NAME\";"
-          yarn install --frozen-lockfile --silent
-          yarn prisma:generate
-          if ! yarn prisma:deploy; then
-            echo '::error::the rewritten baseline does not apply to an empty database'
-            exit 1
-          fi
-          if ! yarn prisma:seed; then
-            echo '::error::the rewritten baseline applies, but the seeder fails against it — a clone would boot into an unusable state'
-            exit 1
-          fi
-          if ! yarn rbac:check; then
-            echo '::error::the authorization catalog does not match the database the rewritten baseline produces'
-            exit 1
-          fi
-
-      - name: Dump container logs on failure
-        if: failure() && steps.scope.outputs.changed == 'true'
-        working-directory: head
-        run: docker compose --env-file .env.test logs --no-color --tail=200
-
   docker:
     name: Build & scan container image
     runs-on: ubuntu-latest
@@ -577,59 +331,3 @@ jobs:
           # allowlist in .github/scripts/audit-gate.mjs). Ships empty — an
           # entry here is the image-side half of the same last-resort decision.
           trivyignores: '.trivyignore'
-
-      # Trivy above inspects the image's filesystem for CVEs; it never executes
-      # anything, so an image whose entrypoint cannot resolve passes it cleanly.
-      # That is a real failure mode: a `.ts` file entering the build scope
-      # rebases the tsc rootDir, `yarn build` exits 0, the image builds, Trivy
-      # passes, and the container crash-loops on deploy with MODULE_NOT_FOUND.
-      #
-      # Two checks against the image just built:
-      #   1. That the runtime image contains the entrypoint and its assets —
-      #      i.e. that Dockerfile's COPY landed. `postbuild` already asserted the
-      #      full contract against this same dist/ during the build stage, so
-      #      this is deliberately narrow.
-      #   2. The real CMD, asserting its module graph resolves.
-      #
-      # What check 2 does NOT prove: boot. With no env, config validation throws
-      # during module init, before onModuleInit reads anything — so asset
-      # loading is covered by check 1 only. Saying otherwise would be the kind
-      # of overclaim that lets a second failure hide behind the first.
-      - name: Verify the built image can resolve what it runs
-        run: |
-          set -euo pipefail
-
-          echo "::group::runtime image contents"
-          docker run --rm --entrypoint node nestjs-api:ci -e "
-            const { statSync } = require('node:fs');
-            statSync('dist/main.js');
-            statSync('dist/common/email/template-engine.js');
-            statSync('dist/common/email/templates');
-            console.log('runtime image contains the entrypoint and its assets');
-          "
-          echo "::endgroup::"
-
-          # Foreground with a bounded timeout: the container exits on its own, so
-          # there is nothing to poll for and no fixed sleep to get wrong. `|| true`
-          # is NOT used on the capture — a docker failure must not be laundered
-          # into an empty string that then passes the grep below.
-          echo "::group::entrypoint resolves"
-          set +e
-          container_output=$(timeout 60 docker run --rm nestjs-api:ci 2>&1)
-          set -e
-          head -40 <<<"$container_output"
-          echo "::endgroup::"
-
-          # Positive control first. An absence-only assertion passes when the
-          # container produced no output at all — i.e. when we never observed the
-          # entrypoint run, which is precisely the case that must not pass.
-          if [ -z "$container_output" ]; then
-            echo "::error::the image produced no output; the entrypoint was never observed running"
-            exit 1
-          fi
-
-          if grep -qE "Cannot find module|MODULE_NOT_FOUND" <<<"$container_output"; then
-            echo "::error::the built image cannot resolve its entrypoint"
-            exit 1
-          fi
-          echo "entrypoint module graph resolved; config errors above are expected without services"

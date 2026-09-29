@@ -40,8 +40,6 @@ model User {
   email                 String
   password              String
   passwordChangedAt     DateTime? @map("password_changed_at")
-  failedLoginCount      Int       @default(0) @map("failed_login_count")
-  lockedUntil           DateTime? @map("locked_until")
   otpHash               String?   @map("otp_hash")
   otpPurpose            String?   @map("otp_purpose")
   otpExpiresAt          DateTime? @map("otp_expires_at")

@@ -1,7 +1,7 @@
 import {
   IsEmail,
+  IsNotEmpty,
   IsString,
-  Length,
   Matches,
   MaxLength,
   MinLength,
@@ -11,9 +11,11 @@ export class ResetPasswordDto {
   @IsEmail()
   email!: string;
 
+  // The `token` query parameter from the reset link.
   @IsString()
-  @Length(4, 12)
-  otp!: string;
+  @IsNotEmpty()
+  @MaxLength(256)
+  token!: string;
 
   @IsString()
   @MinLength(12)

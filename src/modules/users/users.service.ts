@@ -1,10 +1,11 @@
-import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
+import { forwardRef, Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Prisma, User } from '@prisma/client';
 import { packRules } from '@casl/ability/extra';
 import type { AppAbility } from '../../common/authorization/app-ability';
 import * as bcrypt from 'bcrypt';
+import { randomInt, timingSafeEqual } from 'node:crypto';
 import { buildOrderBy, MetaQueryDto } from '../../common/dto/meta-query.dto';
 import { PaginationMeta } from '../../common/dto/paginated-response.dto';
 import { AuditService } from '../../common/audit/audit.service';
@@ -13,12 +14,21 @@ import { EmailService } from '../../common/email/email.service';
 import { SmsService } from '../../common/sms/sms.service';
 import { BusinessMembershipStatus } from '../../common/enums/business-membership-status.enum';
 import { OtpPurpose } from '../../common/enums/otp-purpose.enum';
+import { JobName } from '../../common/queue/job-registry';
+import { QueueProducerService } from '../../common/queue/queue-producer.service';
+import {
+  generateOpaqueToken,
+  hashOpaqueToken,
+} from '../../common/util/opaque-token.util';
 import {
   BCRYPT_ROUNDS,
   hashPassword,
 } from '../../common/util/password-hashing.util';
-import { RedisService } from '../../common/redis/redis.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import type {
+  RefreshTokenContext,
+  SessionTokens,
+} from '../auth/refresh-token.service';
 import { RefreshTokenService } from '../auth/refresh-token.service';
 import { PermissionLoaderService } from '../authorization/permission-loader.service';
 import { BusinessOwnershipPolicy } from '../businesses/business-ownership.policy';
@@ -31,33 +41,17 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { UserPermissionsResponseDto } from './dto/user-permissions-response.dto';
 import { VerifyAuthUserPhoneDto } from './dto/verify-auth-user-phone.dto';
 
-// OWASP 2024+ guidance. Bumping this is safe — existing hashes already
-// encode their own cost factor and continue to verify correctly.
-// One duplicate-signup notice per email address per 24h.
-//
-// Answering a signup collision with a uniform 201 closes the enumeration
-// leak, but the notice email it depends on would otherwise turn the endpoint
-// into an email-bombing amplifier: resubmit a victim's address in a loop and
-// we deliver the mail. The global throttle bounds requests per IP; this
-// bounds mail per RECIPIENT, which is the thing being abused, and survives an
-// attacker rotating IPs. A genuine "I forgot I had an account" user needs
-// exactly one of these per attempt anyway.
-const DUPLICATE_SIGNUP_NOTICE_COOLDOWN_SECONDS = 24 * 60 * 60;
-const DUPLICATE_SIGNUP_NOTICE_KEY_PREFIX = 'duplicate-signup-notice:';
-
 const OTP_EXPIRY_MS = 15 * 60 * 1000;
+const PASSWORD_RESET_EXPIRY_MINUTES = 60;
 
 function generateOtp(): string {
-  // 6 digits, zero-padded. Brute-force risk is bounded by the 15-min expiry
-  // window and the global throttle on verify/reset endpoints.
-  const sixDigitValue = Math.floor(Math.random() * 1_000_000);
-  return sixDigitValue.toString().padStart(6, '0');
+  // 6 digits, zero-padded. Phone verification only; bounded by the 15-min
+  // expiry and the verify endpoint's throttle.
+  return randomInt(0, 1_000_000).toString().padStart(6, '0');
 }
 
 @Injectable()
 export class UsersService {
-  private readonly logger = new Logger(UsersService.name);
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly emailService: EmailService,
@@ -65,7 +59,7 @@ export class UsersService {
     private readonly auditService: AuditService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
-    private readonly redis: RedisService,
+    private readonly queueProducer: QueueProducerService,
     // `forwardRef` on both sides: AuthModule imports UsersModule for the login
     // path, and UsersModule needs session revocation back. Per CLAUDE.md, the
     // ref goes in the module imports AND on the injection.
@@ -78,107 +72,104 @@ export class UsersService {
     private readonly businessOwnershipPolicy: BusinessOwnershipPolicy,
   ) {}
 
-  // Tells the owner of an existing account that someone tried to sign up with
-  // their email, and reports whether the mail actually went out.
-  //
-  // Returns false (without sending) when:
-  //   • the account is soft-deleted — there is no live account to sign in to;
-  //   • the 24h per-recipient cooldown is already claimed;
-  //   • the provider fails — the caller's response must not change shape
-  //     because our mail provider is down.
-  // The caller audits the returned flag, so a suppressed send is visible in
-  // `audit_logs` rather than silently absent.
-  async sendDuplicateSignupNotice(existingUser: User): Promise<boolean> {
-    if (existingUser.deletedAt) {
-      return false;
-    }
-    // SET NX EX — atomic claim-the-window. Two concurrent attempts on the
-    // same address can't both pass, which a GET-then-SET would allow.
-    const claimedCooldown = await this.redis.client.set(
-      `${DUPLICATE_SIGNUP_NOTICE_KEY_PREFIX}${existingUser.email}`,
-      '1',
-      'EX',
-      DUPLICATE_SIGNUP_NOTICE_COOLDOWN_SECONDS,
-      'NX',
-    );
-    if (claimedCooldown !== 'OK') {
-      return false;
-    }
-    try {
-      await this.emailService.sendDuplicateSignupAttemptNotification(
-        existingUser.email,
-        existingUser.firstName,
-        this.configService.getOrThrow<string>('webBaseUrl'),
-        new Date(),
-      );
-      return true;
-    } catch (error: unknown) {
-      this.logger.warn(
-        `Duplicate-signup notice failed for user ${existingUser.id}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return false;
-    }
+  // ── Account emails ──────────────────────────────────────────────────
+  // Queued so the request never waits on the mail provider. The payload
+  // carries the user id only; the worker reloads the user and renders the
+  // message, so no address or token sits in Redis.
+
+  private async queueEmailVerification(userId: string): Promise<void> {
+    await this.queueProducer.enqueue(JobName.USER_EMAIL_VERIFICATION_V1, {
+      payloadVersion: 1,
+      userId,
+    });
   }
 
-  // JWT-based email verification link. Payload carries the user id and a
-  // `purpose` claim that prevents the token being used as an access token
-  // (JwtStrategy rejects any payload with `purpose` set). 24h expiry is
-  // longer than the OTP window because email links sit in inboxes.
-  async sendEmailVerificationLink(user: User): Promise<void> {
-    if (user.deletedAt) {
-      // Shouldn't happen in the register path, but guards against callers
-      // later using this helper for soft-deleted users.
-      return;
-    }
-    if (user.emailVerifiedAt) {
-      // Idempotent: re-sending for an already-verified user is a no-op,
-      // not an error. Lets the /auth/resend-verification endpoint be
-      // abuse-safe (always 200).
-      return;
+  private async queuePasswordChangedNotice(userId: string): Promise<void> {
+    await this.queueProducer.enqueue(JobName.USER_PASSWORD_CHANGED_NOTICE_V1, {
+      payloadVersion: 1,
+      userId,
+      occurredAt: new Date().toISOString(),
+    });
+  }
+
+  /**
+   * Worker side of `USER_EMAIL_VERIFICATION_V1`. Returns false when there is
+   * nothing to send (account gone or already verified). The link is a 24h JWT
+   * whose `purpose` claim stops it being used as an access token.
+   */
+  async deliverEmailVerification(userId: string): Promise<boolean> {
+    const user = await this.findByIdOrNull(userId);
+    if (!user || user.emailVerifiedAt) {
+      return false;
     }
     const token = this.jwtService.sign(
       { sub: user.id, purpose: 'email_verify' },
       { expiresIn: '24h' },
     );
     const baseUrl = this.configService.getOrThrow<string>('apiBaseUrl');
-    const verifyUrl = `${baseUrl}/auth/verify-email?token=${encodeURIComponent(token)}`;
     await this.emailService.sendEmailVerificationLink(
       user.email,
       user.firstName,
-      verifyUrl,
+      `${baseUrl}/auth/verify-email?token=${encodeURIComponent(token)}`,
     );
+    return true;
   }
 
-  // Best-effort password-change notification. Called from every mutation
-  // path that changes an existing user's password (self, admin-reset,
-  // password-reset-via-OTP, admin PATCH with a password field). NOT
-  // called from create/register (no prior password to worry about) or
-  // gdprErase (anonymization; the user is the actor and the email
-  // destination is already being nullified). Email failure never blocks
-  // the password change — password changes must succeed even if the
-  // provider is down; the audit log still captures the event.
-  private async notifyPasswordChanged(user: User): Promise<void> {
-    try {
-      await this.emailService.sendPasswordChangedNotification(
-        user.email,
-        user.firstName,
-        new Date(),
-      );
-    } catch (error) {
-      this.logger.warn(
-        `Failed to send password-change notification to ${user.email}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
+  /**
+   * Worker side of `USER_PASSWORD_RESET_V1`: mints a random token, stores its
+   * SHA-256 hash with a 60-minute expiry (replacing any earlier one), and
+   * emails the reset link. Returns false when the account can't be reset.
+   */
+  async deliverPasswordReset(userId: string): Promise<boolean> {
+    const user = await this.findByIdOrNull(userId);
+    if (!user || !user.isActive) {
+      return false;
     }
+    const token = generateOpaqueToken();
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        otpHash: hashOpaqueToken(token),
+        otpPurpose: OtpPurpose.PASSWORD_RESET,
+        otpExpiresAt: new Date(
+          Date.now() + PASSWORD_RESET_EXPIRY_MINUTES * 60 * 1000,
+        ),
+      },
+    });
+    const resetUrl = new URL(
+      this.configService.getOrThrow<string>('passwordResetUrl'),
+    );
+    resetUrl.searchParams.set('token', token);
+    resetUrl.searchParams.set('email', user.email);
+    await this.emailService.sendPasswordResetLink(
+      user.email,
+      user.firstName,
+      resetUrl.toString(),
+      PASSWORD_RESET_EXPIRY_MINUTES,
+    );
+    return true;
   }
 
-  // Consume a verification JWT. Silent no-op for already-verified users
-  // (idempotent). Any other failure — bad signature, wrong purpose,
-  // expired, unknown user — surfaces as a generic 400 so an attacker
-  // poking at the endpoint can't distinguish failure modes.
+  /** Worker side of `USER_PASSWORD_CHANGED_NOTICE_V1`. */
+  async deliverPasswordChangedNotice(
+    userId: string,
+    occurredAt: Date,
+  ): Promise<boolean> {
+    const user = await this.findByIdOrNull(userId);
+    if (!user) {
+      return false;
+    }
+    await this.emailService.sendPasswordChangedNotification(
+      user.email,
+      user.firstName,
+      occurredAt,
+    );
+    return true;
+  }
+
+  // Consume a verification JWT. No-op for an already-verified user. Every
+  // failure (bad signature, wrong purpose, expired, unknown user) is
+  // INVALID_LINK.
   async verifyEmailByToken(token: string): Promise<void> {
     interface VerifyPayload {
       sub?: unknown;
@@ -250,6 +241,7 @@ export class UsersService {
         metadata: { email: user.email },
       });
     }
+    await this.queueEmailVerification(user.id);
     return user;
   }
 
@@ -386,9 +378,14 @@ export class UsersService {
     actorId: string | null,
   ): Promise<User> {
     const existing = await this.findById(id);
+    const newEmail = dto.email?.toLowerCase();
+    const isEmailChanged =
+      newEmail !== undefined && newEmail !== existing.email;
 
     const updateData: Prisma.UserUpdateInput = {
-      email: dto.email?.toLowerCase(),
+      email: newEmail,
+      // A new address is unverified until its owner follows the link.
+      ...(isEmailChanged ? { emailVerifiedAt: null } : {}),
       username: dto.username?.toLowerCase(),
       firstName: dto.firstName,
       middleName: dto.middleName,
@@ -422,8 +419,12 @@ export class UsersService {
           // Role changes no longer travel through this endpoint — they have
           // their own audited routes (`POST/DELETE /users/:userId/roles`).
           isActiveChanged: dto.isActive !== undefined,
+          isEmailChanged,
         },
       });
+    }
+    if (isEmailChanged) {
+      await this.queueEmailVerification(id);
     }
     return updated;
   }
@@ -666,21 +667,15 @@ export class UsersService {
   }
 
   /**
-   * Moves the account to a new address, and ends every session doing so.
-   *
-   * The address is the account's primary identifier and its recovery channel, so
-   * changing it is a credential change in everything but name — which is why
-   * `src/common/errors/README.md` has always listed "email changed" among the
-   * triggers for `SESSION_INVALIDATED`. The code did not do it: the new address
-   * was unverified (login refuses those) while every access token issued against
-   * the OLD one kept working, so an attacker who had taken the account could
-   * move it out of the owner's reach and keep their own session alive.
+   * Moves the account to a new address and emails a verification link there.
+   * The address is the recovery channel, so every OTHER session ends; the
+   * caller gets a fresh session (their current tokens die with the cutoff).
    */
   async updateEmail(
     userId: string,
     dto: UpdateAuthUserEmailDto,
-    actorId: string,
-  ): Promise<User> {
+    context: RefreshTokenContext = {},
+  ): Promise<{ user: User; tokens: SessionTokens }> {
     const user = await this.findById(userId);
     const passwordMatches = await bcrypt.compare(
       dto.currentPassword,
@@ -689,30 +684,24 @@ export class UsersService {
     if (!passwordMatches) {
       throw Errors.currentPasswordIncorrect();
     }
-    return this.refreshTokenService.endAllSessions(userId, actorId, {
-      email: dto.newEmail.toLowerCase(),
-      emailVerifiedAt: null,
-    });
+    const updated = await this.refreshTokenService.endAllSessions(
+      userId,
+      userId,
+      { email: dto.newEmail.toLowerCase(), emailVerifiedAt: null },
+    );
+    await this.queueEmailVerification(userId);
+    const tokens = await this.refreshTokenService.startSession(
+      userId,
+      updated.passwordChangedAt,
+      context,
+    );
+    return { user: updated, tokens };
   }
 
   /**
-   * THE credential write. Every password change on an existing account goes
-   * through here.
-   *
-   * Writes the hash, stamps `passwordChangedAt`, and revokes every refresh
-   * family — all in one transaction, under the session lock.
-   *
-   * There is deliberately no parameter to skip the revocation. Hashing was
-   * already centralized while the WRITE was not, and the result was that five of
-   * six call sites remembered `passwordChangedAt` and forgot to end the
-   * sessions: access tokens died, so the account holder believed the session was
-   * closed, while a stolen refresh token kept exchanging and re-extending its
-   * own expiry indefinitely. Making the revocation impossible to omit is the
-   * fix; asking callers to remember it is what failed.
-   *
-   * `extraData` lets a caller fold in fields that must land atomically with the
-   * credential change — clearing an OTP, anonymising a profile — without
-   * reopening the chance to write a password some other way.
+   * THE credential write: hash, cutoff bump and revocation of every refresh
+   * family, in one transaction. There is no way to change a password without
+   * ending the account's sessions. `extraData` lands in the same row update.
    */
   private async applyPasswordChange(
     userId: string,
@@ -739,11 +728,16 @@ export class UsersService {
     });
   }
 
+  /**
+   * Changes the caller's password and ends every OTHER session, like Laravel's
+   * `logoutOtherDevices` / Django's `update_session_auth_hash`: the caller gets
+   * a fresh session in the response.
+   */
   async updateOwnPassword(
     userId: string,
     dto: UpdateAuthUserPasswordDto,
-    actorId: string,
-  ): Promise<User> {
+    context: RefreshTokenContext = {},
+  ): Promise<{ user: User; tokens: SessionTokens }> {
     const user = await this.findById(userId);
     const passwordMatches = await bcrypt.compare(
       dto.currentPassword,
@@ -755,10 +749,15 @@ export class UsersService {
     const updated = await this.applyPasswordChange(
       userId,
       dto.newPassword,
-      actorId,
+      userId,
     );
-    await this.notifyPasswordChanged(updated);
-    return updated;
+    await this.queuePasswordChangedNotice(userId);
+    const tokens = await this.refreshTokenService.startSession(
+      userId,
+      updated.passwordChangedAt,
+      context,
+    );
+    return { user: updated, tokens };
   }
 
   async updatePasswordAsAdmin(
@@ -782,7 +781,7 @@ export class UsersService {
       actorId,
       targetUserId: userId,
     });
-    await this.notifyPasswordChanged(updated);
+    await this.queuePasswordChangedNotice(userId);
     return updated;
   }
 
@@ -897,39 +896,32 @@ export class UsersService {
     });
   }
 
-  // Public entry point for "resend my verification email". Accepts email
-  // rather than userId so unverified users (who can't log in) can call
-  // it without authenticating. Silent no-op if the email isn't
-  // registered or is already verified — keeps the response opaque.
+  // Public "resend my verification email". Silent no-op when the address is
+  // unknown or already verified, so the response never varies.
   async resendEmailVerification(email: string): Promise<void> {
     const user = await this.findByEmail(email);
-    if (!user || user.deletedAt || user.emailVerifiedAt) {
+    if (!user || user.emailVerifiedAt) {
       return;
     }
-    await this.sendEmailVerificationLink(user);
+    await this.queueEmailVerification(user.id);
   }
 
+  // Same answer for every address; the link is only sent to a live account.
   async requestPasswordReset(email: string): Promise<void> {
     const user = await this.findByEmail(email);
-    // Intentionally no error when the email isn't registered — the caller
-    // (controller) returns 200 regardless, so the attacker can't enumerate
-    // registered emails through this endpoint.
     if (!user || !user.isActive) {
       return;
     }
-    const otp = generateOtp();
-    const otpHash = await bcrypt.hash(otp, BCRYPT_ROUNDS);
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: {
-        otpHash,
-        otpPurpose: OtpPurpose.PASSWORD_RESET,
-        otpExpiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
-      },
+    await this.queueProducer.enqueue(JobName.USER_PASSWORD_RESET_V1, {
+      payloadVersion: 1,
+      userId: user.id,
     });
-    await this.emailService.sendPasswordResetOtp(user.email, otp);
   }
 
+  /**
+   * Redeems a reset link: single use, 60-minute expiry, and every session the
+   * account holds ends. Every failure is INVALID_LINK.
+   */
   async resetPassword(dto: ResetPasswordDto): Promise<void> {
     const user = await this.findByEmail(dto.email);
     if (
@@ -938,78 +930,32 @@ export class UsersService {
       !user.otpHash ||
       user.otpPurpose !== OtpPurpose.PASSWORD_RESET ||
       !user.otpExpiresAt ||
-      user.otpExpiresAt.getTime() < Date.now()
+      user.otpExpiresAt.getTime() < Date.now() ||
+      !isSameHash(hashOpaqueToken(dto.token), user.otpHash)
     ) {
-      // Same opaque error for every failure mode so an attacker can't
-      // distinguish "wrong email" from "expired OTP" from "wrong code".
-      throw Errors.invalidOtp();
+      throw Errors.invalidLink();
     }
-    const otpMatches = await bcrypt.compare(dto.otp, user.otpHash);
-    if (!otpMatches) {
-      throw Errors.invalidOtp();
-    }
-    const updated = await this.applyPasswordChange(
-      user.id,
-      dto.newPassword,
-      user.id,
-      {
-        // Folded into the same transaction: a reset that cleared the OTP but
-        // failed to write the password would burn the code for nothing.
-        otpHash: null,
-        otpPurpose: null,
-        otpExpiresAt: null,
-        failedLoginCount: 0,
-        lockedUntil: null,
-      },
-    );
+    await this.applyPasswordChange(user.id, dto.newPassword, user.id, {
+      otpHash: null,
+      otpPurpose: null,
+      otpExpiresAt: null,
+    });
     await this.auditService.record({
       action: 'password.reset.completed',
       actorId: user.id,
       targetUserId: user.id,
     });
-    await this.notifyPasswordChanged(updated);
+    await this.queuePasswordChangedNotice(user.id);
   }
 
   // ── Support operations ─────────────────────────────────────────────────
-  //
-  // Three narrow capabilities held by PLATFORM_APP_SUPPORT, deliberately NOT
-  // expressed as slices of `update User`. The difference is the whole design:
-  // unlocking an account or re-sending its verification link HELPS its owner,
-  // whereas changing its email TAKES it from them. Granting support the ability
-  // to edit an arbitrary user is account takeover wearing a helpful hat, so
-  // each of these is its own permission and none of them can write a field.
+  // Narrow capabilities held by PLATFORM_APP_SUPPORT, each its own permission
+  // so support can help an account holder without being able to edit them.
 
   /**
-   * Clears a failed-login lockout.
-   *
-   * Deliberately does NOT touch the password, the email, or any session — an
-   * account is unlocked exactly as its owner left it. `findByIdOrThrow` keeps
-   * the 404 behaviour consistent with every other admin route.
-   */
-  async unlock(userId: string, actorId: string): Promise<User> {
-    const user = await this.findById(userId);
-    const unlocked = await this.prisma.user.update({
-      where: { id: user.id },
-      data: { failedLoginCount: 0, lockedUntil: null, updatedBy: actorId },
-    });
-    await this.auditService.record({
-      action: 'user.unlocked_by_support',
-      actorId,
-      targetUserId: user.id,
-      metadata: { previousFailedLoginCount: user.failedLoginCount },
-    });
-    return unlocked;
-  }
-
-  /**
-   * Ends every session the account holds, on every device.
-   *
-   * Moves the session cutoff as well as revoking the refresh chains, so access
-   * tokens die too. Revoking the chains alone was very nearly a no-op against
-   * the attacker this exists for: `jwt.expiresIn` is 30 days in this template,
-   * so "we have revoked their sessions" left a stolen access token working for
-   * up to a month. The old docstring called that window "inherent … which is why
-   * they are short-lived"; the reasoning is sound and the premise was false.
+   * Ends every session the account holds, on every device: revokes the refresh
+   * chains and moves the cutoff, so live access tokens (`JWT_EXPIRES_IN`,
+   * 15 minutes by default) stop working immediately rather than at expiry.
    */
   async revokeAllSessions(userId: string, actorId: string): Promise<void> {
     const user = await this.findById(userId);
@@ -1037,11 +983,21 @@ export class UsersService {
     if (user.emailVerifiedAt) {
       throw Errors.resourceConflict('That account is already verified');
     }
-    await this.sendEmailVerificationLink(user);
+    await this.queueEmailVerification(user.id);
     await this.auditService.record({
       action: 'user.verification_resent_by_support',
       actorId,
       targetUserId: user.id,
     });
   }
+}
+
+/** Constant-time comparison of two hex digests. */
+function isSameHash(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left, 'hex');
+  const rightBuffer = Buffer.from(right, 'hex');
+  return (
+    leftBuffer.length === rightBuffer.length &&
+    timingSafeEqual(leftBuffer, rightBuffer)
+  );
 }

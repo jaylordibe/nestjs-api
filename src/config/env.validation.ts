@@ -417,6 +417,13 @@ export const envValidationSchema = Joi.object({
     .pattern(/[^/]$/, { name: 'no-trailing-slash' })
     .optional(),
 
+  // Web page linked from the password-reset email. Defaults to
+  // `${WEB_BASE_URL}/auth/reset-password`.
+  PASSWORD_RESET_URL: Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .pattern(/[^/]$/, { name: 'no-trailing-slash' })
+    .optional(),
+
   THROTTLE_TTL_MS: Joi.number().integer().min(1000).default(60_000),
   THROTTLE_LIMIT: Joi.number().integer().min(1).default(100),
 

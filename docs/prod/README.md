@@ -336,9 +336,7 @@ branch is pushed.
 Note the ordering above: migrations run **before** the new container starts, so
 the **old** build serves traffic against the **new** schema for the whole
 build-and-swap window. That is why migrations must normally be expand-only — add
-nullable, backfill separately, tighten in a later release — and it is what the
-`migration-safety` CI job proves by booting the released build against the
-proposed schema.
+nullable, backfill separately, tighten in a later release.
 
 A release that cannot satisfy that (a dropped or renamed table, a tightened
 constraint the running code violates) needs a **maintenance window**, and the
@@ -358,11 +356,8 @@ docker compose --profile migrate run --rm --build migrate
 docker compose up -d --force-recreate --wait api
 ```
 
-CI tells you when this applies: the `migration-safety` job fails the
-released-build check, or — for a deliberate baseline rewrite — prints a warning
-naming exactly which assertions it skipped and why. **Do not merge past either
-without reading it.** Both mean the same thing: the running build cannot serve
-traffic on the new schema.
+Review each migration for this before release: a dropped column the running
+build still selects (Prisma selects every scalar column) is enough.
 
 Rolling back a schema change means restoring a backup, not redeploying — so
 confirm you have a **verified** one before starting. See

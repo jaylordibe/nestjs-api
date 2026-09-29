@@ -37,8 +37,6 @@ export class UserResponseDto {
   // so both decorators are needed to keep the docs honest.
   @ApiHideProperty() @Exclude() password!: string;
   @ApiHideProperty() @Exclude() passwordChangedAt!: Date | null;
-  @ApiHideProperty() @Exclude() failedLoginCount!: number;
-  @ApiHideProperty() @Exclude() lockedUntil!: Date | null;
   @ApiHideProperty() @Exclude() otpHash!: string | null;
   @ApiHideProperty() @Exclude() otpPurpose!: string | null;
   @ApiHideProperty() @Exclude() otpExpiresAt!: Date | null;

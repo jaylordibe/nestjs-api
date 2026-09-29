@@ -10,10 +10,6 @@ import {
   EmailTemplates,
 } from './template-engine';
 
-// Only used by the password-reset flow now that email verification
-// switched to a JWT link.
-const OTP_EXPIRY_MINUTES = 15;
-
 // Facade used by the rest of the app. Resolves templates through the
 // Handlebars engine, then hands a fully-rendered message to whichever
 // adapter is bound (stub in dev/test, Resend in staging/prod). Call sites
@@ -58,36 +54,20 @@ export class EmailService {
     });
   }
 
-  // Sent to the owner of an EXISTING account when someone tries to sign up
-  // with their email. `/auth/register` now answers a collision with the same
-  // 201 as a real signup, so this email is the only thing that tells a real
-  // person "you already have an account" — without it the uniform response
-  // would silently strand them.
-  sendDuplicateSignupAttemptNotification(
+  sendPasswordResetLink(
     email: string,
     firstName: string,
-    signInUrl: string,
-    occurredAt: Date,
+    resetUrl: string,
+    expiresInMinutes: number,
   ): Promise<void> {
-    return this.sendTemplate('duplicate-signup-attempt', email, {
+    return this.sendTemplate('password-reset-link', email, {
       firstName,
-      signInUrl,
-      occurredAt: occurredAt.toISOString(),
+      resetUrl,
+      expiresInMinutes,
     });
   }
 
-  sendPasswordResetOtp(email: string, otp: string): Promise<void> {
-    return this.sendTemplate('password-reset-otp', email, {
-      otp,
-      expiresInMinutes: OTP_EXPIRY_MINUTES,
-    });
-  }
-
-  // Security notification sent to the user after any password mutation
-  // (self-change, admin reset, password-reset-via-OTP, admin PATCH with
-  // a password field). `occurredAt` is a pre-formatted ISO string so the
-  // template doesn't need date-formatting helpers — caller decides UTC
-  // vs. user's timezone.
+  // Sent after any password change (self, admin reset, reset link).
   sendPasswordChangedNotification(
     email: string,
     firstName: string,

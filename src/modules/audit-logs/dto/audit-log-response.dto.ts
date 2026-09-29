@@ -1,8 +1,8 @@
 import { AuditLog, Prisma } from '@prisma/client';
 
 // Public shape of a user reference embedded in an audit-log row. Narrow on
-// purpose — never the full User, which carries the password hash, OTP fields
-// and lockout counters.
+// purpose — never the full User, which carries the password hash and OTP
+// fields.
 export interface AuditLogUserRef {
   id: string;
   email: string;

@@ -30,7 +30,7 @@ export class BusinessInvitationAcceptanceController {
    *
    * An invitee without an account registers through the ordinary
    * `POST /auth/register` first — which is what keeps ONE registration policy
-   * (disposable-email blocking, verification, lockout) instead of forking a
+   * (disposable-email rejection, verification) instead of forking a
    * second, less-guarded account-creation path behind a bearer token.
    *
    * No permission is required because there is none that could apply: authority

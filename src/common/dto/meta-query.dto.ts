@@ -5,11 +5,12 @@ import {
   IsInt,
   IsOptional,
   IsString,
-  Max,
   MaxLength,
   Min,
 } from 'class-validator';
 import { Errors } from '../errors/errors';
+
+export const MAX_PER_PAGE = 100;
 
 export enum SortOrder {
   ASC = 'asc',
@@ -42,11 +43,17 @@ export class MetaQueryDto {
   @Min(1)
   page: number = 1;
 
-  @ApiPropertyOptional({ default: 20, minimum: 1, maximum: 100 })
+  @ApiPropertyOptional({
+    default: 20,
+    minimum: 1,
+    description: `Values above ${MAX_PER_PAGE} are clamped to ${MAX_PER_PAGE}.`,
+  })
   @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'number' ? Math.min(value, MAX_PER_PAGE) : value,
+  )
   @IsInt()
   @Min(1)
-  @Max(100)
   perPage: number = 20;
 
   // Free-text search term. The set of fields it actually searches is

@@ -66,6 +66,14 @@ Do not hand-roll users, roles, permissions, or memberships — use the
 `test/setup/rbac.ts` fixtures, and re-seed the catalog after every truncation
 that wipes authorization tables.
 
+Fixtures get their access token from `issueAccessToken` (the session service
+login uses), not from `POST /auth/login`. Only auth specs call the login
+endpoint.
+
+Account emails are queued and the test app runs no worker. To assert on one,
+`captureEmails(app)` then `deliverQueuedEmails(app)` (`test/setup/emails.ts`);
+`linkParameter` reads a token out of the emailed link.
+
 ## Assertions
 
 **Public API** — assert status, stable `errorCode`, relevant `details`, response

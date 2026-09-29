@@ -66,10 +66,11 @@ export const DEFAULT_JOB_RETENTION_POLICY: JobRetentionPolicy = {
 
 export enum QueueName {
   // Infrastructure housekeeping — the queue-heartbeat job that proves the
-  // producer → Redis → worker loop is alive. The only queue this template
-  // ships, because it is the only one with a producer; add a domain queue
-  // (`notifications`, `bookings`, …) when you have real work for it.
+  // producer → Redis → worker loop is alive.
   MAINTENANCE = 'maintenance',
+  // Account emails (verification, password reset, password-changed notice),
+  // sent off the request path so a slow provider never delays a response.
+  NOTIFICATIONS = 'notifications',
 }
 
 export interface QueueRegistration {
@@ -87,6 +88,10 @@ export const QUEUE_REGISTRATIONS: Record<QueueName, QueueRegistration> = {
     description:
       'Infrastructure housekeeping. Low volume, nothing user-visible, so it runs at a deliberately small concurrency and never competes with a domain queue.',
     concurrency: 2,
+  },
+  [QueueName.NOTIFICATIONS]: {
+    description:
+      'Account emails. Each job reloads the user and renders the message in the worker, so no address or token ever sits in Redis.',
   },
 };
 

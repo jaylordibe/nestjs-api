@@ -9,6 +9,7 @@ import {
 } from '../../prisma/rbac-seeder';
 import { BusinessMembershipStatus } from '../../src/common/enums/business-membership-status.enum';
 import { SeededRoleName } from '../../src/common/enums/seeded-role-name.enum';
+import { RefreshTokenService } from '../../src/modules/auth/refresh-token.service';
 import { PrismaService } from '../../src/prisma/prisma.service';
 
 // Shared RBAC fixtures.
@@ -36,21 +37,22 @@ export async function seedRbacCatalog(
   await seedRoles(prisma);
 }
 
-export async function loginAs(
+/**
+ * An access token for an existing account, minted through the same session
+ * service `POST /auth/login` uses (refresh row + signed JWT), without the
+ * password round trip. Auth specs use the real endpoint instead.
+ */
+export async function issueAccessToken(
   app: INestApplication<App>,
-  email: string,
-  password: string = TEST_PASSWORD,
+  userId: string,
 ): Promise<string> {
-  const response = await request(app.getHttpServer())
-    .post('/api/auth/login')
-    .send({ identifier: email, password });
-  const body = response.body as { accessToken?: string };
-  if (!body.accessToken) {
-    throw new Error(
-      `loginAs(${email}) failed: ${response.status} ${JSON.stringify(response.body)}`,
-    );
-  }
-  return body.accessToken;
+  const user = await app
+    .get(PrismaService)
+    .user.findUniqueOrThrow({ where: { id: userId } });
+  const { accessToken } = await app
+    .get(RefreshTokenService)
+    .startSession(user.id, user.passwordChangedAt);
+  return accessToken;
 }
 
 export interface SeededUser {
@@ -94,7 +96,7 @@ export async function createUser(
     await assignPlatformRole(prisma, user.id, roleName);
   }
 
-  return { id: user.id, email, token: await loginAs(app, email) };
+  return { id: user.id, email, token: await issueAccessToken(app, user.id) };
 }
 
 // A platform administrator: holds `manage all`.
@@ -125,10 +127,10 @@ export function createRegularUser(
 
 /**
  * Registers through the real `POST /auth/register`, then marks the email
- * verified and logs in. Use where the spec is exercising the register flow
- * itself; `createRegularUser` is cheaper otherwise.
+ * verified and issues a token. Use where the spec is exercising the register
+ * flow itself; `createRegularUser` is cheaper otherwise.
  */
-export async function registerAndLogin(
+export async function registerVerifiedUser(
   app: INestApplication<App>,
   email = 'user@example.com',
 ): Promise<SeededUser> {
@@ -144,14 +146,14 @@ export async function registerAndLogin(
   // rows (a partial index), so Prisma does not expose it as a unique selector.
   const user = await prisma.user.findFirst({ where: { email } });
   if (!user)
-    throw new Error(`registerAndLogin(${email}): user was not created`);
+    throw new Error(`registerVerifiedUser(${email}): user was not created`);
 
   await prisma.user.update({
     where: { id: user.id },
     data: { emailVerifiedAt: new Date() },
   });
 
-  return { id: user.id, email, token: await loginAs(app, email) };
+  return { id: user.id, email, token: await issueAccessToken(app, user.id) };
 }
 
 /** The id of a seeded role, by name. */

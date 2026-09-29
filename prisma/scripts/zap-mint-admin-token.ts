@@ -7,8 +7,8 @@
  * it to stdout so the workflow can inject it via ZAP's replacer rule.
  *
  * The token is minted directly rather than via POST /auth/login on purpose:
- * login is guarded by lockout (and, in derived services, bot/origin
- * protections) that are brittle to satisfy headlessly. We control JWT_SECRET
+ * login is throttled (and, in derived services, guarded by bot/origin
+ * protections), which is brittle to satisfy headlessly. We control JWT_SECRET
  * in CI, so we sign a token that JwtStrategy will accept.
  *
  * Token contract MUST match src/modules/auth/auth.module.ts + jwt.strategy.ts:

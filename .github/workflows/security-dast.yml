@@ -126,7 +126,7 @@ jobs:
 
       # Create a throwaway admin in the scan DB and mint a bearer token for it,
       # so the scan exercises endpoints BEHIND auth (not just the 401 wall).
-      # Minted directly (not via /auth/login) to dodge lockout/bot protections;
+      # Minted directly (not via /auth/login) to dodge the login throttle;
       # the token carries no jti so a stray POST /auth/logout can't revoke it
       # mid-scan. The token is masked in logs and passed to the next step via
       # the step output.

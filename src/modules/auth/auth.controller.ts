@@ -25,6 +25,8 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import { OperationAcknowledgementDto } from '../../common/dto/operation-acknowledgement.dto';
+import { ErrorCode } from '../../common/errors/error-code.enum';
+import { loginThrottleTracker } from '../../common/util/login-throttle.util';
 import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
 import { EmailVerificationResponseDto } from './dto/email-verification-response.dto';
@@ -34,20 +36,9 @@ import { LogoutDto } from './dto/logout.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RegisterDto } from './dto/register.dto';
 import { RegisterResponseDto } from './dto/register-response.dto';
-import type { RefreshTokenContext } from './refresh-token.service';
+import { readRefreshTokenContext } from './refresh-token-context';
 import { ResendVerificationDto } from './dto/resend-verification.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
-
-// Device provenance recorded against an issued refresh token, for the audit
-// trail. `request.ip` already honours `trust proxy` (set in configure-http-app.ts), so this
-// is the client address rather than the load balancer's. Both fields are
-// best-effort: a missing header must never be a reason to fail a login.
-function readRefreshTokenContext(request: Request): RefreshTokenContext {
-  return {
-    userAgent: request.get('user-agent') ?? null,
-    ipAddress: request.ip ?? null,
-  };
-}
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -66,9 +57,12 @@ export class AuthController {
     return this.authService.register(dto);
   }
 
+  // Keyed by identifier + IP rather than IP alone; see loginThrottleTracker.
   @Post('login')
   @Public()
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Throttle({
+    default: { limit: 5, ttl: 60_000, getTracker: loginThrottleTracker },
+  })
   @HttpCode(HttpStatus.OK)
   @ApiOkResponse({ type: LoginResponseDto })
   login(
@@ -83,12 +77,8 @@ export class AuthController {
    *
    * `@Public()` by necessity: a client arrives here precisely because its
    * access token has expired, so it has no bearer credential to present. The
-   * refresh token in the body IS the credential.
-   *
-   * Throttled harder than login. A legitimate client refreshes once per access
-   * token lifetime — a handful of times an hour at most — so anything
-   * approaching this ceiling is either a broken retry loop or someone walking
-   * stolen tokens, and neither deserves the bandwidth.
+   * refresh token in the body IS the credential. A legitimate client
+   * refreshes once per access-token lifetime, so 10/min per IP is ample.
    */
   @Post('refresh')
   @Public()
@@ -146,10 +136,6 @@ export class AuthController {
       await this.usersService.verifyEmailByToken(dto.token);
       response.redirect(302, `${baseUrl}?status=success`);
     } catch (error) {
-      // Map known auth failures to a stable `reason` slug the frontend
-      // can branch on (e.g. show "link expired" vs a generic error).
-      // Any other exception falls through to a generic error so we
-      // don't leak internals into the URL.
       const reason = mapVerifyEmailError(error);
       response.redirect(
         302,
@@ -204,17 +190,15 @@ export class AuthController {
   }
 }
 
-// Frontend-stable slugs for verification failures. Keep this list in sync
-// with the web app's verify-email view's switch on `?reason=`.
+// Frontend-stable `?reason=` slugs, keyed on `errorCode` (never the message).
 function mapVerifyEmailError(error: unknown): string {
   if (error instanceof HttpException) {
-    const status = error.getStatus();
-    const message = error.message.toLowerCase();
-    if (status === 410 || message.includes('expired')) return 'expired';
-    if (status === 400 && message.includes('already'))
-      return 'already-verified';
-    if (status === 400 || status === 401) return 'invalid';
-    if (status === 404) return 'not-found';
+    const response = error.getResponse();
+    const errorCode =
+      typeof response === 'object' && response !== null
+        ? (response as { errorCode?: unknown }).errorCode
+        : undefined;
+    if (errorCode === ErrorCode.INVALID_LINK) return 'invalid';
   }
   return 'unknown';
 }

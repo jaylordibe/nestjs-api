@@ -267,11 +267,11 @@ describe('Authorization (e2e)', () => {
     });
     const victim = await createRegularUser(app, 'victim@example.com');
 
-    // Unlocking HELPS the owner…
+    // Ending the account's sessions HELPS the owner…
     await request(app.getHttpServer())
-      .post(`/api/users/${victim.id}/unlock`)
+      .post(`/api/users/${victim.id}/revoke-sessions`)
       .set('Authorization', `Bearer ${support.token}`)
-      .expect(200);
+      .expect(204);
 
     // …whereas changing their email TAKES the account, so it is refused.
     await request(app.getHttpServer())

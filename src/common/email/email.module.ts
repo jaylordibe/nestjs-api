@@ -11,7 +11,7 @@ import { EmailTemplateEngine } from './template-engine';
 
 // Provider selection is driven by `EMAIL_PROVIDER` in env (validated by
 // Joi to one of: stub, resend). Tests and local dev use `stub` by
-// default — no real emails get sent, and OTPs surface in the app logs so
+// default — no real emails get sent, and links surface in the app logs so
 // you can complete flows manually. Staging/prod set `EMAIL_PROVIDER=resend`
 // (plus RESEND_API_KEY + EMAIL_FROM) to route through Resend.
 //

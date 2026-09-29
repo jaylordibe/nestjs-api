@@ -168,12 +168,9 @@ export const Errors = {
   invalidLink: (): BadRequestException =>
     new BadRequestException({
       errorCode: ErrorCode.INVALID_LINK,
-      message: 'Invalid or expired verification link',
+      message: 'This link is invalid or has expired',
     }),
-  // Direct rejection of a disposable / temporary email domain. NOTE: auth
-  // register/login deliberately do NOT use this — they drop/collapse silently
-  // to avoid leaking which domains are blocked (enumeration). Reserve this for
-  // contexts where surfacing the reason is acceptable (e.g. an admin form).
+  // Sign-up with a disposable / temporary email provider.
   emailDomainDisallowed: (domain: string): BadRequestException =>
     new BadRequestException({
       errorCode: ErrorCode.EMAIL_DOMAIN_DISALLOWED,

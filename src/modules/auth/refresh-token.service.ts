@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
 import { Prisma, User } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { AuditService } from '../../common/audit/audit.service';
@@ -12,8 +13,12 @@ import {
   lockRefreshTokenFamily,
   lockUserRow,
 } from '../../common/util/row-lock.util';
-import { nextWholeSecond } from '../../common/util/session-cutoff.util';
+import {
+  nextWholeSecond,
+  waitForSessionCutoff,
+} from '../../common/util/session-cutoff.util';
 import { PrismaService } from '../../prisma/prisma.service';
+import type { JwtPayload } from './strategies/jwt.strategy';
 
 // Where a refresh token came from, captured at issue for the audit trail.
 // Optional throughout: tokens are also issued outside an HTTP context (tests,
@@ -46,6 +51,14 @@ export interface IssuedRefreshToken {
   readonly issuedAt: Date;
 }
 
+/** An access + refresh pair for one session. */
+export interface SessionTokens {
+  readonly accessToken: string;
+  readonly refreshToken: string;
+  /** Access-token lifetime in seconds. */
+  readonly expiresIn: number;
+}
+
 /**
  * The authority on session state: refresh-token rows AND the session cutoff.
  *
@@ -70,7 +83,7 @@ export interface IssuedRefreshToken {
  * whose `iat` predates it, and `rotate` rejects any refresh row created before
  * it. Ending every session therefore means two writes — bump the cutoff, revoke
  * the rows — and doing only one of them is a silent half-measure. Revoking rows
- * alone leaves a 30-day access token alive; bumping the cutoff alone leaves a
+ * alone leaves live access tokens until they expire; bumping the cutoff alone leaves a
  * refresh row that can mint a fresh one.
  *
  * So the two are welded into {@link endAllSessionsInTransaction}, and the
@@ -93,11 +106,44 @@ export class RefreshTokenService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
+    private readonly jwtService: JwtService,
     configService: ConfigService,
   ) {
     this.lifetimeDays = configService.getOrThrow<number>(
       'jwt.refreshExpiresInDays',
     );
+  }
+
+  /**
+   * Starts a new session and returns its token pair.
+   *
+   * `expectedSessionCutoff` is the `passwordChangedAt` the caller read when it
+   * authenticated the user. The wait is correctness, not padding: the cutoff is
+   * rounded up to the next whole second, so a session started inside that
+   * second would carry an `iat` the cutoff already rejects. Used by login and
+   * by the credential changes that keep the caller signed in.
+   */
+  async startSession(
+    userId: string,
+    expectedSessionCutoff: Date | null,
+    context: RefreshTokenContext = {},
+  ): Promise<SessionTokens> {
+    await waitForSessionCutoff(expectedSessionCutoff);
+    const refreshToken = await this.issueForNewSession(
+      userId,
+      expectedSessionCutoff,
+      context,
+    );
+    return this.toSessionTokens(userId, refreshToken);
+  }
+
+  /** Rotates a refresh token and returns the new pair with its owner. */
+  async refreshSession(
+    presentedToken: string,
+    context: RefreshTokenContext = {},
+  ): Promise<{ user: User; tokens: SessionTokens }> {
+    const { user, refreshToken } = await this.rotate(presentedToken, context);
+    return { user, tokens: this.toSessionTokens(user.id, refreshToken) };
   }
 
   /**
@@ -111,8 +157,7 @@ export class RefreshTokenService {
    * precondition, that login inserts a live refresh row the revocation's
    * `updateMany` had already passed over, and mints an access token whose `iat`
    * is NEWER than the cutoff the revocation wrote. "Sign me out everywhere" then
-   * leaves a fully usable 30-day session behind, which is the exact opposite of
-   * what the user asked for.
+   * leaves a usable session behind.
    *
    * Checked under the user lock, so a revocation is either entirely before this
    * (cutoff moved → refused) or entirely after it (its cutoff strictly exceeds
@@ -203,7 +248,7 @@ export class RefreshTokenService {
         await lockUserRow(transaction, existing.userId);
         await lockRefreshTokenFamily(transaction, existing.familyId);
 
-        // Deleted, deactivated, or unverified since this session began. Decided
+        // Deleted or deactivated since this session began. Decided
         // HERE rather than after the transaction: a check that runs on a row
         // read outside the lock cannot bind the write that follows it. Nothing
         // has been written yet, so the rollback costs nothing and the sessions
@@ -477,10 +522,35 @@ export class RefreshTokenService {
     const owner = await transaction.user.findFirst({
       where: { id: userId, deletedAt: null },
     });
-    if (!owner || !owner.isActive || !owner.emailVerifiedAt) {
+    // Email verification gates sign-in only: a session survives an email
+    // change while the new address awaits verification.
+    if (!owner || !owner.isActive) {
       return null;
     }
     return owner;
+  }
+
+  /**
+   * Signs the access token with the refresh row's `issuedAt` as `iat`, so both
+   * halves of the session carry the instant the session decision committed. A
+   * revocation landing after that instant writes a cutoff that kills both.
+   * `jwtid` lets `/auth/logout` blocklist this one token.
+   */
+  private toSessionTokens(
+    userId: string,
+    refreshToken: IssuedRefreshToken,
+  ): SessionTokens {
+    const payload: JwtPayload = {
+      sub: userId,
+      iat: Math.floor(refreshToken.issuedAt.getTime() / 1000),
+    };
+    const accessToken = this.jwtService.sign(payload, { jwtid: randomUUID() });
+    const { exp, iat } = this.jwtService.decode<JwtPayload>(accessToken);
+    return {
+      accessToken,
+      refreshToken: refreshToken.token,
+      expiresIn: (exp ?? 0) - (iat ?? 0),
+    };
   }
 
   private async persist(
@@ -548,7 +618,7 @@ function sameInstant(left: Date | null, right: Date | null): boolean {
 /** The presented token had already been consumed — RFC 9700 §4.14.2 reuse. */
 class ReplayDetectedError extends Error {}
 
-/** The account was deleted, deactivated, or unverified since the session began. */
+/** The account was deleted or deactivated since the session began. */
 class SessionOwnerIneligibleError extends Error {}
 
 /** The session predates the account's current session cutoff. */

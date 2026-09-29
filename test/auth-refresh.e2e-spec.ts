@@ -118,6 +118,8 @@ describe('Auth refresh tokens (e2e)', () => {
 
     expect(renewed.accessToken).toBeTruthy();
     expect(renewed.refreshToken).not.toBe(tokens.refreshToken);
+    expect(response.body.expiresIn).toEqual(expect.any(Number));
+    expect(response.body.expiresIn).toBeGreaterThan(0);
   });
 
   it('issues an access token that actually authenticates', async () => {

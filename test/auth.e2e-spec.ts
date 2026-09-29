@@ -2,10 +2,14 @@ import { INestApplication } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import request from 'supertest';
 import { App } from 'supertest/types';
-import { EmailService } from '../src/common/email/email.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { createTestApp } from './setup/test-app';
 import { truncateAll } from './setup/db';
+import {
+  captureEmails,
+  deliverQueuedEmails,
+  linkParameter,
+} from './setup/emails';
 import { seedRbacCatalog } from './setup/rbac';
 
 const VALID_PASSWORD = 'correct-horse-battery-1';
@@ -105,122 +109,63 @@ describe('Auth (e2e)', () => {
       expect(row.email).toBe('mixed@example.com');
     });
 
-    // An already-registered email used to surface the global Prisma filter's
-    // 409 UNIQUE_CONSTRAINT_VIOLATION — a free account-existence oracle on an
-    // unauthenticated endpoint. It now returns the same 201 as a real signup
-    // (OWASP WSTG-IDNT-04) and tells the actual owner by email instead. The
-    // P2002 envelope contract still has coverage, via the admin create-user
-    // path in users.e2e-spec.ts, where a conflict SHOULD be reported.
-    it('answers an already-registered email with the same 201 as a fresh signup', async () => {
+    it('emails a verification link that verifies the account', async () => {
+      const emails = captureEmails(app);
+      try {
+        await request(app.getHttpServer())
+          .post('/api/auth/register')
+          .send({
+            email: 'linked@example.com',
+            password: VALID_PASSWORD,
+            firstName: 'Linked',
+            lastName: 'User',
+          })
+          .expect(201);
+        expect(await deliverQueuedEmails(app)).toBe(1);
+        expect(emails.sent).toHaveLength(1);
+        expect(emails.sent[0]).toMatchObject({
+          to: 'linked@example.com',
+          template: 'email-verification-link',
+        });
+
+        const token = linkParameter(emails.sent[0], 'verifyUrl', 'token');
+        await request(app.getHttpServer())
+          .post('/api/auth/verify-email')
+          .send({ token })
+          .expect(200);
+        const row = await app
+          .get(PrismaService)
+          .user.findFirstOrThrow({ where: { email: 'linked@example.com' } });
+        expect(row.emailVerifiedAt).not.toBeNull();
+      } finally {
+        emails.restore();
+      }
+    });
+
+    it('rejects an already-registered email with 409 UNIQUE_CONSTRAINT_VIOLATION', async () => {
       const payload = {
         email: 'dup@example.com',
         password: VALID_PASSWORD,
         firstName: 'Dup',
         lastName: 'User',
       };
-      const first = await request(app.getHttpServer())
+      await request(app.getHttpServer())
         .post('/api/auth/register')
         .send(payload)
         .expect(201);
       const duplicate = await request(app.getHttpServer())
         .post('/api/auth/register')
-        .send({ ...payload, firstName: 'Imposter' })
-        .expect(201);
+        .send({ ...payload, email: 'DUP@example.com', firstName: 'Imposter' })
+        .expect(409);
 
-      // Wire-shape parity — the caller learns nothing.
-      expect(duplicate.body).toEqual(first.body);
-      expect(duplicate.body.errorCode).toBeUndefined();
+      expect(duplicate.body.errorCode).toBe('UNIQUE_CONSTRAINT_VIOLATION');
+      expect(duplicate.body.details).toEqual({ field: 'email' });
 
-      // Nothing was created or overwritten by the second attempt.
-      const prisma = app.get(PrismaService);
-      const rows = await prisma.user.findMany({
-        where: { email: 'dup@example.com' },
-      });
+      const rows = await app
+        .get(PrismaService)
+        .user.findMany({ where: { email: 'dup@example.com' } });
       expect(rows).toHaveLength(1);
       expect(rows[0].firstName).toBe('Dup');
-    });
-
-    it('notifies the existing owner and audits the blocked attempt', async () => {
-      const duplicateNoticeSpy = jest
-        .spyOn(app.get(EmailService), 'sendDuplicateSignupAttemptNotification')
-        .mockResolvedValue(undefined);
-      try {
-        const payload = {
-          email: 'owner@example.com',
-          password: VALID_PASSWORD,
-          firstName: 'Owner',
-          lastName: 'User',
-        };
-        await request(app.getHttpServer())
-          .post('/api/auth/register')
-          .send(payload)
-          .expect(201);
-        const prisma = app.get(PrismaService);
-        const owner = await prisma.user.findFirstOrThrow({
-          where: { email: 'owner@example.com' },
-        });
-
-        await request(app.getHttpServer())
-          .post('/api/auth/register')
-          .send(payload)
-          .expect(201);
-
-        expect(duplicateNoticeSpy).toHaveBeenCalledTimes(1);
-        const [recipient, firstName] = duplicateNoticeSpy.mock.calls[0];
-        expect(recipient).toBe('owner@example.com');
-        expect(firstName).toBe('Owner');
-
-        const audit = await prisma.auditLog.findFirstOrThrow({
-          where: { action: 'user.register_blocked_existing_account' },
-        });
-        expect(audit.targetUserId).toBe(owner.id);
-        expect(audit.actorId).toBeNull();
-        expect(audit.metadata).toMatchObject({ isOwnerNotified: true });
-      } finally {
-        duplicateNoticeSpy.mockRestore();
-      }
-    });
-
-    // The notice email is the one thing a stranger can make us send to an
-    // arbitrary address, so it is capped per RECIPIENT (not just per IP,
-    // which an attacker rotates). The attempt is still audited every time,
-    // with `isOwnerNotified: false` recording the suppression.
-    it('sends at most one duplicate-signup notice per email address', async () => {
-      const duplicateNoticeSpy = jest
-        .spyOn(app.get(EmailService), 'sendDuplicateSignupAttemptNotification')
-        .mockResolvedValue(undefined);
-      try {
-        const payload = {
-          email: 'repeat@example.com',
-          password: VALID_PASSWORD,
-          firstName: 'Repeat',
-          lastName: 'User',
-        };
-        await request(app.getHttpServer())
-          .post('/api/auth/register')
-          .send(payload)
-          .expect(201);
-
-        for (let attempt = 0; attempt < 3; attempt++) {
-          await request(app.getHttpServer())
-            .post('/api/auth/register')
-            .send(payload)
-            .expect(201);
-        }
-
-        expect(duplicateNoticeSpy).toHaveBeenCalledTimes(1);
-        const prisma = app.get(PrismaService);
-        const audits = await prisma.auditLog.findMany({
-          where: { action: 'user.register_blocked_existing_account' },
-          orderBy: { createdAt: 'asc' },
-        });
-        expect(audits).toHaveLength(3);
-        expect(audits[0].metadata).toMatchObject({ isOwnerNotified: true });
-        expect(audits[1].metadata).toMatchObject({ isOwnerNotified: false });
-        expect(audits[2].metadata).toMatchObject({ isOwnerNotified: false });
-      } finally {
-        duplicateNoticeSpy.mockRestore();
-      }
     });
 
     it('audits a successful self-signup with the request envelope', async () => {
@@ -365,94 +310,60 @@ describe('Auth (e2e)', () => {
         .expect(401);
     });
 
-    it('locks the account after 5 failed attempts (M6)', async () => {
+    it('does not lock the account after repeated failures', async () => {
       await markVerified(app, 'bob@example.com');
-      for (let i = 0; i < 5; i++) {
+      for (let attempt = 0; attempt < 6; attempt++) {
         await request(app.getHttpServer())
           .post('/api/auth/login')
           .send({ identifier: 'bob@example.com', password: 'wrong-password-1' })
           .expect(401);
       }
-      // Correct password is now rejected until lockout expires.
       await request(app.getHttpServer())
         .post('/api/auth/login')
         .send({ identifier: 'bob@example.com', password: VALID_PASSWORD })
-        .expect(401);
+        .expect(200);
+    });
+
+    it('returns expiresIn (seconds) matching the access token lifetime', async () => {
+      await markVerified(app, 'bob@example.com');
+      const res = await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ identifier: 'bob@example.com', password: VALID_PASSWORD })
+        .expect(200);
+      const claims = app
+        .get(JwtService)
+        .decode<{ iat: number; exp: number }>(res.body.accessToken as string);
+      expect(res.body.expiresIn).toBe(claims.exp - claims.iat);
+      expect(res.body.expiresIn).toBeGreaterThan(0);
     });
   });
 
-  // Disposable / temporary email providers (mailinator, 10minutemail, …) are
-  // blocked at the auth boundary — silently on register (no enumeration of
-  // which domains are blocked) and as a generic INVALID_CREDENTIALS on login.
-  // Both paths leave an internal audit_logs entry for ops.
-  describe('disposable-email blocking (register + login)', () => {
-    const DISPOSABLE = 'throwaway@mailinator.com';
-
-    it('silently drops a disposable-email registration — byte-identical 201/body to a real one, no user row', async () => {
-      const realRes = await request(app.getHttpServer())
+  describe('disposable-email sign-up', () => {
+    it('rejects a disposable address with 400 EMAIL_DOMAIN_DISALLOWED and creates no user', async () => {
+      const res = await request(app.getHttpServer())
         .post('/api/auth/register')
         .send({
-          email: 'real-cmp@example.com',
-          password: VALID_PASSWORD,
-          firstName: 'Real',
-          lastName: 'User',
-        })
-        .expect(201);
-
-      const blockedRes = await request(app.getHttpServer())
-        .post('/api/auth/register')
-        .send({
-          email: DISPOSABLE,
+          email: 'throwaway@mailinator.com',
           password: VALID_PASSWORD,
           firstName: 'Throw',
           lastName: 'Away',
         })
-        .expect(201);
-
-      // Wire-shape parity — an attacker can't distinguish blocked from real.
-      expect(blockedRes.body).toEqual(realRes.body);
-      expect(blockedRes.body).toEqual({
-        message: expect.stringContaining('verify'),
-      });
-      expect(blockedRes.body.errorCode).toBeUndefined();
-
-      // No row written for the disposable email; the real one exists.
-      const prisma = app.get(PrismaService);
-      expect(await prisma.user.count({ where: { email: DISPOSABLE } })).toBe(0);
+        .expect(400);
+      expect(res.body.errorCode).toBe('EMAIL_DOMAIN_DISALLOWED');
+      expect(res.body.details).toEqual({ domain: 'mailinator.com' });
       expect(
-        await prisma.user.count({ where: { email: 'real-cmp@example.com' } }),
-      ).toBe(1);
-
-      // Audit log captured the silent rejection (with the domain).
-      const audit = await prisma.auditLog.findFirstOrThrow({
-        where: { action: 'user.register_blocked_disposable_email' },
-      });
-      const meta = audit.metadata as { domain?: string };
-      expect(meta.domain).toBe('mailinator.com');
-    });
-
-    it('blocks a disposable-email login as generic INVALID_CREDENTIALS (no disposable leak)', async () => {
-      const res = await request(app.getHttpServer())
-        .post('/api/auth/login')
-        .send({ identifier: DISPOSABLE, password: VALID_PASSWORD })
-        .expect(401);
-      // Collapsed into the same code as unknown-email / wrong-password so the
-      // disposable check isn't distinguishable.
-      expect(res.body.errorCode).toBe('INVALID_CREDENTIALS');
-
-      const prisma = app.get(PrismaService);
-      const audit = await prisma.auditLog.findFirst({
-        where: { action: 'user.login_blocked_disposable_email' },
-      });
-      expect(audit).not.toBeNull();
+        await app
+          .get(PrismaService)
+          .user.count({ where: { email: 'throwaway@mailinator.com' } }),
+      ).toBe(0);
     });
   });
 
   // Every audit_logs entry written inside an HTTP request gets a server-vouched
   // `metadata.request` envelope, populated by the ClsModule middleware
-  // (app.module.ts) and merged in AuditService. The disposable-register path
-  // records an audit log within request context, so it exercises the envelope
-  // without needing an authenticated session.
+  // (app.module.ts) and merged in AuditService. A self-signup records an audit
+  // log within request context, so it exercises the envelope without needing
+  // an authenticated session.
   describe('audit request-context envelope (ClsModule)', () => {
     it('auto-attaches metadata.request (requestId/method/path/userAgent/ip) to audit rows', async () => {
       await request(app.getHttpServer())
@@ -460,7 +371,7 @@ describe('Auth (e2e)', () => {
         .set('User-Agent', 'AuditEnvelopeProbe/1.0')
         .set('X-Request-Id', 'test-req-id-123')
         .send({
-          email: 'throwaway-env@mailinator.com',
+          email: 'envelope@example.com',
           password: VALID_PASSWORD,
           firstName: 'A',
           lastName: 'B',
@@ -469,7 +380,7 @@ describe('Auth (e2e)', () => {
 
       const prisma = app.get(PrismaService);
       const audit = await prisma.auditLog.findFirstOrThrow({
-        where: { action: 'user.register_blocked_disposable_email' },
+        where: { action: 'user.registered' },
       });
       const meta = audit.metadata as {
         request?: Record<string, unknown>;
@@ -534,6 +445,13 @@ describe('Auth (e2e)', () => {
       expect(res.headers.location).toContain('status=success');
     });
 
+    it('redirects an invalid GET link with reason=invalid', async () => {
+      const res = await request(app.getHttpServer())
+        .get('/api/auth/verify-email?token=eyJ0.definitely.not-a-real-jwt')
+        .expect(302);
+      expect(res.headers.location).toContain('status=error&reason=invalid');
+    });
+
     it('rejects a token with the wrong purpose claim (400)', async () => {
       const token = await registerAndSignEmailVerifyToken(
         'purpose@example.com',
@@ -589,10 +507,21 @@ describe('Auth (e2e)', () => {
         firstName: 'R',
         lastName: 'E',
       });
-      await request(app.getHttpServer())
-        .post('/api/auth/resend-verification')
-        .send({ email: 'real@example.com' })
-        .expect(200);
+      await deliverQueuedEmails(app);
+
+      const emails = captureEmails(app);
+      try {
+        await request(app.getHttpServer())
+          .post('/api/auth/resend-verification')
+          .send({ email: 'real@example.com' })
+          .expect(200);
+        await deliverQueuedEmails(app);
+        expect(emails.sent.map((email) => email.to)).toEqual([
+          'real@example.com',
+        ]);
+      } finally {
+        emails.restore();
+      }
     });
   });
 

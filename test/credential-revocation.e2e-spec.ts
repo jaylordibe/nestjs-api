@@ -1,9 +1,13 @@
 import { INestApplication } from '@nestjs/common';
-import * as bcrypt from 'bcrypt';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { truncateAll } from './setup/db';
+import {
+  captureEmails,
+  deliverQueuedEmails,
+  linkParameter,
+} from './setup/emails';
 import {
   createPlatformAdmin,
   seedRbacCatalog,
@@ -19,16 +23,10 @@ interface TokenPair {
 }
 
 /**
- * The credential-change contract.
- *
- * Changing a password is the one remediation every user knows: "I think someone
- * has my account, I'll change my password." It is only worth anything if it
- * actually ends the attacker's session — on every device, through every route
- * that can change a credential.
- *
- * Access-token expiry alone is not that. A stolen refresh token re-extends its
- * own expiry on every exchange, so a session that survives a password change
- * survives indefinitely, while the victim believes they have closed it.
+ * The credential-change contract: a password change ends every session the
+ * account holds, through every route that can change a credential. The one
+ * exception is the self-service change, which hands the caller a fresh session
+ * (like Laravel's `logoutOtherDevices`).
  */
 describe('Credential change revokes every session (e2e)', () => {
   let app: INestApplication<App>;
@@ -87,66 +85,62 @@ describe('Credential change revokes every session (e2e)', () => {
       .refreshToken.count({ where: { userId, revokedAt: null } });
 
   describe('every password-change route applies the same policy', () => {
-    it('self-service: PATCH /users/me/password', async () => {
+    it('self-service: PATCH /users/me/password ends other sessions and returns a fresh one', async () => {
       const userId = await registerVerified('self@example.com');
-      // Two devices, so "all devices" is a real assertion rather than a
-      // restatement of "the one session".
+      // Two devices, so "other devices" is a real assertion.
       const phone = await login('self@example.com');
       const laptop = await login('self@example.com');
 
-      await request(app.getHttpServer())
+      const response = await request(app.getHttpServer())
         .patch('/api/users/me/password')
         .set('Authorization', `Bearer ${laptop.accessToken}`)
         .send({ currentPassword: TEST_PASSWORD, newPassword: NEW_PASSWORD })
         .expect(200);
+      const fresh = response.body as TokenPair;
 
-      // Old access token — rejected by the `passwordChangedAt` vs `iat` check.
-      //
-      // This assertion was intermittently green until the cutoff was rounded up
-      // on write (`nextWholeSecond`): `iat` is whole seconds, so a token issued
-      // in the SAME second as the password change floored to the same value and
-      // survived. A test that passes only when the two land in different seconds
-      // is a test that hides a one-second authentication hole — and with a
-      // 30-day access token, that hole is 30 days of access.
+      // Every pre-change token is dead, the caller's included.
+      for (const oldSession of [phone, laptop]) {
+        await request(app.getHttpServer())
+          .get('/api/users/me')
+          .set('Authorization', `Bearer ${oldSession.accessToken}`)
+          .expect(401);
+        await refresh(oldSession.refreshToken).expect(401);
+      }
+
+      // The caller carries on with the pair from the response.
       await request(app.getHttpServer())
         .get('/api/users/me')
-        .set('Authorization', `Bearer ${phone.accessToken}`)
-        .expect(401);
-
-      // Old refresh tokens — BOTH devices, not just the one that acted.
-      await refresh(phone.refreshToken).expect(401);
-      await refresh(laptop.refreshToken).expect(401);
-
-      // Asserted on rows, not status codes: a 401 could come from some other
-      // path, but a live row is unambiguous.
-      expect(await liveTokenCount(userId)).toBe(0);
+        .set('Authorization', `Bearer ${fresh.accessToken}`)
+        .expect(200);
+      expect(await liveTokenCount(userId)).toBe(1);
+      await refresh(fresh.refreshToken).expect(200);
     });
 
-    it('OTP reset: POST /users/reset-password', async () => {
-      const userId = await registerVerified('otp@example.com');
-      const session = await login('otp@example.com');
+    it('reset link: POST /users/reset-password', async () => {
+      const userId = await registerVerified('reset@example.com');
+      const session = await login('reset@example.com');
+      await deliverQueuedEmails(app);
 
-      await request(app.getHttpServer())
-        .post('/api/users/request-password-reset')
-        .send({ email: 'otp@example.com' })
-        .expect(200);
+      const emails = captureEmails(app);
+      try {
+        await request(app.getHttpServer())
+          .post('/api/users/request-password-reset')
+          .send({ email: 'reset@example.com' })
+          .expect(200);
+        await deliverQueuedEmails(app);
+        const token = linkParameter(emails.sent[0], 'resetUrl', 'token');
 
-      // The OTP is hashed at rest, so the test plants a known one rather than
-      // scraping it out of a log line.
-      const prisma = app.get(PrismaService);
-      await prisma.user.update({
-        where: { id: userId },
-        data: { otpHash: await bcrypt.hash('123456', 10) },
-      });
-
-      await request(app.getHttpServer())
-        .post('/api/users/reset-password')
-        .send({
-          email: 'otp@example.com',
-          otp: '123456',
-          newPassword: NEW_PASSWORD,
-        })
-        .expect(200);
+        await request(app.getHttpServer())
+          .post('/api/users/reset-password')
+          .send({
+            email: 'reset@example.com',
+            token,
+            newPassword: NEW_PASSWORD,
+          })
+          .expect(200);
+      } finally {
+        emails.restore();
+      }
 
       await refresh(session.refreshToken).expect(401);
       expect(await liveTokenCount(userId)).toBe(0);
@@ -192,24 +186,24 @@ describe('Credential change revokes every session (e2e)', () => {
   });
 
   describe('concurrency', () => {
-    it('a refresh racing a password change leaves NO live token', async () => {
-      // The race the user-level lock exists for. Without it, a rotation that
-      // had inserted its replacement but not committed sat outside the
-      // revoking statement's snapshot and survived — so the password change
-      // reported success while one renewable token lived on.
+    it("a refresh racing a password change leaves only the caller's new session", async () => {
+      // Without the user-level lock, a rotation that had inserted its
+      // replacement but not committed escaped the revocation.
       const userId = await registerVerified('race@example.com');
       const session = await login('race@example.com');
       const actor = await login('race@example.com');
 
-      await Promise.all([
+      const [, change] = await Promise.all([
         refresh(session.refreshToken),
         request(app.getHttpServer())
           .patch('/api/users/me/password')
           .set('Authorization', `Bearer ${actor.accessToken}`)
-          .send({ currentPassword: TEST_PASSWORD, newPassword: NEW_PASSWORD }),
+          .send({ currentPassword: TEST_PASSWORD, newPassword: NEW_PASSWORD })
+          .expect(200),
       ]);
 
-      expect(await liveTokenCount(userId)).toBe(0);
+      expect(await liveTokenCount(userId)).toBe(1);
+      await refresh((change.body as TokenPair).refreshToken).expect(200);
     });
 
     it('a refresh racing logout-all leaves NO live token', async () => {
@@ -291,6 +285,8 @@ describe('Credential change revokes every session (e2e)', () => {
       .send({ currentPassword: TEST_PASSWORD, newPassword: NEW_PASSWORD })
       .expect(200);
 
-    expect(await liveTokenCount(admin.id)).toBe(0);
+    await refresh(session.refreshToken).expect(401);
+    // Only the fresh session the response handed back.
+    expect(await liveTokenCount(admin.id)).toBe(1);
   });
 });

@@ -18,15 +18,16 @@ export enum ErrorCode {
   TOKEN_EXPIRED = 'TOKEN_EXPIRED',
   /** Token `jti` is in the Redis logout blocklist (per-token revocation). */
   TOKEN_REVOKED = 'TOKEN_REVOKED',
-  /** Token `iat` predates user.passwordChangedAt — pw rotated, logout-all,
-   *  or email change. All extant tokens for the user are invalidated. */
+  /** Token `iat` predates user.passwordChangedAt — password change or reset,
+   *  email change, logout-all, or support revocation. A self-service password
+   *  or email change returns a fresh session to the caller. */
   SESSION_INVALIDATED = 'SESSION_INVALIDATED',
   /** User row missing, `isActive=false`, or soft-deleted. Collapsed to one
    *  code to avoid enumeration leaks (the strategy can't distinguish them
    *  via `prisma.scoped` anyway). */
   USER_INACTIVE = 'USER_INACTIVE',
-  /** /auth/login: wrong email or password. Also covers lockout — generic by
-   *  design (timing-equalized with bcrypt dummy compare). */
+  /** /auth/login: wrong identifier or password, or an inactive account. An
+   *  unknown identifier still runs a dummy bcrypt compare. */
   INVALID_CREDENTIALS = 'INVALID_CREDENTIALS',
   /** Login blocked: emailVerifiedAt is null. Leaked only after password
    *  verification (see auth.service.login). */
@@ -65,13 +66,13 @@ export enum ErrorCode {
   /** class-validator failure on a DTO. `details` is
    *  `Array<{ field: string; constraints: string[] }>`. */
   VALIDATION_FAILED = 'VALIDATION_FAILED',
-  /** Bad or expired OTP code (phone-verify, password-reset). */
+  /** Bad or expired phone-verification code. */
   INVALID_OTP = 'INVALID_OTP',
-  /** Bad or expired JWT-based link (verify-email). */
+  /** Bad, expired or already-used link token (verify-email,
+   *  password reset). */
   INVALID_LINK = 'INVALID_LINK',
-  /** Email is on a disposable / temporary provider. `details` is
-   *  `{ domain: string }`. Used by direct rejections; auth register/login
-   *  deliberately stay silent (no enumeration) — see AuthService. */
+  /** 400 — sign-up with a disposable / temporary email provider. `details`
+   *  is `{ domain: string }`. */
   EMAIL_DOMAIN_DISALLOWED = 'EMAIL_DOMAIN_DISALLOWED',
   /** Prisma P2003 — foreign-key references a record that doesn't exist.
    *  `details` is `{ field: string }`. */
@@ -85,7 +86,8 @@ export enum ErrorCode {
   // ── Resource state (404, 409) ────────────────────────────────────────
   /** Generic 404. `details` is `{ resource: string }`. */
   RESOURCE_NOT_FOUND = 'RESOURCE_NOT_FOUND',
-  /** Prisma P2002 — unique-index violation. `details` is `{ field: string }`. */
+  /** 409 — value already taken (Prisma P2002, or sign-up with a registered
+   *  email). `details` is `{ field: string }`. */
   UNIQUE_CONSTRAINT_VIOLATION = 'UNIQUE_CONSTRAINT_VIOLATION',
   /** Generic 409 for application-level conflicts that aren't a DB unique
    *  violation (e.g. business-rule clashes). */

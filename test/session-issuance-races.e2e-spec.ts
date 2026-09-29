@@ -33,8 +33,7 @@ interface TokenPair {
  * a transaction, so that window is real and wide. A login that started before a
  * logout-all used to finish after it — inserting a refresh row the revocation's
  * `updateMany` had already scanned past, and minting an access token with an
- * `iat` NEWER than the cutoff the revocation wrote. Both survived. With a 30-day
- * access token, "sign me out everywhere" left a month of access behind.
+ * `iat` NEWER than the cutoff the revocation wrote. Both survived.
  *
  * Every race here is driven through `test/setup/barrier.ts`, not `Promise.all`:
  * the login is parked at the exact seam where its lock would be taken, the
@@ -157,7 +156,8 @@ describe('Session issuance races (e2e)', () => {
       const loginResponse =
         outcome.paused.status === 'fulfilled' ? outcome.paused.value : null;
       expect(loginResponse?.status).toBe(401);
-      expect(await liveRefreshRowCount(user.id)).toBe(0);
+      // Only the fresh session the password change handed its caller.
+      expect(await liveRefreshRowCount(user.id)).toBe(1);
     });
 
     it('is refused when support revokes the account first', async () => {
@@ -352,7 +352,8 @@ describe('Session issuance races (e2e)', () => {
       const refreshResponse =
         outcome.paused.status === 'fulfilled' ? outcome.paused.value : null;
       expect(refreshResponse?.status).toBe(401);
-      expect(await liveRefreshRowCount(user.id)).toBe(0);
+      // Only the fresh session the password change handed its caller.
+      expect(await liveRefreshRowCount(user.id)).toBe(1);
     });
 
     it('is refused when support revokes the account first', async () => {
@@ -511,17 +512,17 @@ describe('Session issuance races (e2e)', () => {
         .set('Authorization', `Bearer ${admin.token}`)
         .expect(204);
 
-      // Revoking rows alone left this working for up to `jwt.expiresIn` — 30
-      // days in this template — which is most of the way to doing nothing.
+      // Revoking rows alone would leave this working until `jwt.expiresIn`.
       expect(await accessTokenWorks(device.accessToken)).toBe(false);
       expect(await refreshTokenWorks(device.refreshToken)).toBe(false);
     });
 
-    it('changing the account email ends every session', async () => {
+    it('changing the account email ends every other session', async () => {
       const user = await createRegularUser(app, 'mover@example.com');
+      const otherDevice = await loginPair(user.email);
       const device = await loginPair(user.email);
 
-      await request(app.getHttpServer())
+      const response = await request(app.getHttpServer())
         .patch('/api/users/me/email')
         .set('Authorization', `Bearer ${device.accessToken}`)
         .send({
@@ -529,12 +530,18 @@ describe('Session issuance races (e2e)', () => {
           newEmail: 'moved@example.com',
         })
         .expect(200);
+      const fresh = response.body as TokenPair;
 
-      // The address is the account's identifier and its recovery channel, so
-      // moving it is a credential change. `errors/README.md` has always said so.
-      expect(await accessTokenWorks(device.accessToken)).toBe(false);
-      expect(await refreshTokenWorks(device.refreshToken)).toBe(false);
-      expect(await liveRefreshRowCount(user.id)).toBe(0);
+      // The address is the recovery channel, so every pre-change token dies.
+      for (const oldSession of [otherDevice, device]) {
+        expect(await accessTokenWorks(oldSession.accessToken)).toBe(false);
+        expect(await refreshTokenWorks(oldSession.refreshToken)).toBe(false);
+      }
+      // The caller keeps going on the fresh pair, while the new address is
+      // still unverified.
+      expect(await accessTokenWorks(fresh.accessToken)).toBe(true);
+      expect(await liveRefreshRowCount(user.id)).toBe(1);
+      expect(await refreshTokenWorks(fresh.refreshToken)).toBe(true);
     });
 
     it('deactivating an account ends every session', async () => {

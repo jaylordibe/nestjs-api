@@ -23,6 +23,9 @@ import type { JobRetryPolicy } from './queue-registry';
 export enum JobName {
   MAINTENANCE_QUEUE_HEARTBEAT_V1 = 'maintenance.queue-heartbeat.v1',
   AUTH_REFRESH_TOKEN_RETENTION_V1 = 'auth.refresh-token-retention.v1',
+  USER_EMAIL_VERIFICATION_V1 = 'user.email-verification.v1',
+  USER_PASSWORD_RESET_V1 = 'user.password-reset.v1',
+  USER_PASSWORD_CHANGED_NOTICE_V1 = 'user.password-changed-notice.v1',
 }
 
 export interface JobRegistration {
@@ -64,6 +67,23 @@ export const JOB_REGISTRATIONS: Record<JobName, JobRegistration> = {
       backoffStrategy: 'exponential',
       initialBackoffMilliseconds: 60_000,
     },
+  },
+  [JobName.USER_EMAIL_VERIFICATION_V1]: {
+    queueName: QueueName.NOTIFICATIONS,
+    payloadVersion: 1,
+    description:
+      "Emails a verification link to the user's current address. Skipped when the address is already verified.",
+  },
+  [JobName.USER_PASSWORD_RESET_V1]: {
+    queueName: QueueName.NOTIFICATIONS,
+    payloadVersion: 1,
+    description:
+      'Mints a single-use password-reset token, stores its hash, and emails the reset link. A redelivery mints a fresh token, which supersedes the previous one.',
+  },
+  [JobName.USER_PASSWORD_CHANGED_NOTICE_V1]: {
+    queueName: QueueName.NOTIFICATIONS,
+    payloadVersion: 1,
+    description: 'Tells the user their password was changed.',
   },
 };
 

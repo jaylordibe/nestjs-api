@@ -48,10 +48,7 @@
     // rootDir to the repo root — emitting `dist/src/main.js` and breaking
     // `start:prod` (`node dist/main`).
     "prisma",
-    // Repository tooling (the Claude Engineering Framework validator and the
-    // build-artifact check). Run via ts-node and must never ship in the
-    // runtime image. Type-checked by tsconfig.scripts.json, which sets noEmit
-    // so it cannot write to dist/.
+    // Repository tooling specs. Never part of the runtime image.
     "scripts"
   ]
 }

@@ -184,6 +184,9 @@ export interface AppConfig {
   // page on `webBaseUrl`); production should set this to the real
   // verify-email landing page on the web frontend.
   emailVerifiedRedirectUrl: string;
+  // Web page a password-reset email links to, with `?token=…&email=…`. The
+  // page posts both, plus the new password, to `POST /users/reset-password`.
+  passwordResetUrl: string;
 }
 
 const parseTrustProxy = (raw: string): boolean | number | string => {
@@ -330,4 +333,7 @@ export default (): AppConfig => ({
   emailVerifiedRedirectUrl:
     process.env.EMAIL_VERIFIED_REDIRECT_URL ??
     `${process.env.WEB_BASE_URL ?? 'http://localhost:5173'}/auth/verify-email`,
+  passwordResetUrl:
+    process.env.PASSWORD_RESET_URL ??
+    `${process.env.WEB_BASE_URL ?? 'http://localhost:5173'}/auth/reset-password`,
 });

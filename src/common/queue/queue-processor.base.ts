@@ -215,11 +215,8 @@ export abstract class QueueProcessor extends WorkerHost {
     const jobName: JobName = job.name;
     const registration = resolveJobRegistration(jobName);
 
-    // Widened to string deliberately. While QueueName has a single member,
-    // comparing the enum values narrows the mismatch branch to `never` and the
-    // message below stops type-checking — even though the check becomes
-    // genuinely load-bearing the moment a second queue is registered. Widening
-    // keeps the guard (and its message) alive through that transition.
+    // Widened to string so the guard type-checks however many queues exist
+    // (with one, the mismatch branch narrows to `never`).
     const registeredQueueName: string = registration.queueName;
     const processorQueueName: string = this.queueName;
     if (registeredQueueName !== processorQueueName) {

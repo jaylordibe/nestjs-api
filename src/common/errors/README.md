@@ -65,9 +65,9 @@ The `TOKEN_*` / `SESSION_INVALIDATED` / `USER_INACTIVE` cluster is the only set 
 | `TOKEN_INVALID` | Token malformed / bad signature / `iss` or `aud` mismatch / has a `purpose` claim. | ✅ |
 | `TOKEN_EXPIRED` | Token `exp` claim is in the past. | ✅ |
 | `TOKEN_REVOKED` | Token `jti` is in the Redis logout blocklist (the user explicitly logged this session out). | ✅ |
-| `SESSION_INVALIDATED` | Token `iat` predates `passwordChangedAt`, the session cutoff. Every path that ends sessions moves it: password change or reset, email change, `/auth/logout-all`, support-initiated `POST /users/:id/revoke-sessions`, account deactivation, soft deletion, and GDPR erasure. | ✅ |
+| `SESSION_INVALIDATED` | Token `iat` predates `passwordChangedAt`, the session cutoff. Every path that ends sessions moves it: password change or reset, email change, `/auth/logout-all`, support-initiated `POST /users/:id/revoke-sessions`, account deactivation, soft deletion, and GDPR erasure. A self-service password or email change returns a fresh token pair to the caller, which must replace its stored tokens. | ✅ |
 | `USER_INACTIVE` | User row missing / `isActive=false` / soft-deleted. Collapsed to one code to avoid enumeration leaks. | ✅ |
-| `INVALID_CREDENTIALS` | `/auth/login` wrong email/password or account locked (timing-equalized). | ❌ |
+| `INVALID_CREDENTIALS` | `/auth/login` wrong identifier/password or inactive account. | ❌ |
 | `EMAIL_NOT_VERIFIED` | Login blocked: `emailVerifiedAt` is null. | ❌ |
 | `CURRENT_PASSWORD_INCORRECT` | Re-auth in `/me/password`, `/me/email`, `/me/gdpr-erase`, `/me/request-phone-verification`. Token still valid. | ❌ |
 
@@ -83,8 +83,9 @@ The `TOKEN_*` / `SESSION_INVALIDATED` / `USER_INACTIVE` cluster is the only set 
 | Code | Trigger | `details` shape |
 |---|---|---|
 | `VALIDATION_FAILED` | class-validator failure on a DTO (the default ValidationPipe folds the per-field messages into the envelope `message`). | `null` |
-| `INVALID_OTP` | Bad or expired OTP (phone-verify, password-reset). | `null` |
-| `INVALID_LINK` | Bad or expired JWT-link (verify-email). | `null` |
+| `INVALID_OTP` | Bad or expired phone-verification code. | `null` |
+| `INVALID_LINK` | Bad, expired or already-used link token (verify-email, password reset). | `null` |
+| `EMAIL_DOMAIN_DISALLOWED` | Sign-up with a disposable / temporary email provider. | `{ domain: string }` |
 | `FK_REFERENCE_INVALID` | Prisma P2003 — foreign key references a record that doesn't exist. | `{ field: string }` |
 
 ### Resource state (HTTP 404, 409)
@@ -92,7 +93,7 @@ The `TOKEN_*` / `SESSION_INVALIDATED` / `USER_INACTIVE` cluster is the only set 
 | Code | Trigger | `details` shape |
 |---|---|---|
 | `RESOURCE_NOT_FOUND` | Generic 404 (also Prisma P2025). | `{ resource: string }` |
-| `UNIQUE_CONSTRAINT_VIOLATION` | Prisma P2002 — unique index violation. | `{ field: string }` |
+| `UNIQUE_CONSTRAINT_VIOLATION` | Value already taken: Prisma P2002, or sign-up with a registered email. | `{ field: string }` |
 | `RESOURCE_CONFLICT` | Generic 409 for application-level conflicts. | `null` |
 
 ### Business memberships and invitations (HTTP 400, 403, 409)

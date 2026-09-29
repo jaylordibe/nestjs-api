@@ -58,8 +58,6 @@ export const AUTHORIZATION_ACTIONS = [
   // aspirational: the same endpoint omits `payload` for a caller who can
   // `read` a job but cannot `readPayload` it.
   'readPayload',
-  // Clearing a failed-login lockout.
-  'unlock',
   // Signing an account out everywhere.
   'revokeSession',
   // Re-sending an email-verification link on a user's behalf.
@@ -212,12 +210,6 @@ const MANAGE_ANY_APP_VERSION = platform(
 // Each is a narrow, named capability rather than a slice of `update User`,
 // so app support can act on an account without being able to change its
 // email — which is account takeover wearing a helpful hat.
-const UNLOCK_ANY_USER = platform(
-  'unlock',
-  'User',
-  ANY,
-  'Clear a failed-login lockout on any account',
-);
 const REVOKE_ANY_USER_SESSION = platform(
   'revokeSession',
   'User',
@@ -397,7 +389,6 @@ export const PERMISSION_CATALOG: readonly PermissionDefinition[] = [
   READ_ANY_AUDIT_LOG,
   READ_ANY_BUSINESS,
   MANAGE_ANY_APP_VERSION,
-  UNLOCK_ANY_USER,
   REVOKE_ANY_USER_SESSION,
   RESEND_ANY_USER_VERIFICATION,
   READ_ANY_QUEUE_JOB,
@@ -552,11 +543,11 @@ export const ROLE_DEFINITION_CATALOG: Readonly<
   [SeededRoleName.PLATFORM_APP_SUPPORT]: {
     scope: RoleScope.PLATFORM,
     rank: 40,
-    // Customer-facing. Holds three narrow act-on-account capabilities and no
-    // general UPDATE_ANY_USER: the difference is that unlocking an account
-    // helps its owner, whereas editing its email takes it from them.
+    // Customer-facing. Holds narrow act-on-account capabilities and no
+    // general UPDATE_ANY_USER: resending a link or ending sessions helps the
+    // owner, whereas editing their email takes the account from them.
     description:
-      'Customer-facing support: account visibility, verification resends, unlocks, session revocation',
+      'Customer-facing support: account visibility, verification resends, session revocation',
     // Also without READ_ANY_AUDIT_LOG — see the note on
     // PLATFORM_TECHNICAL_SUPPORT above. This role is the widest-staffed one on
     // the platform and is the least appropriate place for a firehose of other
@@ -565,7 +556,6 @@ export const ROLE_DEFINITION_CATALOG: Readonly<
       READ_ANY_USER,
       READ_ANY_BUSINESS,
       READ_ANY_BUSINESS_MEMBERSHIP,
-      UNLOCK_ANY_USER,
       REVOKE_ANY_USER_SESSION,
       RESEND_ANY_USER_VERIFICATION,
     ],

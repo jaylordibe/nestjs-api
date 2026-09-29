@@ -8,12 +8,13 @@ Every e2e spec runs against a **real Postgres and Redis** — no mocks, no in-me
 
 ### Auth & sessions
 - **Register** with email verification (JWT link) before first login.
-- **Login** with per-route rate limiting and account lockout after 5 failed attempts.
+- **Login** throttled per identifier + IP (5/min), like Laravel's starter kits. No account lockout.
 - **Password policy** — 12+ chars, letter + digit, bcrypt cost 12.
 - **JWT with `jti`**, bound to service via `iss`/`aud`. `passwordChangedAt` invalidates all outstanding tokens on password rotation.
 - **Refresh-token rotation with reuse detection** (RFC 9700 §4.14.2) — every exchange consumes the presented token and issues a new one in the same family. Re-presenting a consumed token is treated as theft and revokes the whole family, **including when the second presentation is concurrent rather than sequential**, which is the case a serial test cannot reach.
 - **Per-device logout** (Redis blocklist) + **logout-all** (via `passwordChangedAt` bump).
-- **Password reset** via OTP email (separate from verification, 15-min expiry).
+- **Password reset** via an emailed single-use link (random token, stored hashed, 60-min expiry); a reset ends every session.
+- **Account emails are queued** (BullMQ `notifications`), so a slow mail provider never delays a response.
 - **GDPR erase** endpoint that anonymizes PII + marks `deletedAt`.
 - **Timing-safe login** (dummy bcrypt compare for unknown emails).
 
@@ -40,7 +41,7 @@ Every e2e spec runs against a **real Postgres and Redis** — no mocks, no in-me
 - **Cloud-provider neutral.** The app depends on generic capabilities — an HTTP runtime, PostgreSQL, a Redis-compatible backend, object storage, runtime-injected env secrets, a worker runtime, stdout logging, HTTP health checks — and nothing vendor-specific. Object storage has four adapters (`stub`/`s3`/`gcs`/`azure`) behind one interface, each SDK confined to its own file and loaded only when selected; **no adapter accepts a long-lived cloud credential**. There is no secret-manager SDK anywhere. Same image and same three commands on AWS, Google Cloud, Azure, Kubernetes, Compose or a VM — see [`docs/deployment/README.md`](docs/deployment/README.md).
 - **Health checks** — `/api/health/liveness` (k8s liveness, no DB) + `/api/health/readiness` (DB ping + queue connectivity) + `/api/health/workers` (queue-worker heartbeat, deliberately *off* readiness so a restarting worker can't pull the API out of rotation). All three are unauthenticated, so a failing check logs the real cause and returns a fixed string — Prisma's `P1001`/`P1000` quote your internal host and database user, and an ioredis failure quotes host and port (CWE-209). Enforced by co-located specs on both indicators.
 - **Docker** — pinned Postgres 18 + Redis 8 for dev; 3-stage production Dockerfile (non-root, tini, npm stripped).
-- **CI** — lint + build + unit + sharded e2e + dependency audit + Trivy image scan on every PR. The audit gate fails on any high/critical advisory *except* ones with a documented, dated exception in `.github/scripts/audit-gate.mjs` — so one genuinely-unfixable finding can't force the choice between a permanently red build and deleting the gate. It also nags when an exception goes stale or past review.
+- **CI** — lint + build + unit + sharded e2e + dependency audit + Trivy image scan on every PR and on pushes to `main`, `staging` and `develop`. The audit gate fails on any high/critical advisory *except* ones with a documented, dated exception in `.github/scripts/audit-gate.mjs` — so one genuinely-unfixable finding can't force the choice between a permanently red build and deleting the gate. It also nags when an exception goes stale or past review.
 - **DB seeder** — `yarn prisma:seed` creates admin + user accounts from env-configured credentials (idempotent, password-complexity-enforced).
 
 ## Setup guide
@@ -137,12 +138,12 @@ yarn prisma:migrate dev               # apply any new migrations
 All routes under `/api`. See Swagger at `/api/docs` for full specs.
 
 ### Public
-- `POST /auth/register` — creates unverified user, emails verification link. Returns `{ message }` only.
-- `POST /auth/login` — returns `{ accessToken, user }`. Rejects with `EmailNotVerified` if email unverified.
+- `POST /auth/register` — creates unverified user, emails verification link. Returns `{ message }` only. A registered email → 409 `UNIQUE_CONSTRAINT_VIOLATION`; a disposable domain → 400 `EMAIL_DOMAIN_DISALLOWED`.
+- `POST /auth/login` / `POST /auth/refresh` — return `{ accessToken, refreshToken, expiresIn, user }`. Login rejects with `EMAIL_NOT_VERIFIED` if the email is unverified.
 - `GET|POST /auth/verify-email` — consumes a JWT verification link.
 - `POST /auth/resend-verification` — resends the link (always 200, no enumeration).
-- `POST /users/request-password-reset` — emails OTP.
-- `POST /users/reset-password` — consumes OTP, sets new password.
+- `POST /users/request-password-reset` — emails a reset link to `PASSWORD_RESET_URL?token=…&email=…` (always 200).
+- `POST /users/reset-password` — `{ email, token, newPassword }`; single use, ends every session.
 - `GET /app-versions` (paginated), `GET /app-versions/:id`, `GET /app-versions/latest?platform=mobile&os=ios` — client update-check flows. `os` names the **release train**: `mobile` and `desktop` ship one independently versioned build per OS, `web` ships one for everyone and omits it.
 
 ### Authenticated (JWT)
@@ -150,7 +151,7 @@ All routes under `/api`. See Swagger at `/api/docs` for full specs.
 - `POST /auth/logout` / `POST /auth/logout-all` — per-token / everywhere revocation.
 - `GET /users/me`, `GET /users/me/export` (GDPR data access), `PATCH /users/me`, `DELETE /users/me` (soft delete).
 - `POST /users/me/gdpr-erase` — PII anonymization + deletion (requires `currentPassword`).
-- `PATCH /users/me/{username,email,password,profile-image}` — self-service profile updates.
+- `PATCH /users/me/{username,email,password,profile-image}` — self-service profile updates. `email` and `password` end every other session and return a fresh `{ accessToken, refreshToken, expiresIn, user }`; a new email is unverified until its link is followed.
 
 - `GET /users/me/permissions` — the caller's packed CASL rules, for client-side ability sync.
 - `POST|GET|PATCH|DELETE /device-tokens` — your own push tokens (a platform admin manages anyone's).
@@ -166,7 +167,7 @@ All routes under `/api`. See Swagger at `/api/docs` for full specs.
 - `POST|DELETE /users/:userId/roles` — grant/revoke a platform role.
 - `GET /roles`, `GET /permissions` — **read-only**. Roles and permissions are both code-owned; there is no endpoint that creates one.
 - `GET /queues`, `GET|POST|DELETE /queues/:queue/jobs/:id` — background-job diagnostics and recovery. Job payloads are visible only to `PLATFORM_ENGINEER`; support roles can see a job failed and retry it without reading the user data it carried.
-- `POST /users/:id/{unlock,revoke-sessions,resend-verification}` — narrow support capabilities, each its own permission so app support can help an account holder without being able to change their email.
+- `POST /users/:id/{revoke-sessions,resend-verification}` — narrow support capabilities, each its own permission so app support can help an account holder without being able to change their email.
 - `GET /audit-logs` — the platform audit trail. Filter by `action` / `actorId` / `targetUserId` / `startCreatedAt` / `endCreatedAt`, or cast a wide net with `?search=`, which matches the action name, either party's email, and the `metadata` envelope as text (trigram-indexed). Rows arrive with `actor` / `targetUser` hydrated (id, email, name, current platform roles), batched one query per page, and still resolve for soft-deleted users.
 - `POST|PATCH|DELETE /app-versions` — release signal management.
 
