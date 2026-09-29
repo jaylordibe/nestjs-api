@@ -21,7 +21,6 @@
  *
  * stdout = the raw token ONLY (the workflow captures it); all logs go to stderr.
  */
-import 'dotenv/config';
 import { expand } from 'dotenv-expand';
 import * as dotenv from 'dotenv';
 import { PrismaPg } from '@prisma/adapter-pg';
@@ -29,10 +28,9 @@ import { PrismaClient } from '@prisma/client';
 import { SeededRoleName } from '../../src/common/enums/seeded-role-name.enum';
 import * as jwt from 'jsonwebtoken';
 
-// Load .env (with ${VAR} expansion) before touching process.env, matching
-// prisma/seed.ts. In CI the vars are already in the environment, so this is a
-// harmless no-op there.
-expand(dotenv.config({ override: false }));
+// Load .env (with ${VAR} expansion). `quiet`: dotenv 17 otherwise logs to
+// stdout, which is where the workflow reads the token from.
+expand(dotenv.config({ override: false, quiet: true }));
 
 async function main(): Promise<void> {
   const serviceName = process.env.SERVICE_NAME;
