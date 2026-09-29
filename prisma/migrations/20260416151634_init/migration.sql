@@ -15,8 +15,6 @@ CREATE TABLE "users" (
     "email" TEXT NOT NULL,
     "password" TEXT NOT NULL,
     "password_changed_at" TIMESTAMP(3),
-    "failed_login_count" INTEGER NOT NULL DEFAULT 0,
-    "locked_until" TIMESTAMP(3),
     "otp_hash" TEXT,
     "otp_purpose" TEXT,
     "otp_expires_at" TIMESTAMP(3),
