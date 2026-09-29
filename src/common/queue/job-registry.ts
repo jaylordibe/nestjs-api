@@ -26,6 +26,7 @@ export enum JobName {
   USER_EMAIL_VERIFICATION_V1 = 'user.email-verification.v1',
   USER_PASSWORD_RESET_V1 = 'user.password-reset.v1',
   USER_PASSWORD_CHANGED_NOTICE_V1 = 'user.password-changed-notice.v1',
+  BUSINESS_INVITATION_EMAIL_V1 = 'business.invitation-email.v1',
 }
 
 export interface JobRegistration {
@@ -84,6 +85,12 @@ export const JOB_REGISTRATIONS: Record<JobName, JobRegistration> = {
     queueName: QueueName.NOTIFICATIONS,
     payloadVersion: 1,
     description: 'Tells the user their password was changed.',
+  },
+  [JobName.BUSINESS_INVITATION_EMAIL_V1]: {
+    queueName: QueueName.NOTIFICATIONS,
+    payloadVersion: 1,
+    description:
+      'Emails a business invitation link. Skipped when the invitation is no longer pending.',
   },
 };
 

@@ -11,6 +11,11 @@ import { BusinessInvitationsService } from '../src/modules/businesses/invitation
 import { PrismaService } from '../src/prisma/prisma.service';
 import { truncateAll } from './setup/db';
 import {
+  captureEmails,
+  deliverQueuedEmails,
+  linkParameter,
+} from './setup/emails';
+import {
   addMembership,
   createBusinessWithOwner,
   createRegularUser,
@@ -107,6 +112,55 @@ describe('Business invitations (e2e)', () => {
           where: { businessId: business.id },
         }),
       ).toBe(1); // the owner only
+    });
+
+    it('emails the invitation link through the queue', async () => {
+      const emails = captureEmails(app);
+      try {
+        await request(app.getHttpServer())
+          .post(invitationsUrl())
+          .set('Authorization', `Bearer ${owner.token}`)
+          .send({
+            email: 'invitee@example.com',
+            roleId: await roleIdFor(app, SeededRoleName.BUSINESS_MEMBER),
+          })
+          .expect(201);
+        expect(emails.sent).toHaveLength(0);
+
+        await deliverQueuedEmails(app);
+
+        expect(emails.sent).toHaveLength(1);
+        const [sent] = emails.sent;
+        expect(sent.to).toBe('invitee@example.com');
+        expect(sent.template).toBe('business-invitation');
+        const token = linkParameter(sent, 'acceptUrl', 'token');
+        const prisma = app.get(PrismaService);
+        expect(
+          await prisma.businessInvitation.count({
+            where: { tokenHash: hashOpaqueToken(token) },
+          }),
+        ).toBe(1);
+      } finally {
+        emails.restore();
+      }
+    });
+
+    it('sends nothing for an invitation revoked before the email went out', async () => {
+      const emails = captureEmails(app);
+      try {
+        const { invitationId } =
+          await inviteAndCaptureToken('late@example.com');
+        await app.get(PrismaService).businessInvitation.update({
+          where: { id: invitationId },
+          data: { status: BusinessInvitationStatus.REVOKED },
+        });
+
+        await deliverQueuedEmails(app);
+
+        expect(emails.sent).toHaveLength(0);
+      } finally {
+        emails.restore();
+      }
     });
 
     it('never returns the token — it goes to the invited address alone', async () => {

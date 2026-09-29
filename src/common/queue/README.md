@@ -109,7 +109,7 @@ Two queues:
 | Queue | Jobs |
 |---|---|
 | `maintenance` | `maintenance.queue-heartbeat.v1` (every 5 minutes) writes the Redis key behind `GET /api/health/workers`. `auth.refresh-token-retention.v1` (`0 0 * * *` UTC) deletes refresh tokens past their expiry. |
-| `notifications` | `user.email-verification.v1`, `user.password-reset.v1`, `user.password-changed-notice.v1` — account emails, enqueued by `UsersService` so the request never waits on the mail provider. The payload is the user id only; the worker reloads the user and renders the email, so no address or token sits in Redis. |
+| `notifications` | `user.email-verification.v1`, `user.password-reset.v1`, `user.password-changed-notice.v1` (enqueued by `UsersService`; payload is the user id only, the worker reloads the user) and `business.invitation-email.v1` (enqueued by `BusinessInvitationsService`; payload carries the invitation id and the token, since only its hash is stored). Queued so the request never waits on the mail provider. |
 
 Only queues with a real producer are registered: `QueueJobHandlerRegistry`
 fails the boot for a queue with no processor, so an aspirational lane cannot sit

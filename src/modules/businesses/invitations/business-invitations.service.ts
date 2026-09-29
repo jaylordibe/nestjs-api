@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { AuditService } from '../../../common/audit/audit.service';
@@ -7,6 +7,8 @@ import { EmailService } from '../../../common/email/email.service';
 import { BusinessInvitationStatus } from '../../../common/enums/business-invitation-status.enum';
 import { BusinessMembershipStatus } from '../../../common/enums/business-membership-status.enum';
 import { Errors } from '../../../common/errors/errors';
+import { JobName } from '../../../common/queue/job-registry';
+import { QueueProducerService } from '../../../common/queue/queue-producer.service';
 import { buildOrderBy, MetaQueryDto } from '../../../common/dto/meta-query.dto';
 import { PaginationMeta } from '../../../common/dto/paginated-response.dto';
 import {
@@ -37,7 +39,6 @@ class InvitationAlreadyConsumedError extends Error {}
 
 @Injectable()
 export class BusinessInvitationsService {
-  private readonly logger = new Logger(BusinessInvitationsService.name);
   private readonly expiresInDays: number;
   private readonly webBaseUrl: string;
 
@@ -47,6 +48,7 @@ export class BusinessInvitationsService {
     private readonly abilityScopedQueryService: AbilityScopedQueryService,
     private readonly permissionLoaderService: PermissionLoaderService,
     private readonly emailService: EmailService,
+    private readonly queueProducer: QueueProducerService,
     private readonly businessOwnershipPolicy: BusinessOwnershipPolicy,
     private readonly businessRoleAssignmentPolicy: BusinessRoleAssignmentPolicy,
     configService: ConfigService,
@@ -215,13 +217,7 @@ export class BusinessInvitationsService {
         }
       });
 
-    await this.sendInvitationEmail(
-      dto.email,
-      business.name,
-      role.name,
-      actorId,
-      token,
-    );
+    await this.queueInvitationEmail(invitation.id, token, actorId);
     await this.auditService.record({
       action: 'business_invitation.created',
       actorId,
@@ -391,13 +387,7 @@ export class BusinessInvitationsService {
       );
     }
 
-    await this.sendInvitationEmail(
-      existing.email,
-      business.name,
-      existing.role.name,
-      actorId,
-      token,
-    );
+    await this.queueInvitationEmail(existing.id, token, actorId);
     await this.auditService.record({
       action: 'business_invitation.resent',
       actorId,
@@ -698,39 +688,58 @@ export class BusinessInvitationsService {
     }
   }
 
-  private async sendInvitationEmail(
-    email: string,
-    businessName: string,
-    roleName: string,
-    actorId: string,
+  // Queued so the request never waits on the mail provider.
+  private async queueInvitationEmail(
+    invitationId: string,
     token: string,
+    inviterId: string,
   ): Promise<void> {
+    await this.queueProducer.enqueue(JobName.BUSINESS_INVITATION_EMAIL_V1, {
+      payloadVersion: 1,
+      invitationId,
+      token,
+      inviterId,
+    });
+  }
+
+  /** Sends a queued invitation email. False when it is no longer pending. */
+  async deliverInvitationEmail(
+    invitationId: string,
+    token: string,
+    inviterId: string,
+  ): Promise<boolean> {
+    const invitation = await this.prisma.businessInvitation.findFirst({
+      where: { id: invitationId, status: BusinessInvitationStatus.PENDING },
+      include: { role: true },
+    });
+    const business = invitation
+      ? await this.prisma.scoped.business.findFirst({
+          where: { id: invitation.businessId },
+          select: { name: true },
+        })
+      : null;
+    if (!invitation || !business) {
+      return false;
+    }
     const inviter = await this.prisma.scoped.user.findUnique({
-      where: { id: actorId },
+      where: { id: inviterId },
       select: { firstName: true, lastName: true },
     });
     const inviterName = inviter
       ? `${inviter.firstName} ${inviter.lastName}`.trim()
       : 'Someone';
 
-    try {
-      await this.emailService.sendTemplate('business-invitation', email, {
-        businessName,
+    await this.emailService.sendTemplate(
+      'business-invitation',
+      invitation.email,
+      {
+        businessName: business.name,
         inviterName,
-        roleName,
+        roleName: invitation.role.name,
         acceptUrl: `${this.webBaseUrl}/invitations/accept?token=${encodeURIComponent(token)}`,
         expiresInDays: this.expiresInDays,
-      });
-    } catch (error) {
-      // Best-effort, matching every other transactional send in this codebase.
-      // The invitation row is already committed and the token is already in the
-      // response, so a provider outage must not roll back a successful invite —
-      // the business can resend.
-      this.logger.error(
-        `Failed to send business invitation email: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
+      },
+    );
+    return true;
   }
 }
