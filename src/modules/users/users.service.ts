@@ -12,7 +12,7 @@ import { AuditService } from '../../common/audit/audit.service';
 import { Errors } from '../../common/errors/errors';
 import { EmailService } from '../../common/email/email.service';
 import { SmsService } from '../../common/sms/sms.service';
-import { BusinessMembershipStatus } from '../../common/enums/business-membership-status.enum';
+import { WorkspaceMembershipStatus } from '../../common/enums/workspace-membership-status.enum';
 import { OtpPurpose } from '../../common/enums/otp-purpose.enum';
 import { JobName } from '../../common/queue/job-registry';
 import { QueueProducerService } from '../../common/queue/queue-producer.service';
@@ -31,7 +31,7 @@ import type {
 } from '../auth/refresh-token.service';
 import { RefreshTokenService } from '../auth/refresh-token.service';
 import { PermissionLoaderService } from '../authorization/permission-loader.service';
-import { BusinessOwnershipPolicy } from '../businesses/business-ownership.policy';
+import { WorkspaceOwnershipPolicy } from '../workspaces/workspace-ownership.policy';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { UpdateAuthUserEmailDto } from './dto/update-auth-user-email.dto';
@@ -67,9 +67,9 @@ export class UsersService {
     private readonly refreshTokenService: RefreshTokenService,
     private readonly permissionLoaderService: PermissionLoaderService,
     // The ownership invariant is enforced from BOTH sides. Deleting an account
-    // is the other half of "a live business always has an active owner"; drop
-    // it and a deleted owner leaves the business ownerless.
-    private readonly businessOwnershipPolicy: BusinessOwnershipPolicy,
+    // is the other half of "a live workspace always has an active owner"; drop
+    // it and a deleted owner leaves the workspace ownerless.
+    private readonly workspaceOwnershipPolicy: WorkspaceOwnershipPolicy,
   ) {}
 
   // ── Account emails ──────────────────────────────────────────────────
@@ -258,7 +258,7 @@ export class UsersService {
       where: { id: userId },
       select: {
         userRoles: { select: { role: { select: { name: true } } } },
-        // Every status, not only ACTIVE. A client showing "your businesses"
+        // Every status, not only ACTIVE. A client showing "your workspaces"
         // needs to render a suspended or pending membership differently rather
         // than have it silently vanish — and `rules` above already reflects the
         // truth about authority, since only ACTIVE memberships compile into
@@ -266,7 +266,7 @@ export class UsersService {
         memberships: {
           select: {
             id: true,
-            businessId: true,
+            workspaceId: true,
             status: true,
             role: { select: { name: true } },
           },
@@ -281,11 +281,11 @@ export class UsersService {
       platformRoles: (user?.userRoles ?? []).map(
         (userRole) => userRole.role.name,
       ),
-      businessMemberships: (user?.memberships ?? []).map((membership) => ({
+      workspaceMemberships: (user?.memberships ?? []).map((membership) => ({
         membershipId: membership.id,
-        businessId: membership.businessId,
+        workspaceId: membership.workspaceId,
         roleName: membership.role.name,
-        status: membership.status as BusinessMembershipStatus,
+        status: membership.status as WorkspaceMembershipStatus,
       })),
     });
   }
@@ -400,7 +400,7 @@ export class UsersService {
     };
 
     // Deactivation is not an ordinary field write. An inactive account cannot
-    // authenticate — `JwtStrategy` refuses it on every request — so a business
+    // authenticate — `JwtStrategy` refuses it on every request — so a workspace
     // whose only owner is deactivated is exactly as unadministrable as one whose
     // owner was deleted, and it needs the same refusal. It also has to end the
     // account's sessions: leaving live refresh rows behind means a later
@@ -435,7 +435,7 @@ export class UsersService {
    *
    * Refused when the account is somebody's last owner. A platform admin is not
    * exempt: `manage all` bypasses AUTHORIZATION, not data integrity, and the
-   * unadministrable business it would leave behind is invisible to every roster
+   * unadministrable workspace it would leave behind is invisible to every roster
    * read — so nobody would find it to repair it.
    */
   private async deactivate(
@@ -444,9 +444,9 @@ export class UsersService {
     actorId: string | null,
   ): Promise<User> {
     const deactivated = await this.prisma.$transaction(async (transaction) => {
-      // User row first, then businesses — the order in `row-lock.util.ts`.
+      // User row first, then workspaces — the order in `row-lock.util.ts`.
       await this.refreshTokenService.lockSessions(transaction, userId);
-      await this.businessOwnershipPolicy.assertUserIsNotASoleOwner(
+      await this.workspaceOwnershipPolicy.assertUserIsNotASoleOwner(
         transaction,
         userId,
       );
@@ -457,7 +457,7 @@ export class UsersService {
         updateData,
       );
     });
-    // Their business-scoped grants are gone the instant the row says inactive.
+    // Their workspace-scoped grants are gone the instant the row says inactive.
     await this.invalidateGrantsFor([userId]);
     return deactivated;
   }
@@ -504,17 +504,17 @@ export class UsersService {
     // Erasure does NOT refuse on sole ownership, and that asymmetry with
     // `softDelete` is the whole point: a right-to-be-forgotten request answers a
     // legal obligation, so it cannot be declined because of a commercial
-    // relationship. The businesses are closed in the same transaction instead —
+    // relationship. The workspaces are closed in the same transaction instead —
     // never left ownerless, never left live.
-    const { businesses: closedBusinesses, affectedUserIds } =
+    const { workspaces: closedWorkspaces, affectedUserIds } =
       await this.prisma.$transaction(async (transaction) => {
-        // User row first, then the businesses — the order documented in
-        // `row-lock.util.ts`. Taking the businesses first is the opposite of
+        // User row first, then the workspaces — the order documented in
+        // `row-lock.util.ts`. Taking the workspaces first is the opposite of
         // what every membership mutation takes, so the two sides of the
         // ownership invariant would deadlock against each other.
         await this.refreshTokenService.lockSessions(transaction, userId);
         const closed =
-          await this.businessOwnershipPolicy.closeSolelyOwnedBusinesses(
+          await this.workspaceOwnershipPolicy.closeSolelyOwnedWorkspaces(
             transaction,
             userId,
             userId,
@@ -560,17 +560,17 @@ export class UsersService {
       action: 'user.gdpr_erased',
       actorId: userId,
       targetUserId: userId,
-      // Ids only. The business NAMES are personal data in a single-proprietor
+      // Ids only. The workspace NAMES are personal data in a single-proprietor
       // tenant, and writing them into the audit trail during an erasure would
       // re-create exactly what the erasure just removed.
       metadata: {
-        closedBusinessIds: closedBusinesses.map((business) => business.id),
+        closedWorkspaceIds: closedWorkspaces.map((workspace) => workspace.id),
       },
     });
   }
 
   /**
-   * Soft-delete an account, refusing to strand a business without an owner.
+   * Soft-delete an account, refusing to strand a workspace without an owner.
    *
    * Shared by the administrative delete and the self-close so the invariant
    * cannot hold on one route and not the other — they differ only in who acts
@@ -581,12 +581,12 @@ export class UsersService {
     actorId: string | null,
   ): Promise<void> {
     await this.prisma.$transaction(async (transaction) => {
-      // User row first, then businesses — see `row-lock.util.ts`. This is also
+      // User row first, then workspaces — see `row-lock.util.ts`. This is also
       // what makes the check below binding: a promotion racing this deletion
       // contends on the SAME user row, so it either loses and finds the account
       // gone, or wins and is counted here.
       await this.refreshTokenService.lockSessions(transaction, userId);
-      await this.businessOwnershipPolicy.assertUserIsNotASoleOwner(
+      await this.workspaceOwnershipPolicy.assertUserIsNotASoleOwner(
         transaction,
         userId,
       );
@@ -637,14 +637,14 @@ export class UsersService {
     // Self-close: mark the row deleted. The scoped Prisma client and the
     // auth hot paths both reject rows with deletedAt set, so the user
     // can't log back in. `isActive` is untouched — that flag exists for
-    // suspension (a separate business concept from deletion), not to
+    // suspension (a separate workspace concept from deletion), not to
     // double-signal lifecycle state. The row stays for audit/FK integrity;
     // call gdprErase for true PII removal.
     //
-    // Refused while the user is the last active owner of a live business — the
+    // Refused while the user is the last active owner of a live workspace — the
     // response names them, and the remedy (transfer ownership, or delete the
-    // business) is entirely in the caller's hands. `POST /users/me/gdpr-erase`
-    // is the path that cannot be refused, and it closes those businesses
+    // workspace) is entirely in the caller's hands. `POST /users/me/gdpr-erase`
+    // is the path that cannot be refused, and it closes those workspaces
     // instead.
     await this.deleteAccount(userId, actorId);
     await this.auditService.record({

@@ -31,7 +31,7 @@ export class PermissionCheckService {
   //
   // Reach for this ONLY where `accessibleBy` cannot express the rule as a
   // `where` clause — i.e. derived ownership that requires a join ("I may edit
-  // this booking because I own the business that owns it"). Load the parent,
+  // this booking because I own the workspace that owns it"). Load the parent,
   // then assert against it.
   //
   // For ordinary tenant-scoped reads use AbilityScopedQueryService instead: it

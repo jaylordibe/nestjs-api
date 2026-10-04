@@ -7,7 +7,7 @@
 // `OWN` produces a rule conditioned on the acting user's id (`{ id: userId }`
 // for User, `{ userId }` for DeviceToken — see SUBJECT_OWNER_KEY).
 //
-// In BUSINESS scope the condition is always the tenant, so business-scoped
+// In WORKSPACE scope the condition is always the tenant, so workspace-scoped
 // permissions are always `ANY`.
 //
 // The `own` / `any` split is a well-established capability pattern (Drupal's

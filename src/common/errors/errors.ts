@@ -101,25 +101,25 @@ export const Errors = {
       details: subject ? { action, subject } : { action },
     }),
 
-  // ── Business membership + invitations ──────────────────────────────
-  // A business without an active owner is unadministrable: nobody can grow the
+  // ── Workspace membership + invitations ──────────────────────────────
+  // A workspace without an active owner is unadministrable: nobody can grow the
   // roster, and nobody can delete it. This fires for every caller, platform
   // admins included — `manage all` bypasses AUTHORIZATION, not data integrity.
-  // `soleOwnedBusinesses` is supplied by the ACCOUNT-deletion path, where the
-  // caller has no way to guess which of their businesses is blocking them — and
-  // where the remedy differs (transfer or close the business, rather than
-  // appoint a co-owner). Naming them is not a leak: they are businesses the
+  // `soleOwnedWorkspaces` is supplied by the ACCOUNT-deletion path, where the
+  // caller has no way to guess which of their workspaces is blocking them — and
+  // where the remedy differs (transfer or close the workspace, rather than
+  // appoint a co-owner). Naming them is not a leak: they are workspaces the
   // caller owns.
   lastOwnerProtected: (
-    soleOwnedBusinesses?: readonly { id: string; name: string }[],
+    soleOwnedWorkspaces?: readonly { id: string; name: string }[],
   ): ConflictException =>
     new ConflictException({
       errorCode: ErrorCode.LAST_OWNER_PROTECTED,
-      message: soleOwnedBusinesses?.length
-        ? 'You are the only active owner of a business. Transfer ownership or delete the business before deleting this account.'
-        : 'A business must always have at least one active owner. Appoint another owner first.',
-      ...(soleOwnedBusinesses?.length
-        ? { details: { businesses: soleOwnedBusinesses } }
+      message: soleOwnedWorkspaces?.length
+        ? 'You are the only active owner of a workspace. Transfer ownership or delete the workspace before deleting this account.'
+        : 'A workspace must always have at least one active owner. Appoint another owner first.',
+      ...(soleOwnedWorkspaces?.length
+        ? { details: { workspaces: soleOwnedWorkspaces } }
         : {}),
     }),
   membershipNotActive: (status: string): ConflictException =>
@@ -186,13 +186,13 @@ export const Errors = {
       errorCode: ErrorCode.VALIDATION_FAILED,
       message,
     }),
-  // A business-scoped permission was checked, but the request never named a
-  // business. 400 rather than 403: the caller may well be authorized, they
+  // A workspace-scoped permission was checked, but the request never named a
+  // workspace. 400 rather than 403: the caller may well be authorized, they
   // just didn't say where.
-  businessContextMissing: (): BadRequestException =>
+  workspaceContextMissing: (): BadRequestException =>
     new BadRequestException({
-      errorCode: ErrorCode.BUSINESS_CONTEXT_MISSING,
-      message: 'A business context is required for this action',
+      errorCode: ErrorCode.WORKSPACE_CONTEXT_MISSING,
+      message: 'A workspace context is required for this action',
     }),
 
   // ── 404 / 409 ──────────────────────────────────────────────────────

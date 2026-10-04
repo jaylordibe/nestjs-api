@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 // Builds the object name an uploaded file is stored under.
 //
 // The name is SERVER-GENERATED, always. The only thing a caller contributes is
-// the subdirectory — a literal chosen in code (`'avatars'`, `'businesses'`),
+// the subdirectory — a literal chosen in code (`'avatars'`, `'workspaces'`),
 // never a value taken from a request — and the file extension, which is
 // lowercased and carried purely so the object is recognisable in a bucket
 // listing. The identifying part is a fresh UUID, so no caller can choose where

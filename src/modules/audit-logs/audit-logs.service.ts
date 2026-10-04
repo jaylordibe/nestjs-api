@@ -85,9 +85,9 @@ export class AuditLogsService {
     // round trip. No `scope` filter is needed: a CHECK constraint in the init
     // migration makes it impossible for `user_roles` to reference anything but
     // a PLATFORM role, so filtering here would be re-stating a database
-    // guarantee. Business memberships live in `business_memberships` and are
+    // guarantee. Workspace memberships live in `workspace_memberships` and are
     // deliberately not surfaced — a tenant-local role name means nothing
-    // without saying which business it belongs to.
+    // without saying which workspace it belongs to.
     const users = await this.prisma.user.findMany({
       where: { id: { in: [...referencedUserIds] } },
       select: {

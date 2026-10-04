@@ -26,12 +26,12 @@ already defines one.
 
 This skill covers identity, credentials, session validity, recovery, and
 verification. Use the `authorization` skill for permissions, roles,
-PLATFORM/BUSINESS scope, ownership, tenant isolation, and 403-versus-404.
+PLATFORM/WORKSPACE scope, ownership, tenant isolation, and 403-versus-404.
 
 ## JWT and session authority
 
 - JWT claims are exactly `{ sub, jti }`. No role grants, permission lists,
-  business membership, or ownership authority in the token.
+  workspace membership, or ownership authority in the token.
 - Grants are re-read per request through `PermissionLoaderService` (Redis-cached,
   explicitly invalidated), so revocation bites immediately rather than at token
   expiry.

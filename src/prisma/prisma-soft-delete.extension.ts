@@ -8,7 +8,7 @@ import { Prisma } from '@prisma/client';
 // `count`, …). Prisma client extensions cannot intercept NESTED reads, so a
 // soft-deleted row is still reachable through a relation:
 //
-//     prisma.scoped.business.findFirst({
+//     prisma.scoped.workspace.findFirst({
 //       include: { members: { include: { user: true } } },   // ← soft-deleted
 //     })                                                     //   users appear
 //
@@ -25,7 +25,7 @@ import { Prisma } from '@prisma/client';
 // Admin/forensic paths that need to SEE soft-deleted rows use the raw
 // `PrismaService` (the class itself, no `.scoped`). Add a model to this set when
 // you give it its own `deletedAt` column.
-const SOFT_DELETE_MODELS: ReadonlySet<string> = new Set(['User', 'Business']);
+const SOFT_DELETE_MODELS: ReadonlySet<string> = new Set(['User', 'Workspace']);
 
 // Put `deletedAt: null` FIRST so an explicit caller-supplied `deletedAt` (e.g.
 // `{ deletedAt: { not: null } }` for "show me deleted rows") overrides it.

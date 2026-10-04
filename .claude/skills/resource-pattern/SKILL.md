@@ -114,7 +114,7 @@ Build visibility through `AbilityScopedQueryService`:
 
 - list query scope;
 - record query scope;
-- owner and BUSINESS/PLATFORM conditions;
+- owner and WORKSPACE/PLATFORM conditions;
 - 404 for invisible records;
 - 403 only after a visible record is loaded and the action is denied.
 

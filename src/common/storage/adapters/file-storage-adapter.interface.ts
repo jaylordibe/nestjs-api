@@ -26,7 +26,7 @@ export interface StoredObject {
 //
 // A provider SDK may be imported ONLY by its own adapter file. That boundary is
 // what keeps the application deployable to a different cloud without touching a
-// line of business logic.
+// line of domain logic.
 export interface FileStorageAdapter {
   // Identifies the active backend for logs and for the provider-selection
   // test. Not for branching on — anything that would branch belongs behind

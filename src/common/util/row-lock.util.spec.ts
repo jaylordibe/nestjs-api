@@ -1,7 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import {
-  lockBusinessRow,
-  lockBusinessRows,
+  lockWorkspaceRow,
+  lockWorkspaceRows,
   lockRefreshTokenFamily,
   lockUserRow,
   lockUserRows,
@@ -50,17 +50,17 @@ describe('row-lock util', () => {
     });
   });
 
-  describe('lockBusinessRow', () => {
-    it('takes a row-level exclusive lock on businesses', async () => {
+  describe('lockWorkspaceRow', () => {
+    it('takes a row-level exclusive lock on workspaces', async () => {
       const { transaction, statements } = createRecordingTransaction();
 
-      await lockBusinessRow(
+      await lockWorkspaceRow(
         transaction,
         'b5f0c1d2-0000-4000-8000-000000000002',
       );
 
       expect(statements[0].sql).toBe(
-        'SELECT id FROM businesses WHERE id = ?::uuid FOR UPDATE',
+        'SELECT id FROM workspaces WHERE id = ?::uuid FOR UPDATE',
       );
     });
   });
@@ -84,7 +84,7 @@ describe('row-lock util', () => {
 
   describe.each([
     ['lockUserRows', lockUserRows],
-    ['lockBusinessRows', lockBusinessRows],
+    ['lockWorkspaceRows', lockWorkspaceRows],
   ] as const)('%s', (_name, lockRows) => {
     it('locks ascending, one statement at a time', async () => {
       const { transaction, statements } = createRecordingTransaction();

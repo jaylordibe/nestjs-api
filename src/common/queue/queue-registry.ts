@@ -21,7 +21,7 @@
 // Shared retry defaults. Overridable per queue and, more narrowly, per job.
 //
 // Retry ONLY transient failures — network timeouts, provider outages, rate
-// limits, a database or Redis blip. Expected business outcomes (entity gone,
+// limits, a database or Redis blip. Expected workspace outcomes (entity gone,
 // no longer eligible, already done, schedule superseded) are NOT failures:
 // return a `skipped` outcome, or throw `PermanentJobFailureError` if the job
 // can never succeed. Retrying those burns five attempts to reach the same

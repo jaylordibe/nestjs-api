@@ -1,4 +1,4 @@
-// `BusinessMembership` → `business_membership`, `assignRole` → `assign_role`,
+// `WorkspaceMembership` → `workspace_membership`, `assignRole` → `assign_role`,
 // `all` → `all`. Handles PascalCase and camelCase; consecutive capitals in
 // an acronym collapse into one segment (`deviceOSVersion` → `device_os_version`).
 export function toSnakeCase(value: string): string {

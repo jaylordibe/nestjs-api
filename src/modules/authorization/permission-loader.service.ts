@@ -4,14 +4,14 @@ import type {
   AuthorizationAction,
   AuthorizationSubject,
 } from '../../common/authorization/permission-catalog';
-import { BusinessMembershipStatus } from '../../common/enums/business-membership-status.enum';
+import { WorkspaceMembershipStatus } from '../../common/enums/workspace-membership-status.enum';
 import type { PermissionOwnership } from '../../common/enums/permission-ownership.enum';
 import type { RoleScope } from '../../common/enums/role-scope.enum';
 import { RedisService } from '../../common/redis/redis.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import type {
   AuthorizationGrants,
-  BusinessMembershipGrant,
+  WorkspaceMembershipGrant,
   PermissionGrant,
 } from './ability.factory';
 
@@ -36,15 +36,15 @@ const GRANTS_KEY_PREFIX = `authz:${GRANTS_CACHE_VERSION}:grants`;
 // is affected. Stale keys are never deleted; they simply age out via TTL.
 export const AUTHORIZATION_EPOCH_KEY = 'authz:epoch';
 
-// Business-scoped grants come from a LIVE business, and from an ACTIVE
+// Workspace-scoped grants come from a LIVE workspace, and from an ACTIVE
 // membership. Both halves are load-bearing and neither is redundant.
 //
-// LIVE BUSINESS: soft-deleting a business deliberately leaves its membership
+// LIVE WORKSPACE: soft-deleting a workspace deliberately leaves its membership
 // rows in place, so that restoring it brings the roster back too. Without this
-// filter every member would keep business-scoped authority over a business
-// nobody can see any more — and since `business_memberships` carries no
+// filter every member would keep workspace-scoped authority over a workspace
+// nobody can see any more — and since `workspace_memberships` carries no
 // `deletedAt` of its own, those grants still resolve to real rows: the roster,
-// including names and emails, would stay readable after the business was gone.
+// including names and emails, would stay readable after the workspace was gone.
 //
 // ACTIVE MEMBERSHIP: `SUSPENDED` and `LEFT` rows both still name a role, and a
 // suspended owner still has rank 100 recorded against them. Status
@@ -54,9 +54,9 @@ export const AUTHORIZATION_EPOCH_KEY = 'authz:epoch';
 //
 // Both must be written explicitly. `prisma.scoped` rewrites TOP-LEVEL reads
 // only, so a nested collection is never filtered by the soft-delete extension.
-const ACTIVE_MEMBERSHIP_OF_LIVE_BUSINESS = {
-  status: BusinessMembershipStatus.ACTIVE,
-  business: { deletedAt: null },
+const ACTIVE_MEMBERSHIP_OF_LIVE_WORKSPACE = {
+  status: WorkspaceMembershipStatus.ACTIVE,
+  workspace: { deletedAt: null },
 } as const;
 
 // Shape of the one nested query below. Declared so the mapping code stays
@@ -86,7 +86,7 @@ export class PermissionLoaderService {
   }
 
   // Grants for one user: their PLATFORM roles' permissions, plus the
-  // permissions of each business role they hold, tagged with the business.
+  // permissions of each workspace role they hold, tagged with the workspace.
   //
   // Redis is a cache, never an authority. Any failure — outage, corrupt JSON,
   // parse error — falls through to the database. There is no path here where a
@@ -111,7 +111,7 @@ export class PermissionLoaderService {
   }
 
   // Called whenever a user's own role set changes: a platform role assigned or
-  // revoked, or a business membership added, changed, or removed. Deletes the
+  // revoked, or a workspace membership added, changed, or removed. Deletes the
   // one exact key — no SCAN, no wildcard.
   async invalidateUser(userId: string): Promise<void> {
     try {
@@ -223,10 +223,10 @@ export class PermissionLoaderService {
           },
         },
         memberships: {
-          where: ACTIVE_MEMBERSHIP_OF_LIVE_BUSINESS,
+          where: ACTIVE_MEMBERSHIP_OF_LIVE_WORKSPACE,
           select: {
             id: true,
-            businessId: true,
+            workspaceId: true,
             status: true,
             roleId: true,
             role: {
@@ -243,26 +243,26 @@ export class PermissionLoaderService {
     if (!userWithRoles) {
       // Soft-deleted or absent. JwtStrategy already rejects these, so this is
       // defence in depth: an empty grant set authorizes nothing.
-      return { platformPermissions: [], businessMemberships: [] };
+      return { platformPermissions: [], workspaceMemberships: [] };
     }
 
     const platformPermissions = userWithRoles.userRoles.flatMap((userRole) =>
       userRole.role.permissions.map(toPermissionGrant),
     );
 
-    const businessMemberships: BusinessMembershipGrant[] =
+    const workspaceMemberships: WorkspaceMembershipGrant[] =
       userWithRoles.memberships.map((membership) => ({
         membershipId: membership.id,
-        businessId: membership.businessId,
+        workspaceId: membership.workspaceId,
         roleId: membership.roleId,
         roleName: membership.role.name,
         // Plain `String` column; cast at the single database→application
         // boundary the grants pass through, alongside the permission casts.
-        status: membership.status as BusinessMembershipStatus,
+        status: membership.status as WorkspaceMembershipStatus,
         permissions: membership.role.permissions.map(toPermissionGrant),
       }));
 
-    return { platformPermissions, businessMemberships };
+    return { platformPermissions, workspaceMemberships };
   }
 }
 

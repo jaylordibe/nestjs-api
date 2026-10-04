@@ -35,7 +35,7 @@ export interface RequestContextStore extends ClsStore {
 }
 
 // Append-only record of privileged/security-relevant actions. Writes are
-// best-effort: a failed audit write is logged but never blocks the business
+// best-effort: a failed audit write is logged but never blocks the workspace
 // operation that triggered it.
 //
 // Every entry written from an HTTP request gets a `metadata.request` envelope

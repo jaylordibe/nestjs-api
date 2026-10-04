@@ -18,8 +18,8 @@ export interface AuditLogUserRef {
   // material to a decision, the action that recorded it puts the role in
   // `metadata`, which IS point-in-time.
   //
-  // Business-scoped memberships are excluded: they are per-business, so a flat
-  // list would be meaningless without saying which business.
+  // Workspace-scoped memberships are excluded: they are per-workspace, so a flat
+  // list would be meaningless without saying which workspace.
   roles: string[];
 }
 

@@ -14,9 +14,9 @@ import { Errors } from '../../common/errors/errors';
 // `accessibleBy` on it a compile error rather than a runtime surprise.
 export interface WhereInputBySubject {
   User: Prisma.UserWhereInput;
-  Business: Prisma.BusinessWhereInput;
-  BusinessMembership: Prisma.BusinessMembershipWhereInput;
-  BusinessInvitation: Prisma.BusinessInvitationWhereInput;
+  Workspace: Prisma.WorkspaceWhereInput;
+  WorkspaceMembership: Prisma.WorkspaceMembershipWhereInput;
+  WorkspaceInvitation: Prisma.WorkspaceInvitationWhereInput;
   Role: Prisma.RoleWhereInput;
   Permission: Prisma.PermissionWhereInput;
   AppVersion: Prisma.AppVersionWhereInput;

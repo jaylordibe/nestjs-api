@@ -46,7 +46,7 @@ CREATE TABLE "refresh_tokens" (
 );
 
 -- CreateTable
-CREATE TABLE "businesses" (
+CREATE TABLE "workspaces" (
     "id" UUID NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
@@ -59,7 +59,7 @@ CREATE TABLE "businesses" (
     "description" TEXT,
     "is_active" BOOLEAN NOT NULL DEFAULT true,
 
-    CONSTRAINT "businesses_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "workspaces_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -115,13 +115,13 @@ CREATE TABLE "user_roles" (
 );
 
 -- CreateTable
-CREATE TABLE "business_memberships" (
+CREATE TABLE "workspace_memberships" (
     "id" UUID NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
     "created_by" UUID,
     "updated_by" UUID,
-    "business_id" UUID NOT NULL,
+    "workspace_id" UUID NOT NULL,
     "user_id" UUID NOT NULL,
     "role_id" UUID NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'active',
@@ -130,17 +130,17 @@ CREATE TABLE "business_memberships" (
     "invited_by" UUID,
     "notes" TEXT,
 
-    CONSTRAINT "business_memberships_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "workspace_memberships_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
-CREATE TABLE "business_invitations" (
+CREATE TABLE "workspace_invitations" (
     "id" UUID NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
     "created_by" UUID,
     "updated_by" UUID,
-    "business_id" UUID NOT NULL,
+    "workspace_id" UUID NOT NULL,
     "email" TEXT NOT NULL,
     "invited_user_id" UUID,
     "role_id" UUID NOT NULL,
@@ -153,7 +153,7 @@ CREATE TABLE "business_invitations" (
     "revoked_at" TIMESTAMP(3),
     "revoked_by" UUID,
 
-    CONSTRAINT "business_invitations_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "workspace_invitations_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -243,31 +243,31 @@ CREATE INDEX "user_roles_role_id_idx" ON "user_roles"("role_id");
 CREATE UNIQUE INDEX "user_roles_user_id_role_id_key" ON "user_roles"("user_id", "role_id");
 
 -- CreateIndex
-CREATE INDEX "business_memberships_user_id_status_idx" ON "business_memberships"("user_id", "status");
+CREATE INDEX "workspace_memberships_user_id_status_idx" ON "workspace_memberships"("user_id", "status");
 
 -- CreateIndex
-CREATE INDEX "business_memberships_business_id_status_idx" ON "business_memberships"("business_id", "status");
+CREATE INDEX "workspace_memberships_workspace_id_status_idx" ON "workspace_memberships"("workspace_id", "status");
 
 -- CreateIndex
-CREATE INDEX "business_memberships_role_id_idx" ON "business_memberships"("role_id");
+CREATE INDEX "workspace_memberships_role_id_idx" ON "workspace_memberships"("role_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "business_memberships_business_id_user_id_key" ON "business_memberships"("business_id", "user_id");
+CREATE UNIQUE INDEX "workspace_memberships_workspace_id_user_id_key" ON "workspace_memberships"("workspace_id", "user_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "business_invitations_token_hash_key" ON "business_invitations"("token_hash");
+CREATE UNIQUE INDEX "workspace_invitations_token_hash_key" ON "workspace_invitations"("token_hash");
 
 -- CreateIndex
-CREATE INDEX "business_invitations_business_id_status_idx" ON "business_invitations"("business_id", "status");
+CREATE INDEX "workspace_invitations_workspace_id_status_idx" ON "workspace_invitations"("workspace_id", "status");
 
 -- CreateIndex
-CREATE INDEX "business_invitations_expires_at_idx" ON "business_invitations"("expires_at");
+CREATE INDEX "workspace_invitations_expires_at_idx" ON "workspace_invitations"("expires_at");
 
 -- CreateIndex
-CREATE INDEX "business_invitations_role_id_idx" ON "business_invitations"("role_id");
+CREATE INDEX "workspace_invitations_role_id_idx" ON "workspace_invitations"("role_id");
 
 -- CreateIndex
-CREATE INDEX "business_invitations_invited_user_id_idx" ON "business_invitations"("invited_user_id");
+CREATE INDEX "workspace_invitations_invited_user_id_idx" ON "workspace_invitations"("invited_user_id");
 
 -- CreateIndex
 CREATE INDEX "audit_logs_actor_id_created_at_idx" ON "audit_logs"("actor_id", "created_at");
@@ -309,25 +309,25 @@ ALTER TABLE "user_roles" ADD CONSTRAINT "user_roles_user_id_fkey" FOREIGN KEY ("
 ALTER TABLE "user_roles" ADD CONSTRAINT "user_roles_role_id_fkey" FOREIGN KEY ("role_id") REFERENCES "roles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "business_memberships" ADD CONSTRAINT "business_memberships_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "businesses"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "workspace_memberships" ADD CONSTRAINT "workspace_memberships_workspace_id_fkey" FOREIGN KEY ("workspace_id") REFERENCES "workspaces"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "business_memberships" ADD CONSTRAINT "business_memberships_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "workspace_memberships" ADD CONSTRAINT "workspace_memberships_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "business_memberships" ADD CONSTRAINT "business_memberships_role_id_fkey" FOREIGN KEY ("role_id") REFERENCES "roles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "workspace_memberships" ADD CONSTRAINT "workspace_memberships_role_id_fkey" FOREIGN KEY ("role_id") REFERENCES "roles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "business_memberships" ADD CONSTRAINT "business_memberships_invited_by_fkey" FOREIGN KEY ("invited_by") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "workspace_memberships" ADD CONSTRAINT "workspace_memberships_invited_by_fkey" FOREIGN KEY ("invited_by") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "business_invitations" ADD CONSTRAINT "business_invitations_business_id_fkey" FOREIGN KEY ("business_id") REFERENCES "businesses"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "workspace_invitations" ADD CONSTRAINT "workspace_invitations_workspace_id_fkey" FOREIGN KEY ("workspace_id") REFERENCES "workspaces"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "business_invitations" ADD CONSTRAINT "business_invitations_role_id_fkey" FOREIGN KEY ("role_id") REFERENCES "roles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "workspace_invitations" ADD CONSTRAINT "workspace_invitations_role_id_fkey" FOREIGN KEY ("role_id") REFERENCES "roles"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "business_invitations" ADD CONSTRAINT "business_invitations_invited_user_id_fkey" FOREIGN KEY ("invited_user_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "workspace_invitations" ADD CONSTRAINT "workspace_invitations_invited_user_id_fkey" FOREIGN KEY ("invited_user_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "device_tokens" ADD CONSTRAINT "device_tokens_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -357,15 +357,15 @@ ALTER TABLE "device_tokens" ADD CONSTRAINT "device_tokens_user_id_fkey" FOREIGN 
 -- Scope integrity is enforced in CODE, not here — deliberately.
 --
 -- An earlier shape carried a constant `scope` column on each assignment table
--- (`user_roles`, `business_memberships`, `business_invitations`), pinned by a
+-- (`user_roles`, `workspace_memberships`, `workspace_invitations`), pinned by a
 -- CHECK and paired with a composite FK to `roles(id, scope)`. That is the
 -- standard trick for constraining an FK to a subtype, and it worked — but it
 -- bought less than it looked like it did.
 --
 -- It guards the WRITE path only. The escalation that actually matters happens
 -- on the READ path: `AbilityFactory` branches on where a grant ARRIVED from,
--- never on what the permission claims to be, so a BUSINESS permission reaching
--- the platform branch compiles to an UNCONDITIONAL rule (business permissions
+-- never on what the permission claims to be, so a WORKSPACE permission reaching
+-- the platform branch compiles to an UNCONDITIONAL rule (workspace permissions
 -- are always `ANY`) — a platform-wide grant with no tenant bound. A database
 -- constraint cannot see that, and cannot see a stale or corrupted grant set
 -- arriving from the Redis cache either.
@@ -377,17 +377,17 @@ ALTER TABLE "device_tokens" ADD CONSTRAINT "device_tokens_user_id_fkey" FOREIGN 
 -- that existed solely to be a foreign-key target.
 --
 -- The write path still validates: `UserRolesService.loadPlatformRole` and
--- `loadAssignableBusinessRole` in both business services.
+-- `loadAssignableWorkspaceRole` in both workspace services.
 
 -- Soft-delete-aware uniqueness.
 --
 -- A plain UNIQUE index lets a soft-deleted row hold its identifier hostage
 -- forever: delete a user, and their email can never be reused; delete a
--- business, and its slug is gone for good. Restricting the index to live rows
+-- workspace, and its slug is gone for good. Restricting the index to live rows
 -- is the standard fix.
 --
 -- Prisma cannot express a partial unique index, which is why `User.email`,
--- `User.username`, and `Business.slug` deliberately carry no `@unique` in
+-- `User.username`, and `Workspace.slug` deliberately carry no `@unique` in
 -- schema.prisma. Look them up with `findFirst`, never `findUnique`.
 --
 -- Do NOT "fix" that with a composite `@@unique([email, deletedAt])`: in SQL
@@ -401,22 +401,22 @@ CREATE UNIQUE INDEX users_username_key
   ON users (username)
   WHERE deleted_at IS NULL;
 
-CREATE UNIQUE INDEX businesses_slug_key
-  ON businesses (slug)
+CREATE UNIQUE INDEX workspaces_slug_key
+  ON workspaces (slug)
   WHERE deleted_at IS NULL;
 
--- One OUTSTANDING invitation per (business, email).
+-- One OUTSTANDING invitation per (workspace, email).
 --
 -- Partial rather than total, for the same reason as the indexes above: an
--- accepted or revoked invitation is history and must not stop the business from
+-- accepted or revoked invitation is history and must not stop the workspace from
 -- inviting that address again. Restricting the index to `pending` also makes
 -- the race safe — two concurrent invites to one address collide here rather
 -- than both succeeding.
 --
--- Prisma cannot see this, so `BusinessInvitation` carries no `@@unique` on
--- (business_id, email): look a pending invitation up with `findFirst`.
-CREATE UNIQUE INDEX business_invitations_business_id_email_pending_key
-  ON business_invitations (business_id, email)
+-- Prisma cannot see this, so `WorkspaceInvitation` carries no `@@unique` on
+-- (workspace_id, email): look a pending invitation up with `findFirst`.
+CREATE UNIQUE INDEX workspace_invitations_workspace_id_email_pending_key
+  ON workspace_invitations (workspace_id, email)
   WHERE status = 'pending';
 
 -- Trigram index for substring search across the audit-log metadata envelope.

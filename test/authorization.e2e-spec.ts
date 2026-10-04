@@ -18,9 +18,9 @@ import { createTestApp } from './setup/test-app';
 interface PermissionsBody {
   rules: unknown[];
   platformRoles: string[];
-  businessMemberships: Array<{
+  workspaceMemberships: Array<{
     membershipId: string;
-    businessId: string;
+    workspaceId: string;
     roleName: string;
     status: string;
   }>;
@@ -39,9 +39,9 @@ describe('Authorization (e2e)', () => {
     return response.body as PermissionsBody;
   };
 
-  const createBusiness = async (owner: SeededUser, slug: string) => {
+  const createWorkspace = async (owner: SeededUser, slug: string) => {
     const response = await request(app.getHttpServer())
-      .post('/api/businesses')
+      .post('/api/workspaces')
       .set('Authorization', `Bearer ${owner.token}`)
       .send({ name: slug, slug })
       .expect(201);
@@ -62,7 +62,7 @@ describe('Authorization (e2e)', () => {
   });
 
   it('an unauthenticated request is rejected (JwtAuthGuard is global)', async () => {
-    await request(app.getHttpServer()).get('/api/businesses').expect(401);
+    await request(app.getHttpServer()).get('/api/workspaces').expect(401);
   });
 
   it('@Public() routes remain reachable anonymously', async () => {
@@ -82,22 +82,22 @@ describe('Authorization (e2e)', () => {
     // comes from AUTHENTICATED_USER_PERMISSIONS, so an empty array here is
     // the normal, fully-functional state rather than a broken one.
     expect(body.platformRoles).toEqual([]);
-    expect(body.businessMemberships).toEqual([]);
+    expect(body.workspaceMemberships).toEqual([]);
   });
 
-  it('reports business memberships after creating a business', async () => {
+  it('reports workspace memberships after creating a workspace', async () => {
     const owner = await createRegularUser(app, 'owner@example.com');
-    const businessId = await createBusiness(owner, 'acme');
+    const workspaceId = await createWorkspace(owner, 'acme');
     const body = await fetchPermissions(owner);
     // `membershipId` and `status` are part of the contract now: a client
-    // rendering "your businesses" needs to distinguish an active membership
+    // rendering "your workspaces" needs to distinguish an active membership
     // from a pending or suspended one, and `rules` alone cannot express that
     // — only ACTIVE memberships compile into grants at all.
-    expect(body.businessMemberships).toEqual([
+    expect(body.workspaceMemberships).toEqual([
       {
         membershipId: expect.any(String),
-        businessId,
-        roleName: SeededRoleName.BUSINESS_OWNER,
+        workspaceId,
+        roleName: SeededRoleName.WORKSPACE_OWNER,
         status: 'active',
       },
     ]);
@@ -111,32 +111,35 @@ describe('Authorization (e2e)', () => {
   it('rebuilt client ability agrees with the server, decision for decision', async () => {
     const owner = await createRegularUser(app, 'owner@example.com');
     const stranger = await createRegularUser(app, 'stranger@example.com');
-    const ownBusinessId = await createBusiness(owner, 'own-co');
-    const otherBusinessId = await createBusiness(stranger, 'other-co');
+    const ownWorkspaceId = await createWorkspace(owner, 'own-co');
+    const otherWorkspaceId = await createWorkspace(stranger, 'other-co');
 
     const body = await fetchPermissions(owner);
     const clientAbility = createMongoAbility(
       unpackRules(body.rules as never) as never,
     );
 
-    // Client says: I may update my own business.
+    // Client says: I may update my own workspace.
     expect(
-      clientAbility.can('update', subject('Business', { id: ownBusinessId })),
+      clientAbility.can('update', subject('Workspace', { id: ownWorkspaceId })),
     ).toBe(true);
     // Server agrees.
     await request(app.getHttpServer())
-      .patch(`/api/businesses/${ownBusinessId}`)
+      .patch(`/api/workspaces/${ownWorkspaceId}`)
       .set('Authorization', `Bearer ${owner.token}`)
       .send({ name: 'Renamed' })
       .expect(200);
 
-    // Client says: I may NOT touch the other business.
+    // Client says: I may NOT touch the other workspace.
     expect(
-      clientAbility.can('update', subject('Business', { id: otherBusinessId })),
+      clientAbility.can(
+        'update',
+        subject('Workspace', { id: otherWorkspaceId }),
+      ),
     ).toBe(false);
     // Server agrees — and answers 404, never 403.
     await request(app.getHttpServer())
-      .patch(`/api/businesses/${otherBusinessId}`)
+      .patch(`/api/workspaces/${otherWorkspaceId}`)
       .set('Authorization', `Bearer ${owner.token}`)
       .send({ name: 'Hijacked' })
       .expect(404);
@@ -159,7 +162,7 @@ describe('Authorization (e2e)', () => {
 
     expect(clientAbility.can('manage', 'all')).toBe(true);
     expect(
-      clientAbility.can('delete', subject('Business', { id: 'anything' })),
+      clientAbility.can('delete', subject('Workspace', { id: 'anything' })),
     ).toBe(true);
   });
 
@@ -310,66 +313,30 @@ describe('Authorization (e2e)', () => {
       .expect(403);
   });
 
-  it('BUSINESS_MEMBER reads the business but cannot edit it', async () => {
+  it('WORKSPACE_MEMBER reads the workspace but cannot edit it', async () => {
     const owner = await createRegularUser(app, 'owner@example.com');
     const member = await createRegularUser(app, 'member@example.com');
-    const businessId = await createBusiness(owner, 'acme');
+    const workspaceId = await createWorkspace(owner, 'acme');
 
     const prisma = app.get(PrismaService);
     const memberRole = await prisma.role.findUniqueOrThrow({
-      where: { name: SeededRoleName.BUSINESS_MEMBER },
+      where: { name: SeededRoleName.WORKSPACE_MEMBER },
     });
     await request(app.getHttpServer())
-      .post(`/api/businesses/${businessId}/memberships`)
+      .post(`/api/workspaces/${workspaceId}/memberships`)
       .set('Authorization', `Bearer ${owner.token}`)
       .send({ email: member.email, roleId: memberRole.id })
       .expect(201);
 
     await request(app.getHttpServer())
-      .get(`/api/businesses/${businessId}`)
+      .get(`/api/workspaces/${workspaceId}`)
       .set('Authorization', `Bearer ${member.token}`)
       .expect(200);
 
     await request(app.getHttpServer())
-      .patch(`/api/businesses/${businessId}`)
+      .patch(`/api/workspaces/${workspaceId}`)
       .set('Authorization', `Bearer ${member.token}`)
       .send({ name: 'Renamed by a member' })
-      .expect(403);
-  });
-
-  it('BUSINESS_CUSTOMER gets the business and its own row, and no roster', async () => {
-    const owner = await createRegularUser(app, 'owner@example.com');
-    const customer = await createRegularUser(app, 'customer@example.com');
-    const businessId = await createBusiness(owner, 'acme');
-
-    const prisma = app.get(PrismaService);
-    const customerRole = await prisma.role.findUniqueOrThrow({
-      where: { name: SeededRoleName.BUSINESS_CUSTOMER },
-    });
-    await request(app.getHttpServer())
-      .post(`/api/businesses/${businessId}/memberships`)
-      .set('Authorization', `Bearer ${owner.token}`)
-      .send({ email: customer.email, roleId: customerRole.id })
-      .expect(201);
-
-    await request(app.getHttpServer())
-      .get(`/api/businesses/${businessId}`)
-      .set('Authorization', `Bearer ${customer.token}`)
-      .expect(200);
-
-    // The roster read returns exactly their own row — never the staff list.
-    const roster = await request(app.getHttpServer())
-      .get(`/api/businesses/${businessId}/memberships`)
-      .set('Authorization', `Bearer ${customer.token}`)
-      .expect(200);
-    const rosterBody = roster.body as { data: Array<{ userId: string }> };
-    expect(rosterBody.data.map((row) => row.userId)).toEqual([customer.id]);
-
-    // And no authority over anyone else's membership.
-    await request(app.getHttpServer())
-      .post(`/api/businesses/${businessId}/memberships`)
-      .set('Authorization', `Bearer ${customer.token}`)
-      .send({ email: owner.email, roleId: customerRole.id })
       .expect(403);
   });
 });

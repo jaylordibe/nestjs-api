@@ -5,7 +5,7 @@ import { AuthorizationDataIntegrityService } from '../src/modules/authorization/
 import { PrismaService } from '../src/prisma/prisma.service';
 import { truncateAll } from './setup/db';
 import {
-  createBusinessWithOwner,
+  createWorkspaceWithOwner,
   createRegularUser,
   seedRbacCatalog,
 } from './setup/rbac';
@@ -48,7 +48,7 @@ describe('Authorization data integrity (e2e)', () => {
 
   it('passes on a correctly seeded database', async () => {
     const owner = await createRegularUser(app, 'owner@example.com');
-    await createBusinessWithOwner(app, owner.id);
+    await createWorkspaceWithOwner(app, owner.id);
 
     await expect(service.findDefects()).resolves.toEqual([]);
     await expect(
@@ -56,39 +56,39 @@ describe('Authorization data integrity (e2e)', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('detects a BUSINESS role assigned platform-wide', async () => {
-    // The dangerous direction: business permissions are always `ANY`, so a
-    // business role reached through `user_roles` would compile to
+  it('detects a WORKSPACE role assigned platform-wide', async () => {
+    // The dangerous direction: workspace permissions are always `ANY`, so a
+    // workspace role reached through `user_roles` would compile to
     // platform-wide authority with no tenant bound — if the factory did not
     // drop it.
     const user = await createRegularUser(app, 'user@example.com');
     await prisma.userRole.create({
       data: {
         userId: user.id,
-        roleId: await roleIdOf(SeededRoleName.BUSINESS_OWNER),
+        roleId: await roleIdOf(SeededRoleName.WORKSPACE_OWNER),
       },
     });
 
     const defects = await service.findDefects();
     expect(defects).toEqual([
       {
-        kind: 'business_role_assigned_platform_wide',
+        kind: 'workspace_role_assigned_platform_wide',
         count: 1,
-        offenders: [SeededRoleName.BUSINESS_OWNER],
+        offenders: [SeededRoleName.WORKSPACE_OWNER],
       },
     ]);
     await expect(service.assertStoredAssignmentsAreCoherent()).rejects.toThrow(
-      /BUSINESS-scoped role/,
+      /WORKSPACE-scoped role/,
     );
   });
 
   it('detects a PLATFORM role attached to a membership', async () => {
     const owner = await createRegularUser(app, 'owner@example.com');
-    const business = await createBusinessWithOwner(app, owner.id);
+    const workspace = await createWorkspaceWithOwner(app, owner.id);
     const intruder = await createRegularUser(app, 'intruder@example.com');
-    await prisma.businessMembership.create({
+    await prisma.workspaceMembership.create({
       data: {
-        businessId: business.id,
+        workspaceId: workspace.id,
         userId: intruder.id,
         roleId: await roleIdOf(SeededRoleName.PLATFORM_ADMIN),
         status: 'active',
@@ -107,10 +107,10 @@ describe('Authorization data integrity (e2e)', () => {
 
   it('detects a PLATFORM role attached to an invitation', async () => {
     const owner = await createRegularUser(app, 'owner@example.com');
-    const business = await createBusinessWithOwner(app, owner.id);
-    await prisma.businessInvitation.create({
+    const workspace = await createWorkspaceWithOwner(app, owner.id);
+    await prisma.workspaceInvitation.create({
       data: {
-        businessId: business.id,
+        workspaceId: workspace.id,
         email: 'stranger@example.com',
         roleId: await roleIdOf(SeededRoleName.PLATFORM_ENGINEER),
         tokenHash: 'not-a-real-token-hash',
@@ -133,9 +133,9 @@ describe('Authorization data integrity (e2e)', () => {
     // TS enum is the only thing constraining it — and nothing constrains a
     // hand-written UPDATE.
     const owner = await createRegularUser(app, 'owner@example.com');
-    const business = await createBusinessWithOwner(app, owner.id);
-    await prisma.businessMembership.updateMany({
-      where: { businessId: business.id },
+    const workspace = await createWorkspaceWithOwner(app, owner.id);
+    await prisma.workspaceMembership.updateMany({
+      where: { workspaceId: workspace.id },
       data: { status: 'invited' },
     });
 
@@ -152,34 +152,34 @@ describe('Authorization data integrity (e2e)', () => {
 
   it('reports every defect in one pass, not just the first', async () => {
     const user = await createRegularUser(app, 'user@example.com');
-    const business = await createBusinessWithOwner(app, user.id);
+    const workspace = await createWorkspaceWithOwner(app, user.id);
     await prisma.userRole.create({
       data: {
         userId: user.id,
-        roleId: await roleIdOf(SeededRoleName.BUSINESS_MEMBER),
+        roleId: await roleIdOf(SeededRoleName.WORKSPACE_MEMBER),
       },
     });
-    await prisma.businessMembership.updateMany({
-      where: { businessId: business.id },
+    await prisma.workspaceMembership.updateMany({
+      where: { workspaceId: workspace.id },
       data: { status: 'nonsense' },
     });
 
     const defects = await service.findDefects();
     expect(defects.map((defect) => defect.kind).sort()).toEqual([
-      'business_role_assigned_platform_wide',
       'unknown_membership_status',
+      'workspace_role_assigned_platform_wide',
     ]);
   });
 
-  it('never names a user or a business in its diagnostics', async () => {
+  it('never names a user or a workspace in its diagnostics', async () => {
     // A boot log is read by more people, and retained longer, than any table it
     // describes.
     const user = await createRegularUser(app, 'leaky@example.com');
-    const business = await createBusinessWithOwner(app, user.id, 'leaky-co');
+    const workspace = await createWorkspaceWithOwner(app, user.id, 'leaky-co');
     await prisma.userRole.create({
       data: {
         userId: user.id,
-        roleId: await roleIdOf(SeededRoleName.BUSINESS_ADMIN),
+        roleId: await roleIdOf(SeededRoleName.WORKSPACE_ADMIN),
       },
     });
 
@@ -188,10 +188,10 @@ describe('Authorization data integrity (e2e)', () => {
       .then(() => '')
       .catch((error: Error) => error.message);
 
-    expect(message).toContain(SeededRoleName.BUSINESS_ADMIN);
+    expect(message).toContain(SeededRoleName.WORKSPACE_ADMIN);
     expect(message).not.toContain(user.id);
     expect(message).not.toContain('leaky@example.com');
-    expect(message).not.toContain(business.id);
+    expect(message).not.toContain(workspace.id);
     expect(message).not.toContain('leaky-co');
   });
 });

@@ -39,8 +39,8 @@ describe('buildObjectName', () => {
   });
 
   it('supports nested subdirectories', () => {
-    expect(buildObjectName('businesses/logos', '.webp')).toMatch(
-      /^businesses\/logos\//,
+    expect(buildObjectName('workspaces/logos', '.webp')).toMatch(
+      /^workspaces\/logos\//,
     );
   });
 

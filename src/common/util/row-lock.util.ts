@@ -3,34 +3,34 @@ import type { Prisma } from '@prisma/client';
 /**
  * THE lock order for this application. Every `SELECT … FOR UPDATE` lives here.
  *
- *     users  →  businesses  →  refresh_tokens
+ *     users  →  workspaces  →  refresh_tokens
  *
  * …and within each of those, **ascending by id**.
  *
  * Those are the tables with explicit lock primitives. Two more child tables are
  * write-locked inside the same transactions and belong in the middle of that
  * chain — see *The full order* at the bottom of this block before adding a
- * transaction that writes `business_invitations` or `business_memberships`.
+ * transaction that writes `workspace_invitations` or `workspace_memberships`.
  *
  * Two invariants need row locks, they overlap on the same rows, and before this
  * file they disagreed about the order. Session revocation locked `users` and
- * then a refresh-token family; account deletion locked the businesses a user
+ * then a refresh-token family; account deletion locked the workspaces a user
  * owned and *then* that user. A membership path that wanted to lock its target
- * user would have had to take `businesses` first to match one and `users` first
+ * user would have had to take `workspaces` first to match one and `users` first
  * to match the other — which is a deadlock, not a choice. Naming one order and
  * putting every primitive behind it is what makes the third caller safe to add.
  *
  * Why `users` comes first: it is the only row that is *always* lockable. A
- * business has an owner; a session has an owner; a user being promoted into a
- * business does not yet appear in that business's roster, so nothing else in the
+ * workspace has an owner; a session has an owner; a user being promoted into a
+ * workspace does not yet appear in that workspace's roster, so nothing else in the
  * transaction is a stable rendezvous point. Locking the user first means a
  * promotion and a deletion of that same user always contend, even when they
- * disagree about which businesses are involved — which is precisely the race
- * that let a promotion strand an ownerless business.
+ * disagree about which workspaces are involved — which is precisely the race
+ * that let a promotion strand an ownerless workspace.
  *
  * These are plain functions over a `Prisma.TransactionClient`, not a service, so
  * they may live in `src/common/` (the leaf layer) and be shared by the auth and
- * businesses modules without either depending on the other.
+ * workspaces modules without either depending on the other.
  *
  * All of them are no-ops outside a transaction in the sense that matters: a lock
  * taken on an implicit single-statement transaction is released immediately.
@@ -44,8 +44,8 @@ import type { Prisma } from '@prisma/client';
  * at PostgreSQL's default READ COMMITTED — and the pattern these primitives
  * exist to support depends on it:
  *
- *     await lockBusinessRow(transaction, businessId);
- *     const count = await transaction.businessMembership.count({ … });
+ *     await lockWorkspaceRow(transaction, workspaceId);
+ *     const count = await transaction.workspaceMembership.count({ … });
  *
  * Under READ COMMITTED each statement takes a **fresh** snapshot, so the `count`
  * observes whatever the transaction that just released the lock committed. That
@@ -54,7 +54,7 @@ import type { Prisma } from '@prisma/client';
  *
  * Under **REPEATABLE READ** the snapshot is fixed at the transaction's first
  * statement. `SELECT … FOR UPDATE` against a row the other transaction did not
- * *modify* — and a lock-only rendezvous on `businesses` modifies nothing —
+ * *modify* — and a lock-only rendezvous on `workspaces` modifies nothing —
  * raises no serialization error, so the waiter acquires the lock and then reads
  * **pre-lock state**, believing it has synchronised. Nothing fails, nothing
  * logs, and the count is silently stale. This is the dangerous level.
@@ -78,20 +78,20 @@ import type { Prisma } from '@prisma/client';
  * `UPDATE`/`INSERT` takes a row lock just as surely as `FOR UPDATE` does — so
  * the order that actually has to hold is:
  *
- *     users → businesses → business_invitations → business_memberships → refresh_tokens
+ *     users → workspaces → workspace_invitations → workspace_memberships → refresh_tokens
  *
- * `BusinessInvitationsService.accept` is the path that fixes the relative order
- * of the middle three: it locks the user, then the business, then retires or
+ * `WorkspaceInvitationsService.accept` is the path that fixes the relative order
+ * of the middle three: it locks the user, then the workspace, then retires or
  * consumes the invitation, then upserts the membership. `create` writes
- * `business_invitations` under the business lock. The membership paths
+ * `workspace_invitations` under the workspace lock. The membership paths
  * (`add`, `changeRole`, `transferOwnership`, `transition`) write
- * `business_memberships` under the business lock and never touch invitations.
+ * `workspace_memberships` under the workspace lock and never touch invitations.
  *
- * The rule for anything new: take the business lock first, and if you touch both
+ * The rule for anything new: take the workspace lock first, and if you touch both
  * child tables, invitations before memberships. `revoke` and `resend` are safe
  * today only because they are single-statement implicit transactions that hold
- * an invitation row lock and never go on to request `businesses` — wrapping
- * either in a `$transaction` without taking the business lock first is exactly
+ * an invitation row lock and never go on to request `workspaces` — wrapping
+ * either in a `$transaction` without taking the workspace lock first is exactly
  * how a deadlock gets introduced.
  */
 
@@ -111,7 +111,7 @@ export async function lockUserRow(
   await transaction.$queryRaw`SELECT id FROM users WHERE id = ${userId}::uuid FOR UPDATE`;
 }
 
-/** Several accounts, in ascending id order. See {@link lockBusinessRows}. */
+/** Several accounts, in ascending id order. See {@link lockWorkspaceRows}. */
 export async function lockUserRows(
   transaction: Prisma.TransactionClient,
   userIds: readonly string[],
@@ -122,24 +122,24 @@ export async function lockUserRows(
 }
 
 /**
- * Serializes every change that could affect a business's owner count.
+ * Serializes every change that could affect a workspace's owner count.
  *
- * The lock is on the BUSINESS row, not on a membership row, because the
- * invariant is a property of the business as a whole: two transactions demoting
+ * The lock is on the WORKSPACE row, not on a membership row, because the
+ * invariant is a property of the workspace as a whole: two transactions demoting
  * two DIFFERENT owners would never contend on a per-membership lock, and both
  * would observe a count of two.
  */
-export async function lockBusinessRow(
+export async function lockWorkspaceRow(
   transaction: Prisma.TransactionClient,
-  businessId: string,
+  workspaceId: string,
 ): Promise<void> {
-  await transaction.$queryRaw`SELECT id FROM businesses WHERE id = ${businessId}::uuid FOR UPDATE`;
+  await transaction.$queryRaw`SELECT id FROM workspaces WHERE id = ${workspaceId}::uuid FOR UPDATE`;
 }
 
 /**
- * Several businesses, always in ascending id order.
+ * Several workspaces, always in ascending id order.
  *
- * Two users who co-own the same two businesses can be deleted concurrently;
+ * Two users who co-own the same two workspaces can be deleted concurrently;
  * without a total order on the locks, one transaction takes A then B while the
  * other takes B then A, and Postgres resolves it by killing one with a deadlock
  * error the caller never asked for.
@@ -149,12 +149,12 @@ export async function lockBusinessRow(
  * which is free to run in physical order, and the sort happens afterwards — so
  * the `ORDER BY` does not order the locking.
  */
-export async function lockBusinessRows(
+export async function lockWorkspaceRows(
   transaction: Prisma.TransactionClient,
-  businessIds: readonly string[],
+  workspaceIds: readonly string[],
 ): Promise<void> {
-  for (const businessId of sortedUnique(businessIds)) {
-    await lockBusinessRow(transaction, businessId);
+  for (const workspaceId of sortedUnique(workspaceIds)) {
+    await lockWorkspaceRow(transaction, workspaceId);
   }
 }
 

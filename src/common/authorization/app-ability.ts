@@ -3,9 +3,9 @@ import type { PrismaAbility, Subjects } from '@casl/prisma';
 import type {
   AppVersion,
   AuditLog,
-  Business,
-  BusinessInvitation,
-  BusinessMembership,
+  Workspace,
+  WorkspaceInvitation,
+  WorkspaceMembership,
   DeviceToken,
   Permission,
   Role,
@@ -30,8 +30,8 @@ type QueueJobSubject = { id: string };
 // The application's CASL ability type.
 //
 // Subject names are the Prisma model names, which is what lets
-// `accessibleBy(ability, action).ofType('Business')` resolve to
-// `Prisma.BusinessWhereInput`. Keep this map in step with
+// `accessibleBy(ability, action).ofType('Workspace')` resolve to
+// `Prisma.WorkspaceWhereInput`. Keep this map in step with
 // AUTHORIZATION_SUBJECTS in `permission-catalog.ts`.
 export type AppAbility = PrismaAbility<
   [
@@ -39,9 +39,9 @@ export type AppAbility = PrismaAbility<
     (
       | Subjects<{
           User: User;
-          Business: Business;
-          BusinessMembership: BusinessMembership;
-          BusinessInvitation: BusinessInvitation;
+          Workspace: Workspace;
+          WorkspaceMembership: WorkspaceMembership;
+          WorkspaceInvitation: WorkspaceInvitation;
           Role: Role;
           Permission: Permission;
           AppVersion: AppVersion;
@@ -56,12 +56,12 @@ export type AppAbility = PrismaAbility<
 
 // ── How to check an ability, and why the distinction is load-bearing ──────
 //
-//   ability.can('update', 'Business')            ← SUBJECT TYPE
-//     Asks "does ANY rule grant update on Business?". CASL deliberately
+//   ability.can('update', 'Workspace')            ← SUBJECT TYPE
+//     Asks "does ANY rule grant update on Workspace?". CASL deliberately
 //     IGNORES rule conditions here, because there is no record to test them
 //     against. This is all a guard can do: it runs before the row is loaded.
 //
-//   ability.can('update', subject('Business', row))   ← SUBJECT INSTANCE
+//   ability.can('update', subject('Workspace', row))   ← SUBJECT INSTANCE
 //     Evaluates the conditions against a concrete record.
 //
 // Tenant isolation therefore CANNOT live in a guard. It lives in the query,
@@ -83,7 +83,7 @@ export type AppAbilitySubject = Parameters<AppAbility['can']>[1];
  *
  * The cast is load-bearing and safe. CASL's `subject()` is typed to demand a
  * complete model, but a rule condition only ever reads the handful of keys it
- * names (`{ id }`, `{ userId }`, `{ businessId }`). Callers legitimately pass
+ * names (`{ id }`, `{ userId }`, `{ workspaceId }`). Callers legitimately pass
  * a partial — a guard checking a not-yet-created record has nothing else to
  * give. A missing key simply fails the condition, which is the fail-closed
  * direction.

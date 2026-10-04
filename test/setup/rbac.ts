@@ -7,7 +7,7 @@ import {
   seedPermissions,
   seedRoles,
 } from '../../prisma/rbac-seeder';
-import { BusinessMembershipStatus } from '../../src/common/enums/business-membership-status.enum';
+import { WorkspaceMembershipStatus } from '../../src/common/enums/workspace-membership-status.enum';
 import { SeededRoleName } from '../../src/common/enums/seeded-role-name.enum';
 import { RefreshTokenService } from '../../src/modules/auth/refresh-token.service';
 import { PrismaService } from '../../src/prisma/prisma.service';
@@ -166,57 +166,62 @@ export async function roleIdFor(
   return role.id;
 }
 
-export interface SeededBusiness {
+export interface SeededWorkspace {
   id: string;
   slug: string;
 }
 
 /**
- * Creates a business directly in the database and makes `ownerId` its owner.
+ * Creates a workspace directly in the database and makes `ownerId` its owner.
  *
- * Bypasses `POST /businesses` so a spec can set up a tenant without asserting
- * anything about the creation endpoint — and so it can create a business owned
+ * Bypasses `POST /workspaces` so a spec can set up a tenant without asserting
+ * anything about the creation endpoint — and so it can create a workspace owned
  * by somebody other than the caller.
  */
-export async function createBusinessWithOwner(
+export async function createWorkspaceWithOwner(
   app: INestApplication<App>,
   ownerId: string,
   slug = 'acme',
-): Promise<SeededBusiness> {
+): Promise<SeededWorkspace> {
   const prisma = app.get(PrismaService);
-  const business = await prisma.business.create({
+  const workspace = await prisma.workspace.create({
     data: { name: slug, slug, createdBy: ownerId, updatedBy: ownerId },
   });
-  await addMembership(app, business.id, ownerId, SeededRoleName.BUSINESS_OWNER);
-  return { id: business.id, slug: business.slug };
+  await addMembership(
+    app,
+    workspace.id,
+    ownerId,
+    SeededRoleName.WORKSPACE_OWNER,
+  );
+  return { id: workspace.id, slug: workspace.slug };
 }
 
 /**
- * Puts a user into a business with a given role and status.
+ * Puts a user into a workspace with a given role and status.
  *
  * `joinedAt` is always stamped: the column is NOT NULL, because a membership row
  * now exists only once somebody has actually joined. A pending invitation is a
- * `business_invitations` row, never a placeholder membership.
+ * `workspace_invitations` row, never a placeholder membership.
  */
 export async function addMembership(
   app: INestApplication<App>,
-  businessId: string,
+  workspaceId: string,
   userId: string,
   roleName: SeededRoleName,
-  status: BusinessMembershipStatus = BusinessMembershipStatus.ACTIVE,
+  status: WorkspaceMembershipStatus = WorkspaceMembershipStatus.ACTIVE,
 ): Promise<string> {
   const prisma = app.get(PrismaService);
   const role = await prisma.role.findUniqueOrThrow({
     where: { name: roleName },
   });
-  const membership = await prisma.businessMembership.create({
+  const membership = await prisma.workspaceMembership.create({
     data: {
-      businessId,
+      workspaceId,
       userId,
       roleId: role.id,
       status,
       joinedAt: new Date(),
-      endedAt: status === BusinessMembershipStatus.LEFT ? new Date() : null,
+      endedAt: status === WorkspaceMembershipStatus.LEFT ? new Date() : null,
     },
   });
   return membership.id;

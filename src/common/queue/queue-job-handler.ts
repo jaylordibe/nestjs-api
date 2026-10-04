@@ -7,11 +7,11 @@ import type { JobOutcome } from './queue-job-outcome';
 // A handler is the ONE thing a domain module writes to put work on a queue.
 // Everything around it — payload validation, version checking, correlation,
 // lifecycle logging, retry classification — belongs to `QueueProcessor` and is
-// not the handler's business.
+// not the handler's workspace.
 //
 // The lifecycle a handler sits inside:
 //   receive → validate name + payload → load current domain state →
-//   is this job still applicable? → business idempotence check →
+//   is this job still applicable? → workspace idempotence check →
 //   execute → report completed | skipped
 //
 // Two rules the base class cannot enforce for you:

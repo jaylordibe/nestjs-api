@@ -7,7 +7,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { truncateAll } from './setup/db';
 import {
   addMembership,
-  createBusinessWithOwner,
+  createWorkspaceWithOwner,
   createPlatformAdmin,
   createRegularUser,
   createUser,
@@ -98,15 +98,15 @@ describe('Roles (e2e)', () => {
 
     it('filters by scope', async () => {
       const response = await request(app.getHttpServer())
-        .get(`/api/roles?scope=${RoleScope.BUSINESS}&perPage=100`)
+        .get(`/api/roles?scope=${RoleScope.WORKSPACE}&perPage=100`)
         .set('Authorization', `Bearer ${user.token}`)
         .expect(200);
 
       const body = response.body as PageBody<RoleBody>;
       expect(body.data.length).toBeGreaterThan(0);
-      expect(body.data.every((role) => role.scope === RoleScope.BUSINESS)).toBe(
-        true,
-      );
+      expect(
+        body.data.every((role) => role.scope === RoleScope.WORKSPACE),
+      ).toBe(true);
     });
   });
 
@@ -142,45 +142,45 @@ describe('Roles (e2e)', () => {
   });
 
   describe('assignment ceiling on the role picker', () => {
-    it('offers a business admin only roles at or below its own rank', async () => {
+    it('offers a workspace admin only roles at or below its own rank', async () => {
       const owner = await createRegularUser(app, 'owner@example.com');
-      const business = await createBusinessWithOwner(app, owner.id);
-      const businessAdmin = await createRegularUser(app, 'ba@example.com');
+      const workspace = await createWorkspaceWithOwner(app, owner.id);
+      const workspaceAdmin = await createRegularUser(app, 'ba@example.com');
       await addMembership(
         app,
-        business.id,
-        businessAdmin.id,
-        SeededRoleName.BUSINESS_ADMIN,
+        workspace.id,
+        workspaceAdmin.id,
+        SeededRoleName.WORKSPACE_ADMIN,
       );
 
       const response = await request(app.getHttpServer())
-        .get(`/api/roles?assignableIn=${business.id}&perPage=100`)
-        .set('Authorization', `Bearer ${businessAdmin.token}`)
+        .get(`/api/roles?assignableIn=${workspace.id}&perPage=100`)
+        .set('Authorization', `Bearer ${workspaceAdmin.token}`)
         .expect(200);
 
       const body = response.body as PageBody<RoleBody>;
       const names = body.data.map((role) => role.name);
-      expect(names).toContain(SeededRoleName.BUSINESS_ADMIN);
-      expect(names).toContain(SeededRoleName.BUSINESS_MEMBER);
+      expect(names).toContain(SeededRoleName.WORKSPACE_ADMIN);
+      expect(names).toContain(SeededRoleName.WORKSPACE_MEMBER);
       // The one that matters: an admin must never be offered OWNER, because it
       // must never be able to mint one.
-      expect(names).not.toContain(SeededRoleName.BUSINESS_OWNER);
-      // …and platform roles are not assignable inside a business at all.
+      expect(names).not.toContain(SeededRoleName.WORKSPACE_OWNER);
+      // …and platform roles are not assignable inside a workspace at all.
       expect(names).not.toContain(SeededRoleName.PLATFORM_ADMIN);
     });
 
-    it('offers a stranger to the business nothing, without leaking a 403', async () => {
+    it('offers a stranger to the workspace nothing, without leaking a 403', async () => {
       const owner = await createRegularUser(app, 'owner2@example.com');
-      const business = await createBusinessWithOwner(app, owner.id, 'other');
+      const workspace = await createWorkspaceWithOwner(app, owner.id, 'other');
 
       const response = await request(app.getHttpServer())
-        .get(`/api/roles?assignableIn=${business.id}`)
+        .get(`/api/roles?assignableIn=${workspace.id}`)
         .set('Authorization', `Bearer ${user.token}`)
         .expect(200);
 
       const body = response.body as PageBody<RoleBody>;
       // An empty page, not a 403 — otherwise the status code becomes an oracle
-      // for which businesses the caller belongs to.
+      // for which workspaces the caller belongs to.
       expect(body.data).toEqual([]);
     });
   });
@@ -238,16 +238,16 @@ describe('Roles (e2e)', () => {
         .expect(200);
     });
 
-    it('rejects a BUSINESS role assigned platform-wide', async () => {
-      const businessOwnerRoleId = await roleIdFor(
+    it('rejects a WORKSPACE role assigned platform-wide', async () => {
+      const workspaceOwnerRoleId = await roleIdFor(
         app,
-        SeededRoleName.BUSINESS_OWNER,
+        SeededRoleName.WORKSPACE_OWNER,
       );
 
       const response = await request(app.getHttpServer())
         .post(`/api/users/${user.id}/roles`)
         .set('Authorization', `Bearer ${admin.token}`)
-        .send({ roleId: businessOwnerRoleId })
+        .send({ roleId: workspaceOwnerRoleId })
         .expect(400);
 
       expect((response.body as ErrorBody).errorCode).toBe('VALIDATION_FAILED');

@@ -89,10 +89,10 @@ export interface AppConfig {
     // `cloudflare_only` snippet in docs/prod/Caddyfile).
     trustHeaders: boolean;
   };
-  businessInvitation: {
+  workspaceInvitation: {
     // How long an invitation token stays redeemable. Bounded because the token
     // is a bearer credential sitting in somebody's inbox: the longer it lives,
-    // the longer a forwarded or breached mailbox is a way into the business.
+    // the longer a forwarded or breached mailbox is a way into the workspace.
     expiresInDays: number;
   };
   email: {
@@ -267,9 +267,9 @@ export default (): AppConfig => ({
   cloudflare: {
     trustHeaders: process.env.TRUST_CLOUDFLARE_HEADERS === 'true',
   },
-  businessInvitation: {
+  workspaceInvitation: {
     expiresInDays: parseInt(
-      process.env.BUSINESS_INVITATION_EXPIRES_IN_DAYS ?? '7',
+      process.env.WORKSPACE_INVITATION_EXPIRES_IN_DAYS ?? '7',
       10,
     ),
   },

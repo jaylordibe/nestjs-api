@@ -2,7 +2,7 @@
 
 A production-grade scaffold for building JSON APIs with **NestJS 11 + Prisma 7 + PostgreSQL + Redis**. Click **Use this template** on GitHub, clone, set a few env vars, and start adding feature modules. Security-hardened, documented end-to-end in [`CLAUDE.md`](./CLAUDE.md).
 
-Every e2e spec runs against a **real Postgres and Redis** — no mocks, no in-memory substitutes — so what passes locally is what runs in CI. The suite asserts invariants rather than counts: tenant isolation holds under a forged path parameter, a business never reaches zero owners under concurrent demotion, a replayed refresh token revokes its whole family, and an invitation redeemed twice at the same instant produces one membership.
+Every e2e spec runs against a **real Postgres and Redis** — no mocks, no in-memory substitutes — so what passes locally is what runs in CI. The suite asserts invariants rather than counts: tenant isolation holds under a forged path parameter, a workspace never reaches zero owners under concurrent demotion, a replayed refresh token revokes its whole family, and an invitation redeemed twice at the same instant produces one membership.
 
 ## What's inside
 
@@ -23,7 +23,7 @@ Every e2e spec runs against a **real Postgres and Redis** — no mocks, no in-me
 - **Audit columns** (`createdBy`/`updatedBy`/`deletedBy`) on every resource, populated from `@CurrentUser()`.
 - **Audit log table** (`audit_logs`) recording every privileged admin action.
 - **Three example resources** demonstrating the full CRUD pattern: `Users`, `AppVersions`, `DeviceTokens` (with FK cascade to User).
-- **Slack-style tenancy** — one global account, many businesses, exactly one role in each. `BusinessMembership` carries a lifecycle (`invited → active → suspended → left`) rather than a `deletedAt`: the row is reused forever, which is what lets `@@unique([businessId, userId])` be an unconditional constraint. Only `active` confers authority.
+- **Slack-style tenancy** — one global account, many workspaces, exactly one role in each. `WorkspaceMembership` carries a lifecycle (`invited → active → suspended → left`) rather than a `deletedAt`: the row is reused forever, which is what lets `@@unique([workspaceId, userId])` be an unconditional constraint. Only `active` confers authority.
 
 ### Email
 - **Pluggable provider** — `stub` (logs to stdout, default for dev/test) or `resend` (production).
@@ -156,11 +156,11 @@ All routes under `/api`. See Swagger at `/api/docs` for full specs.
 - `GET /users/me/permissions` — the caller's packed CASL rules, for client-side ability sync.
 - `POST|GET|PATCH|DELETE /device-tokens` — your own push tokens (a platform admin manages anyone's).
 
-### Multi-tenant (business scope)
-- `POST|GET|PATCH|DELETE /businesses` — any user may create one; the creator becomes its `BUSINESS_OWNER`.
-- `.../businesses/:businessId/memberships` — the **one** roster. Staff and customers are the same resource distinguished by role, so there is no parallel tree to keep in step. Rank-guarded: you may never grant a role above your own.
+### Multi-tenant (workspace scope)
+- `POST|GET|PATCH|DELETE /workspaces` — any user may create one; the creator becomes its `WORKSPACE_OWNER`.
+- `.../workspaces/:workspaceId/memberships` — the **one** roster. Every role is the same resource distinguished by `roleId`, so there is no parallel tree to keep in step. Rank-guarded: you may never grant a role above your own.
 - `.../memberships/:id/{role,suspend,reactivate,transfer-ownership}` — each a separate permission, because CASL's `manage` wildcard would otherwise let anyone holding "update" also assign roles.
-- `.../businesses/:businessId/invitations` + `POST /invitations/accept` — invite an address that may not have an account yet. Single-use hashed token; concurrent redemption yields exactly one membership.
+- `.../workspaces/:workspaceId/invitations` + `POST /invitations/accept` — invite an address that may not have an account yet. Single-use hashed token; concurrent redemption yields exactly one membership.
 
 ### Administrative (platform scope)
 - `POST|GET|PATCH|DELETE /users` + `/users/:id` + `/users/:id/password` — full user management.
@@ -197,7 +197,7 @@ src/
     authorization/           # @Global: AbilityFactory, grants cache, PermissionsGuard, boot-time gates
     users/                   # canonical resource — full CRUD + self-service + GDPR erase
     roles/                   # roles + permissions (both code-owned, read-only) + platform-role assignment
-    businesses/              # tenant resource + memberships (staff AND customers) + invitations
+    workspaces/              # tenant resource + memberships (one roster, every role) + invitations
     queue-admin/             # operator queue diagnostics; payloads gated behind `readPayload`
     audit-logs/              # read-only audit trail
     app-versions/            # client update signal, one row per release train
@@ -275,7 +275,7 @@ MIT — see [`LICENSE`](./LICENSE).
 ## Authorization
 
 This template ships DB-backed RBAC with CASL over two scopes: **PLATFORM**
-(staff) and **BUSINESS** (tenant-local).
+(staff) and **WORKSPACE** (tenant-local).
 
 ```bash
 yarn rbac:sync     # projects the permission catalog + its seeded roles into the DB
@@ -287,8 +287,8 @@ yarn prisma:seed   # rbac:sync + the bootstrap admin/demo users (needs SEED_*)
 `src/common/authorization/permission-catalog.ts` is the only place a role is
 defined, so granting authority is a reviewable diff rather than an API call.
 Four platform roles separate governance (`PLATFORM_ADMIN`) from technical
-authority (`PLATFORM_ENGINEER`) from two tiers of support; five business roles
-run from owner to customer.
+authority (`PLATFORM_ENGINEER`) from two tiers of support; four workspace roles
+run from owner to member.
 
 `rbac:sync` runs on **every deploy**, straight after `prisma migrate deploy` —
 the api refuses to boot when the catalog and the database disagree, so it can

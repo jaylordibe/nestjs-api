@@ -1,6 +1,6 @@
 # Queue and scheduled-work tests
 
-## Queue job business behavior
+## Queue job workspace behavior
 
 Prefer calling the job handler directly with a typed payload.
 

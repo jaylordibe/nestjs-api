@@ -500,7 +500,7 @@ describe('Users (e2e)', () => {
         email: 'admin@example.com',
       });
       // `role` is gone from the user representation entirely — authorization
-      // lives in `user_roles` / `business_members`, never on the user row.
+      // lives in `user_roles` / `workspace_members`, never on the user row.
       expect(res.body.data[0]).not.toHaveProperty('role');
       expect(res.body.data[0]).not.toHaveProperty('password');
     });

@@ -18,10 +18,10 @@ export interface EmailTemplates {
   // that is the whole reason invitations are a separate model. Carries the
   // single-use token in the URL; the database holds only its SHA-256 digest.
   //
-  // No `firstName`: the business is inviting an ADDRESS, and the API must not
+  // No `firstName`: the workspace is inviting an ADDRESS, and the API must not
   // reveal whether that address is already registered by greeting it by name.
-  'business-invitation': {
-    businessName: string;
+  'workspace-invitation': {
+    workspaceName: string;
     inviterName: string;
     roleName: string;
     acceptUrl: string;
@@ -47,7 +47,7 @@ const TEMPLATE_SUBJECTS: {
   'email-verification-link': 'Verify your email',
   'password-reset-link': 'Reset your password',
   'password-changed-notification': 'Your password was changed',
-  'business-invitation': (vars) => `Join ${vars.businessName}`,
+  'workspace-invitation': (vars) => `Join ${vars.workspaceName}`,
 };
 
 // Templates live in `./templates/<name>.html.hbs` with an optional

@@ -77,7 +77,7 @@ soft-delete mechanism.
 
 ### Suspension
 
-`isActive` is a business state, not a deletion substitute.
+`isActive` is a workspace state, not a deletion substitute.
 
 Use it only when the resource has a real independently reversible suspension
 state.

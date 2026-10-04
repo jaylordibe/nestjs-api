@@ -17,7 +17,7 @@
 // platform role, and that is the normal, fully-functional state.
 export enum SeededRoleName {
   // ── Platform scope ─────────────────────────────────────────────────────
-  // Governance. Assigns platform roles, administers users and businesses.
+  // Governance. Assigns platform roles, administers users and workspaces.
   PLATFORM_ADMIN = 'platform_admin',
   // Highest TECHNICAL authority: diagnostics, queue/worker investigation,
   // release operations. Deliberately holds no role-assignment power — the
@@ -31,14 +31,10 @@ export enum SeededRoleName {
   // session revocation. No infrastructure access.
   PLATFORM_APP_SUPPORT = 'platform_app_support',
 
-  // ── Business scope ─────────────────────────────────────────────────────
-  // Assigned through a `business_memberships` row, never `user_roles`.
-  BUSINESS_OWNER = 'business_owner',
-  BUSINESS_ADMIN = 'business_admin',
-  BUSINESS_MANAGER = 'business_manager',
-  BUSINESS_MEMBER = 'business_member',
-  // A customer of the business. A membership role like any other, which is
-  // what makes one-role-per-business true: a person is staff OR a customer
-  // of a given business, never both.
-  BUSINESS_CUSTOMER = 'business_customer',
+  // ── Workspace scope ─────────────────────────────────────────────────────
+  // Assigned through a `workspace_memberships` row, never `user_roles`.
+  WORKSPACE_OWNER = 'workspace_owner',
+  WORKSPACE_ADMIN = 'workspace_admin',
+  WORKSPACE_MANAGER = 'workspace_manager',
+  WORKSPACE_MEMBER = 'workspace_member',
 }

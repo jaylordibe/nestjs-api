@@ -23,7 +23,7 @@ import {
 // Its side effect is deliberately trivial (stamp a key) because it is
 // infrastructure, not a feature: it must never acquire domain behaviour of any
 // kind. A real handler differs only in what `handle` does, and in reloading its
-// domain row and checking business idempotence before acting.
+// domain row and checking workspace idempotence before acting.
 @Injectable()
 @RegisterQueueJobHandler()
 export class QueueHeartbeatHandler implements QueueJobHandler<QueueHeartbeatPayloadDto> {

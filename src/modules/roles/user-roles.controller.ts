@@ -21,7 +21,7 @@ import { UserRolesService } from './user-roles.service';
 // Granting a platform role is the most privileged action in the system, so it
 // gets its own tight throttle on top of the global one.
 //
-// BUSINESS roles are never assigned here — they are a `business_memberships`
+// WORKSPACE roles are never assigned here — they are a `workspace_memberships`
 // row. `loadPlatformRole` refuses one on the way in, and `AbilityFactory`
 // refuses to compile it on the way out.
 @ApiTags('Roles')

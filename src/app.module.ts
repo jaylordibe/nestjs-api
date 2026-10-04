@@ -37,7 +37,7 @@ import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { AuthorizationModule } from './modules/authorization/authorization.module';
-import { BusinessesModule } from './modules/businesses/businesses.module';
+import { WorkspacesModule } from './modules/workspaces/workspaces.module';
 import { DeviceTokensModule } from './modules/device-tokens/device-tokens.module';
 import { EnumsModule } from './modules/enums/enums.module';
 import { HealthModule } from './modules/health/health.module';
@@ -257,7 +257,7 @@ import { UsersModule } from './modules/users/users.module';
     AuthModule,
     UsersModule,
     RolesModule,
-    BusinessesModule,
+    WorkspacesModule,
     AuditLogsModule,
     AppVersionsModule,
     DeviceTokensModule,

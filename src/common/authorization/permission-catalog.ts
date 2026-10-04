@@ -25,7 +25,7 @@ import { toSnakeCase } from '../util/string-case.util';
 //
 // Every action below `delete` exists because `manage` would otherwise swallow
 // it. That is the whole reason the list is this long: `manage
-// BusinessMembership` silently includes `assignRole`, `suspend`, and
+// WorkspaceMembership` silently includes `assignRole`, `suspend`, and
 // `transferOwnership`, so a role that should administer a roster would
 // silently gain the power to mint an owner.
 export const AUTHORIZATION_ACTIONS = [
@@ -44,7 +44,7 @@ export const AUTHORIZATION_ACTIONS = [
   // Separate from `update` because it revokes authority, and separate from
   // `delete` because it is reversible.
   'suspend',
-  // Moving ownership of a business to another member. The single most
+  // Moving ownership of a workspace to another member. The single most
   // privileged action inside a tenant, so it is never implied by anything.
   'transferOwnership',
   // Re-running a failed background job. Held by support roles, so it must not
@@ -76,9 +76,9 @@ export type AuthorizationAction = (typeof AUTHORIZATION_ACTIONS)[number];
 export const AUTHORIZATION_SUBJECTS = [
   'all',
   'User',
-  'Business',
-  'BusinessMembership',
-  'BusinessInvitation',
+  'Workspace',
+  'WorkspaceMembership',
+  'WorkspaceInvitation',
   'Role',
   'Permission',
   'AppVersion',
@@ -96,7 +96,7 @@ export interface PermissionDefinition {
   readonly description: string;
 }
 
-// `platform.user.update.own`, `business.business_membership.assign_role`,
+// `platform.user.update.own`, `workspace.workspace_membership.assign_role`,
 // `platform.all.manage`. The `.own` suffix is omitted for ANY so the common
 // case reads cleanly. This is the `permissions.name` unique key, and the
 // identity function shared by the catalog, the seeder, and the integrity check.
@@ -132,16 +132,16 @@ const platform = (
   description,
 });
 
-// Business-scoped permissions are always ANY: their condition is the tenant
-// (supplied from the caller's `business_memberships` row), not the acting user.
-const business = (
+// Workspace-scoped permissions are always ANY: their condition is the tenant
+// (supplied from the caller's `workspace_memberships` row), not the acting user.
+const workspace = (
   action: AuthorizationAction,
   subject: AuthorizationSubject,
   description: string,
 ): PermissionDefinition => ({
   action,
   subject,
-  scope: RoleScope.BUSINESS,
+  scope: RoleScope.WORKSPACE,
   ownership: PermissionOwnership.ANY,
   description,
 });
@@ -193,11 +193,11 @@ const READ_ANY_AUDIT_LOG = platform(
   ANY,
   'View the platform audit trail',
 );
-const READ_ANY_BUSINESS = platform(
+const READ_ANY_WORKSPACE = platform(
   'read',
-  'Business',
+  'Workspace',
   ANY,
-  'View any business on the platform',
+  'View any workspace on the platform',
 );
 const MANAGE_ANY_APP_VERSION = platform(
   'manage',
@@ -251,7 +251,7 @@ const CANCEL_ANY_QUEUE_JOB = platform(
 
 // ── Platform scope: the shared vocabulary ────────────────────────────────
 // The role/permission catalogue is not sensitive — it is a vocabulary, much
-// like `GET /enums`. Every authenticated user can read it, because a business
+// like `GET /enums`. Every authenticated user can read it, because a workspace
 // owner needs a `roleId` before they can add anyone to their roster.
 const READ_ROLE = platform('read', 'Role', ANY, 'List the available roles');
 const READ_PERMISSION = platform(
@@ -260,28 +260,28 @@ const READ_PERMISSION = platform(
   ANY,
   'List the permissions a role grants',
 );
-const CREATE_BUSINESS = platform(
+const CREATE_WORKSPACE = platform(
   'create',
-  'Business',
+  'Workspace',
   ANY,
-  'Create a new business (the creator becomes its owner)',
+  'Create a new workspace (the creator becomes its owner)',
 );
 
 // ── Platform scope: cross-tenant investigation ───────────────────────────
 // Reading memberships and invitations platform-wide is how an engineer
-// answers "why can this person see that business?". It grants no authority
+// answers "why can this person see that workspace?". It grants no authority
 // to CHANGE anything.
-const READ_ANY_BUSINESS_MEMBERSHIP = platform(
+const READ_ANY_WORKSPACE_MEMBERSHIP = platform(
   'read',
-  'BusinessMembership',
+  'WorkspaceMembership',
   ANY,
-  'View any business membership across every tenant',
+  'View any workspace membership across every tenant',
 );
-const READ_ANY_BUSINESS_INVITATION = platform(
+const READ_ANY_WORKSPACE_INVITATION = platform(
   'read',
-  'BusinessInvitation',
+  'WorkspaceInvitation',
   ANY,
-  'View any business invitation across every tenant',
+  'View any workspace invitation across every tenant',
 );
 
 // ── Platform scope: intrinsic self-service ───────────────────────────────
@@ -306,74 +306,78 @@ const MANAGE_OWN_DEVICE_TOKEN = platform(
   OWN,
   'Register and remove your own push-notification device tokens',
 );
-const READ_OWN_BUSINESS_MEMBERSHIP = platform(
+const READ_OWN_WORKSPACE_MEMBERSHIP = platform(
   'read',
-  'BusinessMembership',
+  'WorkspaceMembership',
   OWN,
-  'See which businesses you belong to, and in what capacity',
+  'See which workspaces you belong to, and in what capacity',
 );
 
-// ── Business scope ───────────────────────────────────────────────────────
+// ── Workspace scope ───────────────────────────────────────────────────────
 // Note the absence of any `manage` grant in this whole section. Every verb is
-// spelled out, including on BUSINESS_OWNER, because `manage BusinessMembership`
+// spelled out, including on WORKSPACE_OWNER, because `manage WorkspaceMembership`
 // would silently include `assignRole`, `suspend`, and `transferOwnership`.
-const READ_BUSINESS = business('read', 'Business', 'View the business');
-const UPDATE_BUSINESS = business(
+const READ_WORKSPACE = workspace('read', 'Workspace', 'View the workspace');
+const UPDATE_WORKSPACE = workspace(
   'update',
-  'Business',
-  'Edit the business profile and settings',
+  'Workspace',
+  'Edit the workspace profile and settings',
 );
-const DELETE_BUSINESS = business('delete', 'Business', 'Delete the business');
-const TRANSFER_BUSINESS_OWNERSHIP = business(
+const DELETE_WORKSPACE = workspace(
+  'delete',
+  'Workspace',
+  'Delete the workspace',
+);
+const TRANSFER_WORKSPACE_OWNERSHIP = workspace(
   'transferOwnership',
-  'Business',
-  'Hand ownership of the business to another active member',
+  'Workspace',
+  'Hand ownership of the workspace to another active member',
 );
 
-const READ_BUSINESS_MEMBERSHIP = business(
+const READ_WORKSPACE_MEMBERSHIP = workspace(
   'read',
-  'BusinessMembership',
-  'View the business roster',
+  'WorkspaceMembership',
+  'View the workspace roster',
 );
-const CREATE_BUSINESS_MEMBERSHIP = business(
+const CREATE_WORKSPACE_MEMBERSHIP = workspace(
   'create',
-  'BusinessMembership',
-  'Add an existing user to the business roster',
+  'WorkspaceMembership',
+  'Add an existing user to the workspace roster',
 );
-const UPDATE_BUSINESS_MEMBERSHIP = business(
+const UPDATE_WORKSPACE_MEMBERSHIP = workspace(
   'update',
-  'BusinessMembership',
+  'WorkspaceMembership',
   'Edit a roster entry (staff notes)',
 );
-const DELETE_BUSINESS_MEMBERSHIP = business(
+const DELETE_WORKSPACE_MEMBERSHIP = workspace(
   'delete',
-  'BusinessMembership',
-  'End a membership, removing the person from the business',
+  'WorkspaceMembership',
+  'End a membership, removing the person from the workspace',
 );
-const ASSIGN_ROLE_BUSINESS_MEMBERSHIP = business(
+const ASSIGN_ROLE_WORKSPACE_MEMBERSHIP = workspace(
   'assignRole',
-  'BusinessMembership',
-  "Change a member's role within the business (bounded by the rank guard)",
+  'WorkspaceMembership',
+  "Change a member's role within the workspace (bounded by the rank guard)",
 );
-const SUSPEND_BUSINESS_MEMBERSHIP = business(
+const SUSPEND_WORKSPACE_MEMBERSHIP = workspace(
   'suspend',
-  'BusinessMembership',
+  'WorkspaceMembership',
   "Suspend or reactivate a member's access without ending the membership",
 );
 
-const READ_BUSINESS_INVITATION = business(
+const READ_WORKSPACE_INVITATION = workspace(
   'read',
-  'BusinessInvitation',
-  'View pending invitations to the business',
+  'WorkspaceInvitation',
+  'View pending invitations to the workspace',
 );
-const CREATE_BUSINESS_INVITATION = business(
+const CREATE_WORKSPACE_INVITATION = workspace(
   'create',
-  'BusinessInvitation',
-  'Invite someone to join the business',
+  'WorkspaceInvitation',
+  'Invite someone to join the workspace',
 );
-const DELETE_BUSINESS_INVITATION = business(
+const DELETE_WORKSPACE_INVITATION = workspace(
   'delete',
-  'BusinessInvitation',
+  'WorkspaceInvitation',
   'Revoke a pending invitation',
 );
 
@@ -387,7 +391,7 @@ export const PERMISSION_CATALOG: readonly PermissionDefinition[] = [
   ASSIGN_PLATFORM_ROLE,
   MANAGE_ANY_DEVICE_TOKEN,
   READ_ANY_AUDIT_LOG,
-  READ_ANY_BUSINESS,
+  READ_ANY_WORKSPACE,
   MANAGE_ANY_APP_VERSION,
   REVOKE_ANY_USER_SESSION,
   RESEND_ANY_USER_VERIFICATION,
@@ -397,27 +401,27 @@ export const PERMISSION_CATALOG: readonly PermissionDefinition[] = [
   CANCEL_ANY_QUEUE_JOB,
   READ_ROLE,
   READ_PERMISSION,
-  CREATE_BUSINESS,
-  READ_ANY_BUSINESS_MEMBERSHIP,
-  READ_ANY_BUSINESS_INVITATION,
+  CREATE_WORKSPACE,
+  READ_ANY_WORKSPACE_MEMBERSHIP,
+  READ_ANY_WORKSPACE_INVITATION,
   READ_OWN_USER,
   UPDATE_OWN_USER,
   DELETE_OWN_USER,
   MANAGE_OWN_DEVICE_TOKEN,
-  READ_OWN_BUSINESS_MEMBERSHIP,
-  READ_BUSINESS,
-  UPDATE_BUSINESS,
-  DELETE_BUSINESS,
-  TRANSFER_BUSINESS_OWNERSHIP,
-  READ_BUSINESS_MEMBERSHIP,
-  CREATE_BUSINESS_MEMBERSHIP,
-  UPDATE_BUSINESS_MEMBERSHIP,
-  DELETE_BUSINESS_MEMBERSHIP,
-  ASSIGN_ROLE_BUSINESS_MEMBERSHIP,
-  SUSPEND_BUSINESS_MEMBERSHIP,
-  READ_BUSINESS_INVITATION,
-  CREATE_BUSINESS_INVITATION,
-  DELETE_BUSINESS_INVITATION,
+  READ_OWN_WORKSPACE_MEMBERSHIP,
+  READ_WORKSPACE,
+  UPDATE_WORKSPACE,
+  DELETE_WORKSPACE,
+  TRANSFER_WORKSPACE_OWNERSHIP,
+  READ_WORKSPACE_MEMBERSHIP,
+  CREATE_WORKSPACE_MEMBERSHIP,
+  UPDATE_WORKSPACE_MEMBERSHIP,
+  DELETE_WORKSPACE_MEMBERSHIP,
+  ASSIGN_ROLE_WORKSPACE_MEMBERSHIP,
+  SUSPEND_WORKSPACE_MEMBERSHIP,
+  READ_WORKSPACE_INVITATION,
+  CREATE_WORKSPACE_INVITATION,
+  DELETE_WORKSPACE_INVITATION,
 ] as const;
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -431,7 +435,7 @@ export const PERMISSION_CATALOG: readonly PermissionDefinition[] = [
 // "which roles does this user have?" answer.
 //
 // `AbilityFactory` injects these unconditionally, so an account with no
-// platform role and zero business memberships is fully valid and can still
+// platform role and zero workspace memberships is fully valid and can still
 // manage itself.
 //
 // These stay in PERMISSION_CATALOG so `GET /permissions` and the boot-time
@@ -441,8 +445,8 @@ export const PERMISSION_CATALOG: readonly PermissionDefinition[] = [
 //
 // NOTHING TENANT-SCOPED BELONGS HERE. Every entry is ownership-scoped to the
 // caller's own id, or is a read of the shared role/permission vocabulary.
-// `CREATE_BUSINESS` is the one judgement call: this template lets anyone start
-// a business. A project that gates business creation removes that line, and
+// `CREATE_WORKSPACE` is the one judgement call: this template lets anyone start
+// a workspace. A project that gates workspace creation removes that line, and
 // grants it to a platform role instead.
 // ─────────────────────────────────────────────────────────────────────────
 export const AUTHENTICATED_USER_PERMISSIONS: readonly PermissionDefinition[] = [
@@ -450,9 +454,9 @@ export const AUTHENTICATED_USER_PERMISSIONS: readonly PermissionDefinition[] = [
   UPDATE_OWN_USER,
   DELETE_OWN_USER,
   MANAGE_OWN_DEVICE_TOKEN,
-  READ_OWN_BUSINESS_MEMBERSHIP,
-  CREATE_BUSINESS,
-  // Needed to pick a `roleId` when inviting someone to a business.
+  READ_OWN_WORKSPACE_MEMBERSHIP,
+  CREATE_WORKSPACE,
+  // Needed to pick a `roleId` when inviting someone to a workspace.
   READ_ROLE,
   READ_PERMISSION,
 ] as const;
@@ -476,7 +480,7 @@ export const ROLE_DEFINITION_CATALOG: Readonly<
     scope: RoleScope.PLATFORM,
     rank: 100,
     description:
-      'Platform governance: access control, user and business administration, audit',
+      'Platform governance: access control, user and workspace administration, audit',
     permissions: [MANAGE_EVERYTHING],
   },
   [SeededRoleName.PLATFORM_ENGINEER]: {
@@ -492,7 +496,7 @@ export const ROLE_DEFINITION_CATALOG: Readonly<
       'Highest technical authority: diagnostics, queue and worker investigation, controlled recovery, release operations',
     permissions: [
       READ_ANY_USER,
-      READ_ANY_BUSINESS,
+      READ_ANY_WORKSPACE,
       READ_ANY_AUDIT_LOG,
       MANAGE_ANY_APP_VERSION,
       READ_ANY_QUEUE_JOB,
@@ -500,8 +504,8 @@ export const ROLE_DEFINITION_CATALOG: Readonly<
       RETRY_ANY_QUEUE_JOB,
       CANCEL_ANY_QUEUE_JOB,
       // Tenant-isolation investigation: see who belongs where, change nothing.
-      READ_ANY_BUSINESS_MEMBERSHIP,
-      READ_ANY_BUSINESS_INVITATION,
+      READ_ANY_WORKSPACE_MEMBERSHIP,
+      READ_ANY_WORKSPACE_INVITATION,
       // NOTE: no READ_ROLE / READ_PERMISSION here. Every authenticated caller
       // already holds them intrinsically, so listing them would compile a
       // second identical CASL rule into every engineer's ability — harmless in
@@ -534,10 +538,10 @@ export const ROLE_DEFINITION_CATALOG: Readonly<
     // filtering — rather than granting this permission.
     permissions: [
       READ_ANY_USER,
-      READ_ANY_BUSINESS,
+      READ_ANY_WORKSPACE,
       READ_ANY_QUEUE_JOB,
       RETRY_ANY_QUEUE_JOB,
-      READ_ANY_BUSINESS_MEMBERSHIP,
+      READ_ANY_WORKSPACE_MEMBERSHIP,
     ],
   },
   [SeededRoleName.PLATFORM_APP_SUPPORT]: {
@@ -554,96 +558,77 @@ export const ROLE_DEFINITION_CATALOG: Readonly<
     // people's IP addresses and device fingerprints.
     permissions: [
       READ_ANY_USER,
-      READ_ANY_BUSINESS,
-      READ_ANY_BUSINESS_MEMBERSHIP,
+      READ_ANY_WORKSPACE,
+      READ_ANY_WORKSPACE_MEMBERSHIP,
       REVOKE_ANY_USER_SESSION,
       RESEND_ANY_USER_VERIFICATION,
     ],
   },
 
-  // ── Business ───────────────────────────────────────────────────────────
-  [SeededRoleName.BUSINESS_OWNER]: {
-    scope: RoleScope.BUSINESS,
+  // ── Workspace ───────────────────────────────────────────────────────────
+  [SeededRoleName.WORKSPACE_OWNER]: {
+    scope: RoleScope.WORKSPACE,
     rank: 100,
-    // Explicit verbs, NOT `manage Business`/`manage BusinessMembership`. The
+    // Explicit verbs, NOT `manage Workspace`/`manage WorkspaceMembership`. The
     // owner genuinely holds everything listed here, so `manage` would be
     // equivalent TODAY — and would silently grant whatever action is added to
     // the vocabulary NEXT, without anyone reviewing that decision.
-    description: 'Owns the business. Every capability within it, named',
+    description: 'Owns the workspace. Every capability within it, named',
     permissions: [
-      READ_BUSINESS,
-      UPDATE_BUSINESS,
-      DELETE_BUSINESS,
-      TRANSFER_BUSINESS_OWNERSHIP,
-      READ_BUSINESS_MEMBERSHIP,
-      CREATE_BUSINESS_MEMBERSHIP,
-      UPDATE_BUSINESS_MEMBERSHIP,
-      DELETE_BUSINESS_MEMBERSHIP,
-      ASSIGN_ROLE_BUSINESS_MEMBERSHIP,
-      SUSPEND_BUSINESS_MEMBERSHIP,
-      READ_BUSINESS_INVITATION,
-      CREATE_BUSINESS_INVITATION,
-      DELETE_BUSINESS_INVITATION,
+      READ_WORKSPACE,
+      UPDATE_WORKSPACE,
+      DELETE_WORKSPACE,
+      TRANSFER_WORKSPACE_OWNERSHIP,
+      READ_WORKSPACE_MEMBERSHIP,
+      CREATE_WORKSPACE_MEMBERSHIP,
+      UPDATE_WORKSPACE_MEMBERSHIP,
+      DELETE_WORKSPACE_MEMBERSHIP,
+      ASSIGN_ROLE_WORKSPACE_MEMBERSHIP,
+      SUSPEND_WORKSPACE_MEMBERSHIP,
+      READ_WORKSPACE_INVITATION,
+      CREATE_WORKSPACE_INVITATION,
+      DELETE_WORKSPACE_INVITATION,
     ],
   },
-  [SeededRoleName.BUSINESS_ADMIN]: {
-    scope: RoleScope.BUSINESS,
+  [SeededRoleName.WORKSPACE_ADMIN]: {
+    scope: RoleScope.WORKSPACE,
     rank: 70,
-    // Owner minus DELETE_BUSINESS and TRANSFER_BUSINESS_OWNERSHIP. It holds
-    // ASSIGN_ROLE_BUSINESS_MEMBERSHIP, but rank 70 < 100 means the rank guard
-    // refuses to let it hand out BUSINESS_OWNER — to anyone, including itself.
-    description: 'Administers the business and its roster, below the owner',
+    // Owner minus DELETE_WORKSPACE and TRANSFER_WORKSPACE_OWNERSHIP. It holds
+    // ASSIGN_ROLE_WORKSPACE_MEMBERSHIP, but rank 70 < 100 means the rank guard
+    // refuses to let it hand out WORKSPACE_OWNER — to anyone, including itself.
+    description: 'Administers the workspace and its roster, below the owner',
     permissions: [
-      READ_BUSINESS,
-      UPDATE_BUSINESS,
-      READ_BUSINESS_MEMBERSHIP,
-      CREATE_BUSINESS_MEMBERSHIP,
-      UPDATE_BUSINESS_MEMBERSHIP,
-      DELETE_BUSINESS_MEMBERSHIP,
-      ASSIGN_ROLE_BUSINESS_MEMBERSHIP,
-      SUSPEND_BUSINESS_MEMBERSHIP,
-      READ_BUSINESS_INVITATION,
-      CREATE_BUSINESS_INVITATION,
-      DELETE_BUSINESS_INVITATION,
+      READ_WORKSPACE,
+      UPDATE_WORKSPACE,
+      READ_WORKSPACE_MEMBERSHIP,
+      CREATE_WORKSPACE_MEMBERSHIP,
+      UPDATE_WORKSPACE_MEMBERSHIP,
+      DELETE_WORKSPACE_MEMBERSHIP,
+      ASSIGN_ROLE_WORKSPACE_MEMBERSHIP,
+      SUSPEND_WORKSPACE_MEMBERSHIP,
+      READ_WORKSPACE_INVITATION,
+      CREATE_WORKSPACE_INVITATION,
+      DELETE_WORKSPACE_INVITATION,
     ],
   },
-  [SeededRoleName.BUSINESS_MANAGER]: {
-    scope: RoleScope.BUSINESS,
+  [SeededRoleName.WORKSPACE_MANAGER]: {
+    scope: RoleScope.WORKSPACE,
     rank: 40,
     description:
       'Runs day-to-day operations; can grow the roster but not assign roles or suspend anyone',
     permissions: [
-      READ_BUSINESS,
-      UPDATE_BUSINESS,
-      READ_BUSINESS_MEMBERSHIP,
-      CREATE_BUSINESS_MEMBERSHIP,
-      READ_BUSINESS_INVITATION,
-      CREATE_BUSINESS_INVITATION,
+      READ_WORKSPACE,
+      UPDATE_WORKSPACE,
+      READ_WORKSPACE_MEMBERSHIP,
+      CREATE_WORKSPACE_MEMBERSHIP,
+      READ_WORKSPACE_INVITATION,
+      CREATE_WORKSPACE_INVITATION,
     ],
   },
-  [SeededRoleName.BUSINESS_MEMBER]: {
-    scope: RoleScope.BUSINESS,
+  [SeededRoleName.WORKSPACE_MEMBER]: {
+    scope: RoleScope.WORKSPACE,
     rank: 20,
-    description: 'Works here. Reads the business and its roster',
-    permissions: [READ_BUSINESS, READ_BUSINESS_MEMBERSHIP],
-  },
-  [SeededRoleName.BUSINESS_CUSTOMER]: {
-    scope: RoleScope.BUSINESS,
-    rank: 10,
-    // Deliberately the smallest coherent grant: a customer sees the business
-    // they are a customer OF, and (via the intrinsic
-    // READ_OWN_BUSINESS_MEMBERSHIP) their own membership row. It gets NO
-    // roster access — a customer must never be able to enumerate staff or
-    // other customers.
-    //
-    // A real project extends this by adding its own customer-owned subjects
-    // (bookings, orders, tickets): register the model's owning-user column in
-    // SUBJECT_OWNER_KEY, define `own`-scoped platform permissions for it, and
-    // add them to AUTHENTICATED_USER_PERMISSIONS — or define business-scoped
-    // permissions and grant them here. See
-    // `src/common/authorization/README.md`.
-    description:
-      'A customer of the business. Reads the business; no roster access',
-    permissions: [READ_BUSINESS],
+    description: 'Works here. Reads the workspace and its roster',
+    permissions: [READ_WORKSPACE, READ_WORKSPACE_MEMBERSHIP],
   },
 };

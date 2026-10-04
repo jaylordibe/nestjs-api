@@ -16,7 +16,7 @@ import tseslint from 'typescript-eslint';
 
 // The cloud-neutrality boundary. A provider SDK is reachable from exactly one
 // file per provider, which is what lets this template deploy to a different
-// cloud without a business-logic change. It also protects the LAZINESS in
+// cloud without a domain-logic change. It also protects the LAZINESS in
 // file-storage.module.ts, which `require`s adapters inside factories so only
 // the selected provider's SDK is ever loaded — a static import anywhere else
 // pulls all three back into every cold start and no test would notice.
@@ -169,7 +169,7 @@ export default tseslint.config(
         // extension's own header warns about. That warning was a comment, and a
         // comment does not fail a build.
         //
-        // `user` and `business` are the relation names pointing at the two
+        // `user` and `workspace` are the relation names pointing at the two
         // models in SOFT_DELETE_MODELS. **Add the relation name here whenever a
         // model gains a `deletedAt`** — the rule cannot read schema.prisma.
         //
@@ -182,7 +182,7 @@ export default tseslint.config(
         // week, and then it would catch nothing at all.
         {
           selector:
-            "Property[key.name=/^(include|select)$/] > ObjectExpression > Property[key.name=/^(user|business)$/][value.raw='true']",
+            "Property[key.name=/^(include|select)$/] > ObjectExpression > Property[key.name=/^(user|workspace)$/][value.raw='true']",
           message:
             'Including a soft-deletable relation unfiltered returns deleted rows: `prisma.scoped` only filters top-level reads, never nested ones. Filter it explicitly — `{ where: { deletedAt: null } }` for a to-many relation, or filter the PARENT rows for a to-one (Prisma has no `where` on a to-one include). See src/prisma/prisma-soft-delete.extension.ts.',
         },

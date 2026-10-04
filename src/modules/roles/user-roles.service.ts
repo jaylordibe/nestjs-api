@@ -11,15 +11,15 @@ import { PermissionLoaderService } from '../authorization/permission-loader.serv
 // roles, and self-service capability comes from AUTHENTICATED_USER_PERMISSIONS
 // rather than from any row in `user_roles`.
 //
-// `BusinessMembershipsService` fails closed the same way, by refusing outright
+// `WorkspaceMembershipsService` fails closed the same way, by refusing outright
 // rather than defaulting. (An older comment here claimed the opposite — that a
-// missing business membership meant "platform admin, unbounded". It has not
+// missing workspace membership meant "platform admin, unbounded". It has not
 // been true for some time, and it was describing the exact bug that reading
 // "I could not find your rank" as "you have no limit" produces.)
 const NO_AUTHORITY_RANK = 0;
 
-// Grants and revokes PLATFORM-scope roles. Business roles are never assigned
-// here — they live in `business_memberships`. `loadPlatformRole` refuses one on
+// Grants and revokes PLATFORM-scope roles. Workspace roles are never assigned
+// here — they live in `workspace_memberships`. `loadPlatformRole` refuses one on
 // the write path; `AbilityFactory` refuses to compile one on the read path,
 // which is where it would otherwise become an unconditional platform-wide
 // grant.
@@ -105,13 +105,13 @@ export class UserRolesService {
     if ((role.scope as RoleScope) !== RoleScope.PLATFORM) {
       throw Errors.badRequest(
         'Only platform-scoped roles can be assigned to a user account. ' +
-          'Business roles are granted by adding the user to a business.',
+          'Workspace roles are granted by adding the user to a workspace.',
       );
     }
     return role;
   }
 
-  // Same ceiling as inside a business: you may grant a role at or below your
+  // Same ceiling as inside a workspace: you may grant a role at or below your
   // own platform rank, never above it. Prevents a custom staff role that holds
   // `assignRole User` from minting a PLATFORM_ADMIN.
   private async assertMayAssignRank(

@@ -34,9 +34,9 @@ export interface RequirePermissionOptions {
   // `administrative: true` makes the guard demand a rule that is not
   // owner-conditioned, so self-service grants cannot unlock admin routes.
   //
-  // Tenant-conditioned rules still qualify: a BUSINESS_ADMIN's
-  // `update BusinessMembership { businessId }` is administrative *within* its
-  // business, and the tenant boundary is enforced by the query.
+  // Tenant-conditioned rules still qualify: a WORKSPACE_ADMIN's
+  // `update WorkspaceMembership { workspaceId }` is administrative *within* its
+  // workspace, and the tenant boundary is enforced by the query.
   administrative?: boolean;
 
   // Answer a caller who holds NO grant on this subject as though the resource
@@ -45,14 +45,14 @@ export interface RequirePermissionOptions {
   //
   // Two reasons, both about tenant-scoped resources:
   //
-  //  1. Truthfulness. A user who belongs to no business is not *forbidden*
-  //     from listing businesses; they have none. `200 []` is the honest answer,
-  //     and `GET /businesses` returning 403 would force every frontend to
+  //  1. Truthfulness. A user who belongs to no workspace is not *forbidden*
+  //     from listing workspaces; they have none. `200 []` is the honest answer,
+  //     and `GET /workspaces` returning 403 would force every frontend to
   //     special-case it.
   //
-  //  2. Consistency. Without this, a user WITH a business gets 404 on someone
-  //     else's business (the query filters it out), while a user with NO
-  //     business gets 403 from the guard — the same request answered two
+  //  2. Consistency. Without this, a user WITH a workspace gets 404 on someone
+  //     else's workspace (the query filters it out), while a user with NO
+  //     workspace gets 403 from the guard — the same request answered two
   //     different ways depending on state the caller cannot see.
   //
   // This can never widen access: the query still scopes every row. It only

@@ -108,7 +108,7 @@ export class PermissionsGuard implements CanActivate {
     // ignores conditions, so ask a sharper question: is there a granting rule
     // that is NOT conditioned on the owner key?
     //
-    // Tenant-conditioned rules still qualify — a BUSINESS_ADMIN administers a
+    // Tenant-conditioned rules still qualify — a WORKSPACE_ADMIN administers a
     // roster it does not personally own, and the tenant boundary is enforced
     // in the query.
     if (
@@ -118,31 +118,31 @@ export class PermissionsGuard implements CanActivate {
       throw Errors.permissionDenied(action, subject);
     }
 
-    // A business-scoped subject that is a CHILD of a business (a roster entry,
+    // A workspace-scoped subject that is a CHILD of a workspace (a roster entry,
     // an invoice, …) can only be authorized relative to a tenant, so the route
-    // must name one. `Business` itself is exempt: its own id is the tenant, and
+    // must name one. `Workspace` itself is exempt: its own id is the tenant, and
     // resolving it here would turn a cross-tenant hit into a 403 that confirms
     // the record exists. Those go through AbilityScopedQueryService → 404.
-    const businessId = this.resolveBusinessId(request);
-    const isBusinessChildSubject =
-      isTenantScopedSubject(subject) && subject !== 'Business';
+    const workspaceId = this.resolveWorkspaceId(request);
+    const isWorkspaceChildSubject =
+      isTenantScopedSubject(subject) && subject !== 'Workspace';
 
-    if (isBusinessChildSubject && !businessId) {
-      throw Errors.businessContextMissing();
+    if (isWorkspaceChildSubject && !workspaceId) {
+      throw Errors.workspaceContextMissing();
     }
 
-    // With a tenant in hand and no record yet loaded — the create-into-business
+    // With a tenant in hand and no record yet loaded — the create-into-workspace
     // case — the guard can honestly evaluate the condition. Everywhere else it
     // can only ask whether a rule exists at all (CASL ignores conditions when
     // the subject is a type rather than an instance); row and tenant scoping
     // then happen in the query.
     const allowed =
-      businessId && isTenantScopedSubject(subject)
+      workspaceId && isTenantScopedSubject(subject)
         ? ability.can(
             action,
             taggedSubject(
               subject,
-              this.buildTenantStub(subject, businessId, user.id),
+              this.buildTenantStub(subject, workspaceId, user.id),
             ),
           )
         : ability.can(action, subject);
@@ -152,7 +152,7 @@ export class PermissionsGuard implements CanActivate {
       // an empty page for a list, 404 for a record. The service still scopes
       // every query, so passing here cannot widen what the caller sees — it
       // only decides which refusal they receive. Without this, the same
-      // request would 403 for a user with no businesses and 404 for a user
+      // request would 403 for a user with no workspaces and 404 for a user
       // with one.
       if (denyAsNotFound) return true;
       throw Errors.permissionDenied(action, subject);
@@ -164,25 +164,25 @@ export class PermissionsGuard implements CanActivate {
    * The partial record the guard checks a tenant-scoped rule against.
    *
    * It carries the tenant key AND, when the subject is also ownable, the
-   * caller's own id. `BusinessMembership` is both: staff reach a roster row
-   * through a `{ businessId }` rule, while a member reaches their OWN row
+   * caller's own id. `WorkspaceMembership` is both: staff reach a roster row
+   * through a `{ workspaceId }` rule, while a member reaches their OWN row
    * through the intrinsic `{ userId }` rule. Supplying only the tenant key
    * would silently deny the member — their rule would see `userId: undefined`
-   * and fail — which is how a business customer would lose access to their own
-   * membership.
+   * and fail — which is how a member without roster access would lose access
+   * to their own membership.
    *
    * Supplying the caller's own id is safe. It answers "may I act on MY record
-   * in this business?", which is the only thing the guard could honestly ask
+   * in this workspace?", which is the only thing the guard could honestly ask
    * before a record exists. Acting on SOMEONE ELSE's record is re-checked in
    * the service against the real row, and every read is scoped by the query.
    */
   private buildTenantStub(
     subject: AuthorizationSubject,
-    businessId: string,
+    workspaceId: string,
     currentUserId: string,
   ): Record<string, unknown> {
     const stub: Record<string, unknown> = {
-      [resolveTenantKey(subject)]: businessId,
+      [resolveTenantKey(subject)]: workspaceId,
     };
     if (isOwnableSubject(subject)) {
       stub[resolveOwnerKey(subject)] = currentUserId;
@@ -214,18 +214,18 @@ export class PermissionsGuard implements CanActivate {
   }
 
   // The tenant the request operates in. Canonical source is the route param on
-  // nested routes (`/businesses/:businessId/members`); a create that names its
+  // nested routes (`/workspaces/:workspaceId/members`); a create that names its
   // parent in the body is the other legitimate case.
   //
-  // Deliberately NO `X-Business-Id` header fallback: an ambient, easily-forged
+  // Deliberately NO `X-Workspace-Id` header fallback: an ambient, easily-forged
   // tenant selector is attack surface a baseline template should not ship.
-  private resolveBusinessId(request: AuthorizedRequest): string | undefined {
-    const fromParams = request.params?.businessId;
+  private resolveWorkspaceId(request: AuthorizedRequest): string | undefined {
+    const fromParams = request.params?.workspaceId;
     if (fromParams) return fromParams;
 
     const body = request.body;
-    if (body && typeof body === 'object' && 'businessId' in body) {
-      const fromBody = (body as { businessId?: unknown }).businessId;
+    if (body && typeof body === 'object' && 'workspaceId' in body) {
+      const fromBody = (body as { workspaceId?: unknown }).workspaceId;
       if (typeof fromBody === 'string' && fromBody.length > 0) return fromBody;
     }
     return undefined;

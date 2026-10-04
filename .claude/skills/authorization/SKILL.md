@@ -1,7 +1,7 @@
 ---
 name: authorization
 description: This repository's answers for RBAC and CASL — the permission catalog as source of truth, the one access decorator every route declares, AbilityScopedQueryService as the only query-scoping path, the 404-versus-403 rule, escalation rank, and grants-cache invalidation.
-when_to_use: Use when adding or changing permissions, roles, business-scoped resources, @RequirePermission, @AuthenticatedOnly, @Public, AbilityScopedQueryService, permission catalogs, ownership rules, administrative routes, role assignment, or authorization tests.
+when_to_use: Use when adding or changing permissions, roles, workspace-scoped resources, @RequirePermission, @AuthenticatedOnly, @Public, AbilityScopedQueryService, permission catalogs, ownership rules, administrative routes, role assignment, or authorization tests.
 user-invocable: false
 ---
 
@@ -83,12 +83,12 @@ visible but the action is denied.
 
 ## Dual-scoped subjects
 
-A subject may be both owner-scoped and business-scoped. For a dual-scoped model:
+A subject may be both owner-scoped and workspace-scoped. For a dual-scoped model:
 register both owner and tenant keys; ensure the guard stub includes both; allow
 rules to OR-compose through the authorization service; re-check the resolved
 target when acting on another user's row.
 
-Do not model a customer relationship as a role or business membership unless the
+Do not model a customer relationship as a role or workspace membership unless the
 domain contract says it is one.
 
 ## Escalation and role assignment
@@ -120,15 +120,15 @@ Never leave stale grants active for the cache TTL.
 7. Let the isolated test setup seed its own test database; never re-seed local
    data autonomously.
 
-### Add a business-scoped model
+### Add a workspace-scoped model
 
-1. Add the `businessId` relation/index.
+1. Add the `workspaceId` relation/index.
 2. Add the subject to `AUTHORIZATION_SUBJECTS`.
 3. Add its tenant key.
 4. Add its Prisma `WhereInput` mapping.
 5. Use scoped list and record queries.
-6. Verify PLATFORM and BUSINESS actors separately.
-7. Verify cross-business access returns 404.
+6. Verify PLATFORM and WORKSPACE actors separately.
+7. Verify cross-workspace access returns 404.
 8. Verify ownership and administrative behavior independently.
 
 ### Add an owner-scoped model
@@ -137,7 +137,7 @@ Never leave stale grants active for the cache TTL.
 2. Build list and record visibility through the authorization service.
 3. Never accept a client-supplied owner ID as authoritative — derive owner/actor
    fields from the authenticated server context.
-4. Test owner, non-owner, platform admin, and business staff behavior.
+4. Test owner, non-owner, platform admin, and workspace staff behavior.
 
 ## Audit
 
@@ -148,8 +148,8 @@ metadata override the server-vouched request context.
 ## Required tests
 
 Use shared RBAC fixtures after `truncateAll`. Cover as relevant: 401
-unauthenticated; no grant; correct grant; owner versus non-owner; same-business
-versus cross-business; PLATFORM versus BUSINESS scope; invisible record returns
+unauthenticated; no grant; correct grant; owner versus non-owner; same-workspace
+versus cross-workspace; PLATFORM versus WORKSPACE scope; invisible record returns
 404; visible but forbidden action returns 403; administrative route not unlocked
 by an own-only permission; dual-scoped owner/staff behavior; escalation/rank
 denial; grants-cache invalidation; permission catalog integrity; stable

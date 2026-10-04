@@ -12,7 +12,7 @@ import {
   resolveTenantKey,
 } from '../../common/authorization/subject-key';
 import { PermissionOwnership } from '../../common/enums/permission-ownership.enum';
-import { BusinessMembershipStatus } from '../../common/enums/business-membership-status.enum';
+import { WorkspaceMembershipStatus } from '../../common/enums/workspace-membership-status.enum';
 import { RoleScope } from '../../common/enums/role-scope.enum';
 
 // A permission as it reaches the factory: the identity columns only. The
@@ -32,12 +32,12 @@ export interface PermissionGrant {
 // answerable to "why can this person do that?" without a second query. An
 // authorization cache you cannot read is one nobody trusts, and one nobody
 // trusts gets bypassed.
-export interface BusinessMembershipGrant {
+export interface WorkspaceMembershipGrant {
   readonly membershipId: string;
-  readonly businessId: string;
+  readonly workspaceId: string;
   readonly roleId: string;
   readonly roleName: string;
-  readonly status: BusinessMembershipStatus;
+  readonly status: WorkspaceMembershipStatus;
   readonly permissions: readonly PermissionGrant[];
 }
 
@@ -45,7 +45,7 @@ export interface BusinessMembershipGrant {
 // round-trip through JSON in the Redis grants cache.
 export interface AuthorizationGrants {
   readonly platformPermissions: readonly PermissionGrant[];
-  readonly businessMemberships: readonly BusinessMembershipGrant[];
+  readonly workspaceMemberships: readonly WorkspaceMembershipGrant[];
 }
 
 @Injectable()
@@ -54,7 +54,7 @@ export class AbilityFactory {
   //
   // This is the "where" half of the model: a permission row records only WHAT
   // (action + subject), and the condition is derived here from the row's scope
-  // and ownership plus the request context (`userId`, or the business a
+  // and ownership plus the request context (`userId`, or the workspace a
   // membership is for). That is why `permissions` has no condition column.
   //
   // Pure and synchronous — loading lives in PermissionLoaderService.
@@ -64,7 +64,7 @@ export class AbilityFactory {
     // ── What every authenticated caller can do, with no role at all ──────
     //
     // Injected FIRST and unconditionally, so an account with no platform role
-    // and zero business memberships is still a complete, working account.
+    // and zero workspace memberships is still a complete, working account.
     // Modelling this as a role granted at signup would cost a `user_roles` row
     // per user and a special case in the revoke path to stop anyone breaking an
     // account by taking it away.
@@ -85,8 +85,8 @@ export class AbilityFactory {
       //
       // This loop branches on where a grant ARRIVED from, not on what the
       // permission claims to be, and the `else` below emits an UNCONDITIONAL
-      // rule. Business permissions are always `ANY`, so a business permission
-      // reaching this loop — a business role assigned through `user_roles` —
+      // rule. Workspace permissions are always `ANY`, so a workspace permission
+      // reaching this loop — a workspace role assigned through `user_roles` —
       // would compile to platform-wide authority with no tenant bound. That is
       // the single most dangerous shape this file can produce.
       //
@@ -105,17 +105,20 @@ export class AbilityFactory {
     // lines because grants also arrive here deserialized from Redis, and a
     // cache is untrusted input: this is the last point at which a grant set can
     // be checked before it becomes a permission.
-    for (const membership of grants.businessMemberships) {
-      if (membership.status !== BusinessMembershipStatus.ACTIVE) continue;
+    for (const membership of grants.workspaceMemberships) {
+      if (membership.status !== WorkspaceMembershipStatus.ACTIVE) continue;
 
       // A tenant rule whose tenant is `undefined` is not a narrow rule, it is
-      // NO rule: `{ businessId: undefined }` reaches Prisma as "no filter", and
+      // NO rule: `{ workspaceId: undefined }` reaches Prisma as "no filter", and
       // `accessibleBy` then yields `{ OR: [{}] }` — which the empty-`OR` guard
       // in AbilityScopedQueryService does not catch, because the array is not
       // empty. Every row of the table would come back to a single-tenant
       // caller. Grants arrive here deserialized from Redis, so the field is not
       // guaranteed present just because the type says it is.
-      if (typeof membership.businessId !== 'string' || !membership.businessId) {
+      if (
+        typeof membership.workspaceId !== 'string' ||
+        !membership.workspaceId
+      ) {
         continue;
       }
 
@@ -126,13 +129,13 @@ export class AbilityFactory {
         // `AuditLog` and `QueueJob`, so most of it fails closed on its own —
         // but "most" is not a guarantee, and a throw here would take out every
         // request for that account rather than dropping one rule.
-        if (permission.scope !== RoleScope.BUSINESS) continue;
+        if (permission.scope !== RoleScope.WORKSPACE) continue;
 
-        // Business-scoped authority is bounded by the tenant, always. The
-        // `Business` record itself is keyed by `id`; everything owned by a
-        // business is keyed by `businessId`.
+        // Workspace-scoped authority is bounded by the tenant, always. The
+        // `Workspace` record itself is keyed by `id`; everything owned by a
+        // workspace is keyed by `workspaceId`.
         can(permission.action, permission.subject, {
-          [resolveTenantKey(permission.subject)]: membership.businessId,
+          [resolveTenantKey(permission.subject)]: membership.workspaceId,
         });
       }
     }

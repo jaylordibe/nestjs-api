@@ -35,12 +35,12 @@ describe('permissionName', () => {
   it('snake-cases compound subjects and actions', () => {
     expect(
       permissionName({
-        scope: RoleScope.BUSINESS,
-        subject: 'BusinessMembership',
+        scope: RoleScope.WORKSPACE,
+        subject: 'WorkspaceMembership',
         action: 'assignRole',
         ownership: PermissionOwnership.ANY,
       }),
-    ).toBe('business.business_membership.assign_role');
+    ).toBe('workspace.workspace_membership.assign_role');
   });
 });
 
@@ -58,17 +58,17 @@ describe('PERMISSION_CATALOG', () => {
     }
   });
 
-  it('scopes every BUSINESS permission to a subject with a known tenant column', () => {
+  it('scopes every WORKSPACE permission to a subject with a known tenant column', () => {
     for (const permission of PERMISSION_CATALOG) {
-      if (permission.scope === RoleScope.BUSINESS) {
+      if (permission.scope === RoleScope.WORKSPACE) {
         expect(isTenantScopedSubject(permission.subject)).toBe(true);
       }
     }
   });
 
-  it('marks every BUSINESS permission as ANY (its condition is the tenant)', () => {
+  it('marks every WORKSPACE permission as ANY (its condition is the tenant)', () => {
     for (const permission of PERMISSION_CATALOG) {
-      if (permission.scope === RoleScope.BUSINESS) {
+      if (permission.scope === RoleScope.WORKSPACE) {
         expect(permission.ownership).toBe(PermissionOwnership.ANY);
       }
     }
@@ -114,19 +114,19 @@ describe('ROLE_DEFINITION_CATALOG', () => {
     }
   });
 
-  it('never grants `manage` on a BUSINESS-scoped role, owner included', () => {
-    // `manage` is CASL's wildcard. On `BusinessMembership` it silently includes
-    // `assignRole`, `suspend`, and `transferOwnership`; on `Business` it
+  it('never grants `manage` on a WORKSPACE-scoped role, owner included', () => {
+    // `manage` is CASL's wildcard. On `WorkspaceMembership` it silently includes
+    // `assignRole`, `suspend`, and `transferOwnership`; on `Workspace` it
     // includes `delete`. The owner legitimately holds all of those TODAY, so
     // `manage` would be equivalent right now — and would silently grant
-    // whatever verb is added to the vocabulary NEXT, to every business role
+    // whatever verb is added to the vocabulary NEXT, to every workspace role
     // holding it, with nobody reviewing that decision.
     //
     // That is why this is a guard rather than a style check. The failure mode
     // is not a bad grant someone writes; it is a good grant that widens later,
     // when the person adding the verb has no reason to look here.
     for (const [roleName, definition] of roleEntries) {
-      if (definition.scope !== RoleScope.BUSINESS) continue;
+      if (definition.scope !== RoleScope.WORKSPACE) continue;
       const wildcardGrants = definition.permissions
         .filter((permission) => permission.action === 'manage')
         .map(permissionName);
@@ -158,16 +158,16 @@ describe('ROLE_DEFINITION_CATALOG', () => {
     // The one rule that makes AUTHENTICATED_USER_PERMISSIONS safe: nothing here
     // may reach into a tenant. An `ANY`-ownership grant on a tenant-scoped
     // subject would hand every registered account authority inside every
-    // business on the platform.
+    // workspace on the platform.
     const SHARED_VOCABULARY_SUBJECTS = new Set(['Role', 'Permission']);
     for (const permission of AUTHENTICATED_USER_PERMISSIONS) {
       const isSafe =
         permission.ownership === PermissionOwnership.OWN ||
         SHARED_VOCABULARY_SUBJECTS.has(permission.subject) ||
-        // Creating a business grants authority over a tenant that does not yet
+        // Creating a workspace grants authority over a tenant that does not yet
         // exist, and the creator becomes its owner. Deliberately open in this
         // template; see the note in the catalog.
-        (permission.action === 'create' && permission.subject === 'Business');
+        (permission.action === 'create' && permission.subject === 'Workspace');
       expect({ permission: permissionName(permission), isSafe }).toEqual({
         permission: permissionName(permission),
         isSafe: true,
@@ -253,7 +253,7 @@ describe('ROLE_DEFINITION_CATALOG', () => {
   it('ranks the owner/admin of each scope above every other role in it', () => {
     const highestByScope = {
       [RoleScope.PLATFORM]: SeededRoleName.PLATFORM_ADMIN,
-      [RoleScope.BUSINESS]: SeededRoleName.BUSINESS_OWNER,
+      [RoleScope.WORKSPACE]: SeededRoleName.WORKSPACE_OWNER,
     };
     for (const [scopeKey, expectedTopRole] of Object.entries(highestByScope)) {
       // `Object.entries` widens the key to `string`; cast at the boundary so

@@ -25,7 +25,7 @@
  *
  * So the seams are the entry points that take the first lock —
  * `RefreshTokenService.issueForNewSession`,
- * `BusinessOwnershipPolicy.assertUserMayHoldActiveMembership` — and a spec
+ * `WorkspaceOwnershipPolicy.assertUserMayHoldActiveMembership` — and a spec
  * pausing anywhere else should say why.
  */
 

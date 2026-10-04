@@ -326,7 +326,7 @@ describe('env.validation cross-field rules', () => {
       expect(value.DATABASE_IDLE_TIMEOUT_MS).toBe(30_000);
     });
 
-    it('rejects a pool size a single process has no business holding', () => {
+    it('rejects a pool size a single process has no workspace holding', () => {
       expect(validate({ DATABASE_POOL_MAX: 500 }).error?.message).toContain(
         'DATABASE_POOL_MAX',
       );

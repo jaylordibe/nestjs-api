@@ -1,14 +1,14 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { BusinessInvitationStatus } from '../../common/enums/business-invitation-status.enum';
-import { BusinessMembershipStatus } from '../../common/enums/business-membership-status.enum';
+import { WorkspaceInvitationStatus } from '../../common/enums/workspace-invitation-status.enum';
+import { WorkspaceMembershipStatus } from '../../common/enums/workspace-membership-status.enum';
 import { RoleScope } from '../../common/enums/role-scope.enum';
 import { PrismaService } from '../../prisma/prisma.service';
 
 /** One class of corruption, with enough detail to act on and no personal data. */
 export interface AuthorizationDataDefect {
   kind:
-    | 'business_role_assigned_platform_wide'
+    | 'workspace_role_assigned_platform_wide'
     | 'platform_role_in_membership'
     | 'platform_role_in_invitation'
     | 'unknown_membership_status'
@@ -28,7 +28,7 @@ export interface AuthorizationDataDefect {
  * checks the ASSIGNMENTS — that no role has been attached somewhere its scope
  * makes meaningless — and the two fail for entirely different reasons.
  *
- * Why this is worth a boot gate rather than a dashboard: a BUSINESS role sitting
+ * Why this is worth a boot gate rather than a dashboard: a WORKSPACE role sitting
  * in `user_roles` is a request for platform-wide authority. `AbilityFactory`
  * already refuses to compile it (that is the control that actually holds), but a
  * row that exists and is silently ignored is indistinguishable from one that was
@@ -43,7 +43,7 @@ export interface AuthorizationDataDefect {
  * of truth introduced to guard the first.
  *
  * **Diagnostics carry counts and catalog vocabulary only** — never an email, a
- * user id, or a business id. A boot log is read by more people, and retained
+ * user id, or a workspace id. A boot log is read by more people, and retained
  * longer, than any table it describes.
  */
 @Injectable()
@@ -81,7 +81,7 @@ export class AuthorizationDataIntegrityService implements OnApplicationBootstrap
   /** Every defect, so one boot reports all of them rather than the first. */
   async findDefects(): Promise<AuthorizationDataDefect[]> {
     const [
-      businessRolesHeldPlatformWide,
+      workspaceRolesHeldPlatformWide,
       platformRolesInMemberships,
       platformRolesInInvitations,
       membershipStatuses,
@@ -89,30 +89,30 @@ export class AuthorizationDataIntegrityService implements OnApplicationBootstrap
     ] = await Promise.all([
       this.prisma.userRole.groupBy({
         by: ['roleId'],
-        where: { role: { scope: RoleScope.BUSINESS } },
+        where: { role: { scope: RoleScope.WORKSPACE } },
         _count: { _all: true },
       }),
-      this.prisma.businessMembership.groupBy({
+      this.prisma.workspaceMembership.groupBy({
         by: ['roleId'],
         where: { role: { scope: RoleScope.PLATFORM } },
         _count: { _all: true },
       }),
-      this.prisma.businessInvitation.groupBy({
+      this.prisma.workspaceInvitation.groupBy({
         by: ['roleId'],
         where: { role: { scope: RoleScope.PLATFORM } },
         _count: { _all: true },
       }),
-      this.prisma.businessMembership.groupBy({
+      this.prisma.workspaceMembership.groupBy({
         by: ['status'],
         where: {
-          status: { notIn: Object.values(BusinessMembershipStatus) },
+          status: { notIn: Object.values(WorkspaceMembershipStatus) },
         },
         _count: { _all: true },
       }),
-      this.prisma.businessInvitation.groupBy({
+      this.prisma.workspaceInvitation.groupBy({
         by: ['status'],
         where: {
-          status: { notIn: Object.values(BusinessInvitationStatus) },
+          status: { notIn: Object.values(WorkspaceInvitationStatus) },
         },
         _count: { _all: true },
       }),
@@ -121,8 +121,8 @@ export class AuthorizationDataIntegrityService implements OnApplicationBootstrap
     const defects: AuthorizationDataDefect[] = [];
     await this.collectRoleDefect(
       defects,
-      'business_role_assigned_platform_wide',
-      businessRolesHeldPlatformWide,
+      'workspace_role_assigned_platform_wide',
+      workspaceRolesHeldPlatformWide,
     );
     await this.collectRoleDefect(
       defects,
@@ -188,16 +188,16 @@ function collectStatusDefect(
 }
 
 const DEFECT_DESCRIPTIONS: Record<AuthorizationDataDefect['kind'], string> = {
-  business_role_assigned_platform_wide:
-    'BUSINESS-scoped role(s) assigned platform-wide in `user_roles`',
+  workspace_role_assigned_platform_wide:
+    'WORKSPACE-scoped role(s) assigned platform-wide in `user_roles`',
   platform_role_in_membership:
-    'PLATFORM-scoped role(s) attached to a business membership',
+    'PLATFORM-scoped role(s) attached to a workspace membership',
   platform_role_in_invitation:
-    'PLATFORM-scoped role(s) attached to a business invitation',
+    'PLATFORM-scoped role(s) attached to a workspace invitation',
   unknown_membership_status:
-    'business membership(s) carrying a status outside `BusinessMembershipStatus`',
+    'workspace membership(s) carrying a status outside `WorkspaceMembershipStatus`',
   unknown_invitation_status:
-    'business invitation(s) carrying a status outside `BusinessInvitationStatus`',
+    'workspace invitation(s) carrying a status outside `WorkspaceInvitationStatus`',
 };
 
 function describeDefect(defect: AuthorizationDataDefect): string {

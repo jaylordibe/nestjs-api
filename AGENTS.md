@@ -18,7 +18,7 @@ something most changes need; feature detail belongs in the code, its tests and
 ## Project
 
 NestJS 11 (TypeScript, Express) + Prisma 7 + PostgreSQL + Redis + BullMQ.
-JWT auth with DB-backed RBAC + CASL over two scopes (PLATFORM / BUSINESS).
+JWT auth with DB-backed RBAC + CASL over two scopes (PLATFORM / WORKSPACE).
 Unversioned `/api/...`; Swagger at `/api/docs`. Package manager: yarn 1,
 `yarn.lock` committed.
 
@@ -114,7 +114,7 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
 - **Soft delete:** `prisma.scoped.*` filters top-level reads only; nested
   includes need explicit filters. Never a security boundary.
 - **Partial-unique columns** (`users.email`, `users.username`,
-  `businesses.slug`): look up with `findFirst`, never `findUnique`.
+  `workspaces.slug`): look up with `findFirst`, never `findUnique`.
 - **Lists:** five standard endpoints; read handlers are `findPaginated` /
   `findById`, one resource per controller, no unpaginated `GET /all`,
   `perPage` clamped to 100.

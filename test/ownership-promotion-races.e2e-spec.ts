@@ -1,18 +1,18 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
-import { BusinessMembershipStatus } from '../src/common/enums/business-membership-status.enum';
+import { WorkspaceMembershipStatus } from '../src/common/enums/workspace-membership-status.enum';
 import { SeededRoleName } from '../src/common/enums/seeded-role-name.enum';
 import { AbilityFactory } from '../src/modules/authorization/ability.factory';
 import { PermissionLoaderService } from '../src/modules/authorization/permission-loader.service';
-import { BusinessOwnershipPolicy } from '../src/modules/businesses/business-ownership.policy';
-import { BusinessInvitationsService } from '../src/modules/businesses/invitations/business-invitations.service';
+import { WorkspaceOwnershipPolicy } from '../src/modules/workspaces/workspace-ownership.policy';
+import { WorkspaceInvitationsService } from '../src/modules/workspaces/invitations/workspace-invitations.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { pauseBefore, runRace } from './setup/barrier';
 import { truncateAll } from './setup/db';
 import {
   addMembership,
-  createBusinessWithOwner,
+  createWorkspaceWithOwner,
   createPlatformAdmin,
   createRegularUser,
   roleIdFor,
@@ -25,17 +25,17 @@ import { createTestApp } from './setup/test-app';
 /**
  * Ownership survives every race between promotion and account withdrawal.
  *
- * The invariant, stated once: **every live business has at least one ACTIVE
+ * The invariant, stated once: **every live workspace has at least one ACTIVE
  * owner whose account is live and active.** Enforcing its two halves with
  * mechanisms that cannot see each other breaks it: if account deletion locks
- * only the businesses the user is ALREADY known to own, a promotion into a
- * business the user does not yet own locks nothing the deletion waits on, and
- * both commit. The result is an ACTIVE `BUSINESS_OWNER` membership pointing
+ * only the workspaces the user is ALREADY known to own, a promotion into a
+ * workspace the user does not yet own locks nothing the deletion waits on, and
+ * both commit. The result is an ACTIVE `WORKSPACE_OWNER` membership pointing
  * at a dead account — invisible to every roster read (they all filter on a live
- * user), and unrepairable by any business-level actor, because `BUSINESS_ADMIN`
+ * user), and unrepairable by any workspace-level actor, because `WORKSPACE_ADMIN`
  * holds no `transferOwnership`.
  *
- * The fix is one lock order — user row, then business row, per
+ * The fix is one lock order — user row, then workspace row, per
  * `src/common/util/row-lock.util.ts` — taken by BOTH sides, plus a re-read of
  * the target user inside the mutation. Every path that accepts a `roleId` is a
  * potential owner-creation path, so every one of them is exercised here.
@@ -45,18 +45,18 @@ import { createTestApp } from './setup/test-app';
  * therefore the point at which everything it read beforehand is stale.
  *
  * Every case asserts the DATABASE invariant directly at the end: whatever the
- * two requests each returned, the business is either closed or still has an
+ * two requests each returned, the workspace is either closed or still has an
  * owner who can act.
  */
 describe('Ownership promotion races (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
-  let ownershipPolicy: BusinessOwnershipPolicy;
+  let ownershipPolicy: WorkspaceOwnershipPolicy;
 
   beforeAll(async () => {
     app = await createTestApp();
     prisma = app.get(PrismaService);
-    ownershipPolicy = app.get(BusinessOwnershipPolicy);
+    ownershipPolicy = app.get(WorkspaceOwnershipPolicy);
   });
 
   beforeEach(async () => {
@@ -74,22 +74,22 @@ describe('Ownership promotion races (e2e)', () => {
    * THE assertion. Not "did the request 409" — that is a symptom. This is the
    * property the whole design exists to hold.
    */
-  const assertEveryLiveBusinessHasAUsableOwner = async (): Promise<void> => {
-    const liveBusinesses = await prisma.business.findMany({
+  const assertEveryLiveWorkspaceHasAUsableOwner = async (): Promise<void> => {
+    const liveWorkspaces = await prisma.workspace.findMany({
       where: { deletedAt: null },
       select: { id: true, slug: true },
     });
-    for (const business of liveBusinesses) {
-      const usableOwners = await prisma.businessMembership.count({
+    for (const workspace of liveWorkspaces) {
+      const usableOwners = await prisma.workspaceMembership.count({
         where: {
-          businessId: business.id,
-          status: BusinessMembershipStatus.ACTIVE,
-          role: { name: SeededRoleName.BUSINESS_OWNER },
+          workspaceId: workspace.id,
+          status: WorkspaceMembershipStatus.ACTIVE,
+          role: { name: SeededRoleName.WORKSPACE_OWNER },
           user: { deletedAt: null, isActive: true },
         },
       });
-      expect({ slug: business.slug, usableOwners }).toEqual({
-        slug: business.slug,
+      expect({ slug: workspace.slug, usableOwners }).toEqual({
+        slug: workspace.slug,
         usableOwners: expect.any(Number) as number,
       });
       expect(usableOwners).toBeGreaterThanOrEqual(1);
@@ -99,30 +99,30 @@ describe('Ownership promotion races (e2e)', () => {
   const pausePromotion = () =>
     pauseBefore(ownershipPolicy, 'assertUserMayHoldActiveMembership');
 
-  const activeOwnerCount = (businessId: string) =>
-    prisma.businessMembership.count({
+  const activeOwnerCount = (workspaceId: string) =>
+    prisma.workspaceMembership.count({
       where: {
-        businessId,
-        status: BusinessMembershipStatus.ACTIVE,
-        role: { name: SeededRoleName.BUSINESS_OWNER },
+        workspaceId,
+        status: WorkspaceMembershipStatus.ACTIVE,
+        role: { name: SeededRoleName.WORKSPACE_OWNER },
       },
     });
 
   interface Tenant {
     owner: SeededUser;
-    business: { id: string; slug: string };
+    workspace: { id: string; slug: string };
   }
 
-  /** A business with one owner, plus an admin who can be promoted. */
+  /** A workspace with one owner, plus an admin who can be promoted. */
   const seedTenant = async (slug = 'acme'): Promise<Tenant> => {
     const owner = await createRegularUser(app, `owner-${slug}@example.com`);
-    const business = await createBusinessWithOwner(app, owner.id, slug);
-    return { owner, business };
+    const workspace = await createWorkspaceWithOwner(app, owner.id, slug);
+    return { owner, workspace };
   };
 
-  const membershipIdOf = async (businessId: string, userId: string) => {
-    const membership = await prisma.businessMembership.findUniqueOrThrow({
-      where: { businessId_userId: { businessId, userId } },
+  const membershipIdOf = async (workspaceId: string, userId: string) => {
+    const membership = await prisma.workspaceMembership.findUniqueOrThrow({
+      where: { workspaceId_userId: { workspaceId, userId } },
       select: { id: true },
     });
     return membership.id;
@@ -131,14 +131,14 @@ describe('Ownership promotion races (e2e)', () => {
   /**
    * Mints an invitation and returns its plaintext token.
    *
-   * Through the service, because `POST /businesses/:id/invitations` deliberately
+   * Through the service, because `POST /workspaces/:id/invitations` deliberately
    * does not return the token — being able to invite an address must not also
    * let you redeem the invitation yourself. The service is the only place the
    * plaintext exists, and the ability handed to it is the REAL compiled one, so
    * it sees exactly what a request would give it.
    */
   const mintInvitationToken = async (
-    businessId: string,
+    workspaceId: string,
     actorId: string,
     email: string,
     roleId: string,
@@ -148,8 +148,8 @@ describe('Ownership promotion races (e2e)', () => {
       .get(AbilityFactory)
       .createForUser(actorId, await loader.loadGrants(actorId));
     const { token } = await app
-      .get(BusinessInvitationsService)
-      .create(businessId, { email, roleId }, ability, actorId);
+      .get(WorkspaceInvitationsService)
+      .create(workspaceId, { email, roleId }, ability, actorId);
     return token;
   };
 
@@ -157,17 +157,17 @@ describe('Ownership promotion races (e2e)', () => {
 
   describe('promotion racing the target account being withdrawn', () => {
     it('ownership transfer racing deletion of the incoming owner', async () => {
-      const { owner, business } = await seedTenant();
+      const { owner, workspace } = await seedTenant();
       const admin = await createPlatformAdmin(app);
       const successor = await createRegularUser(app, 'successor@example.com');
       await addMembership(
         app,
-        business.id,
+        workspace.id,
         successor.id,
-        SeededRoleName.BUSINESS_ADMIN,
+        SeededRoleName.WORKSPACE_ADMIN,
       );
       const successorMembershipId = await membershipIdOf(
-        business.id,
+        workspace.id,
         successor.id,
       );
 
@@ -177,7 +177,7 @@ describe('Ownership promotion races (e2e)', () => {
       await runRace(
         request(app.getHttpServer())
           .post(
-            `/api/businesses/${business.id}/memberships/${successorMembershipId}/transfer-ownership`,
+            `/api/workspaces/${workspace.id}/memberships/${successorMembershipId}/transfer-ownership`,
           )
           .set('Authorization', `Bearer ${owner.token}`),
         paused,
@@ -187,20 +187,20 @@ describe('Ownership promotion races (e2e)', () => {
             .set('Authorization', `Bearer ${admin.token}`),
       );
 
-      await assertEveryLiveBusinessHasAUsableOwner();
+      await assertEveryLiveWorkspaceHasAUsableOwner();
     });
 
     it('ownership transfer racing GDPR erasure of the incoming owner', async () => {
-      const { owner, business } = await seedTenant();
+      const { owner, workspace } = await seedTenant();
       const successor = await createRegularUser(app, 'successor@example.com');
       await addMembership(
         app,
-        business.id,
+        workspace.id,
         successor.id,
-        SeededRoleName.BUSINESS_ADMIN,
+        SeededRoleName.WORKSPACE_ADMIN,
       );
       const successorMembershipId = await membershipIdOf(
-        business.id,
+        workspace.id,
         successor.id,
       );
 
@@ -208,7 +208,7 @@ describe('Ownership promotion races (e2e)', () => {
       await runRace(
         request(app.getHttpServer())
           .post(
-            `/api/businesses/${business.id}/memberships/${successorMembershipId}/transfer-ownership`,
+            `/api/workspaces/${workspace.id}/memberships/${successorMembershipId}/transfer-ownership`,
           )
           .set('Authorization', `Bearer ${owner.token}`),
         paused,
@@ -219,27 +219,27 @@ describe('Ownership promotion races (e2e)', () => {
             .send({ currentPassword: TEST_PASSWORD }),
       );
 
-      await assertEveryLiveBusinessHasAUsableOwner();
+      await assertEveryLiveWorkspaceHasAUsableOwner();
     });
 
     it('role change to owner racing deletion of the target', async () => {
-      const { owner, business } = await seedTenant();
+      const { owner, workspace } = await seedTenant();
       const admin = await createPlatformAdmin(app);
       const member = await createRegularUser(app, 'member@example.com');
       await addMembership(
         app,
-        business.id,
+        workspace.id,
         member.id,
-        SeededRoleName.BUSINESS_MEMBER,
+        SeededRoleName.WORKSPACE_MEMBER,
       );
-      const memberMembershipId = await membershipIdOf(business.id, member.id);
-      const ownerRoleId = await roleIdFor(app, SeededRoleName.BUSINESS_OWNER);
+      const memberMembershipId = await membershipIdOf(workspace.id, member.id);
+      const ownerRoleId = await roleIdFor(app, SeededRoleName.WORKSPACE_OWNER);
 
       const paused = pausePromotion();
       const outcome = await runRace(
         request(app.getHttpServer())
           .patch(
-            `/api/businesses/${business.id}/memberships/${memberMembershipId}/role`,
+            `/api/workspaces/${workspace.id}/memberships/${memberMembershipId}/role`,
           )
           .set('Authorization', `Bearer ${owner.token}`)
           .send({ roleId: ownerRoleId }),
@@ -257,27 +257,27 @@ describe('Ownership promotion races (e2e)', () => {
       expect(promotion?.status).toBe(404);
 
       // No ACTIVE owner membership was created on the dead account.
-      const deadOwnerRows = await prisma.businessMembership.count({
+      const deadOwnerRows = await prisma.workspaceMembership.count({
         where: {
           userId: member.id,
-          status: BusinessMembershipStatus.ACTIVE,
-          role: { name: SeededRoleName.BUSINESS_OWNER },
+          status: WorkspaceMembershipStatus.ACTIVE,
+          role: { name: SeededRoleName.WORKSPACE_OWNER },
         },
       });
       expect(deadOwnerRows).toBe(0);
-      await assertEveryLiveBusinessHasAUsableOwner();
+      await assertEveryLiveWorkspaceHasAUsableOwner();
     });
 
     it('direct owner-membership creation racing deletion of the target', async () => {
-      const { owner, business } = await seedTenant();
+      const { owner, workspace } = await seedTenant();
       const admin = await createPlatformAdmin(app);
       const newcomer = await createRegularUser(app, 'newcomer@example.com');
-      const ownerRoleId = await roleIdFor(app, SeededRoleName.BUSINESS_OWNER);
+      const ownerRoleId = await roleIdFor(app, SeededRoleName.WORKSPACE_OWNER);
 
       const paused = pausePromotion();
       const outcome = await runRace(
         request(app.getHttpServer())
-          .post(`/api/businesses/${business.id}/memberships`)
+          .post(`/api/workspaces/${workspace.id}/memberships`)
           .set('Authorization', `Bearer ${owner.token}`)
           .send({ email: newcomer.email, roleId: ownerRoleId }),
         paused,
@@ -290,15 +290,15 @@ describe('Ownership promotion races (e2e)', () => {
       const creation =
         outcome.paused.status === 'fulfilled' ? outcome.paused.value : null;
       expect(creation?.status).toBe(404);
-      const memberships = await prisma.businessMembership.count({
+      const memberships = await prisma.workspaceMembership.count({
         where: { userId: newcomer.id },
       });
       expect(memberships).toBe(0);
-      await assertEveryLiveBusinessHasAUsableOwner();
+      await assertEveryLiveWorkspaceHasAUsableOwner();
     });
 
     it('owner reactivation racing deletion of the target', async () => {
-      const { owner, business } = await seedTenant();
+      const { owner, workspace } = await seedTenant();
       const admin = await createPlatformAdmin(app);
       const suspendedOwner = await createRegularUser(
         app,
@@ -306,13 +306,13 @@ describe('Ownership promotion races (e2e)', () => {
       );
       await addMembership(
         app,
-        business.id,
+        workspace.id,
         suspendedOwner.id,
-        SeededRoleName.BUSINESS_OWNER,
-        BusinessMembershipStatus.SUSPENDED,
+        SeededRoleName.WORKSPACE_OWNER,
+        WorkspaceMembershipStatus.SUSPENDED,
       );
       const suspendedMembershipId = await membershipIdOf(
-        business.id,
+        workspace.id,
         suspendedOwner.id,
       );
 
@@ -320,7 +320,7 @@ describe('Ownership promotion races (e2e)', () => {
       const outcome = await runRace(
         request(app.getHttpServer())
           .post(
-            `/api/businesses/${business.id}/memberships/${suspendedMembershipId}/reactivate`,
+            `/api/workspaces/${workspace.id}/memberships/${suspendedMembershipId}/reactivate`,
           )
           .set('Authorization', `Bearer ${owner.token}`),
         paused,
@@ -335,25 +335,25 @@ describe('Ownership promotion races (e2e)', () => {
       const reactivation =
         outcome.paused.status === 'fulfilled' ? outcome.paused.value : null;
       expect(reactivation?.status).toBe(404);
-      const revived = await prisma.businessMembership.findUniqueOrThrow({
+      const revived = await prisma.workspaceMembership.findUniqueOrThrow({
         where: { id: suspendedMembershipId },
         select: { status: true },
       });
-      expect(revived.status).toBe(BusinessMembershipStatus.SUSPENDED);
-      await assertEveryLiveBusinessHasAUsableOwner();
+      expect(revived.status).toBe(WorkspaceMembershipStatus.SUSPENDED);
+      await assertEveryLiveWorkspaceHasAUsableOwner();
     });
 
     it('invitation acceptance into an owner role racing deletion of the invitee', async () => {
-      const { owner, business } = await seedTenant();
+      const { owner, workspace } = await seedTenant();
       const admin = await createPlatformAdmin(app);
       const invitee = await createRegularUser(app, 'invitee@example.com');
-      const ownerRoleId = await roleIdFor(app, SeededRoleName.BUSINESS_OWNER);
+      const ownerRoleId = await roleIdFor(app, SeededRoleName.WORKSPACE_OWNER);
 
       // Minted through the service, not the endpoint: `POST /invitations`
       // deliberately never returns the plaintext token — it goes to the invited
       // address and nowhere else. The acceptance below still goes over HTTP.
       const token = await mintInvitationToken(
-        business.id,
+        workspace.id,
         owner.id,
         invitee.email,
         ownerRoleId,
@@ -376,17 +376,17 @@ describe('Ownership promotion races (e2e)', () => {
         outcome.paused.status === 'fulfilled' ? outcome.paused.value : null;
       expect(acceptance?.status).toBe(404);
       expect(
-        await prisma.businessMembership.count({
+        await prisma.workspaceMembership.count({
           where: { userId: invitee.id },
         }),
       ).toBe(0);
       // The invitation must not have been consumed by a failed acceptance.
-      const stillPending = await prisma.businessInvitation.findFirstOrThrow({
-        where: { businessId: business.id },
+      const stillPending = await prisma.workspaceInvitation.findFirstOrThrow({
+        where: { workspaceId: workspace.id },
         select: { status: true },
       });
       expect(stillPending.status).toBe('pending');
-      await assertEveryLiveBusinessHasAUsableOwner();
+      await assertEveryLiveWorkspaceHasAUsableOwner();
     });
   });
 
@@ -394,18 +394,18 @@ describe('Ownership promotion races (e2e)', () => {
 
   describe('two withdrawals racing each other', () => {
     it('two co-owners deleting simultaneously leaves one behind', async () => {
-      const { owner: first, business } = await seedTenant();
+      const { owner: first, workspace } = await seedTenant();
       const second = await createRegularUser(app, 'second-owner@example.com');
       await addMembership(
         app,
-        business.id,
+        workspace.id,
         second.id,
-        SeededRoleName.BUSINESS_OWNER,
+        SeededRoleName.WORKSPACE_OWNER,
       );
-      expect(await activeOwnerCount(business.id)).toBe(2);
+      expect(await activeOwnerCount(workspace.id)).toBe(2);
 
       // No barrier seam here — both requests go through the same lock on
-      // DIFFERENT user rows, so the serialization point is the business row.
+      // DIFFERENT user rows, so the serialization point is the workspace row.
       // Issued together on purpose: whichever order Postgres picks, exactly one
       // must be refused.
       const [firstOutcome, secondOutcome] = await Promise.allSettled([
@@ -422,32 +422,32 @@ describe('Ownership promotion races (e2e)', () => {
       );
       expect(statuses.filter((status) => status === 204)).toHaveLength(1);
       expect(statuses.filter((status) => status === 409)).toHaveLength(1);
-      await assertEveryLiveBusinessHasAUsableOwner();
+      await assertEveryLiveWorkspaceHasAUsableOwner();
     });
 
     it('two owners demoted simultaneously leaves one behind', async () => {
-      const { owner: first, business } = await seedTenant();
+      const { owner: first, workspace } = await seedTenant();
       const second = await createRegularUser(app, 'second-owner@example.com');
       await addMembership(
         app,
-        business.id,
+        workspace.id,
         second.id,
-        SeededRoleName.BUSINESS_OWNER,
+        SeededRoleName.WORKSPACE_OWNER,
       );
-      const firstMembershipId = await membershipIdOf(business.id, first.id);
-      const secondMembershipId = await membershipIdOf(business.id, second.id);
-      const adminRoleId = await roleIdFor(app, SeededRoleName.BUSINESS_ADMIN);
+      const firstMembershipId = await membershipIdOf(workspace.id, first.id);
+      const secondMembershipId = await membershipIdOf(workspace.id, second.id);
+      const adminRoleId = await roleIdFor(app, SeededRoleName.WORKSPACE_ADMIN);
 
       const outcomes = await Promise.allSettled([
         request(app.getHttpServer())
           .patch(
-            `/api/businesses/${business.id}/memberships/${firstMembershipId}/role`,
+            `/api/workspaces/${workspace.id}/memberships/${firstMembershipId}/role`,
           )
           .set('Authorization', `Bearer ${second.token}`)
           .send({ roleId: adminRoleId }),
         request(app.getHttpServer())
           .patch(
-            `/api/businesses/${business.id}/memberships/${secondMembershipId}/role`,
+            `/api/workspaces/${workspace.id}/memberships/${secondMembershipId}/role`,
           )
           .set('Authorization', `Bearer ${first.token}`)
           .send({ roleId: adminRoleId }),
@@ -461,7 +461,7 @@ describe('Ownership promotion races (e2e)', () => {
       // loser and which one does is genuinely racy:
       //
       //   409 LAST_OWNER_PROTECTED — the loser's own demotion is evaluated
-      //       while they are still an owner, and it would empty the business.
+      //       while they are still an owner, and it would empty the workspace.
       //   403 ROLE_NOT_ASSIGNABLE  — the winner's demotion committed first, so
       //       the loser is now a rank-70 admin trying to act on a rank-100
       //       owner, and the rank ceiling refuses them earlier.
@@ -474,21 +474,24 @@ describe('Ownership promotion races (e2e)', () => {
         statuses.filter((status) => status === 403 || status === 409),
       ).toHaveLength(1);
       // What actually matters, asserted on the database.
-      expect(await activeOwnerCount(business.id)).toBe(1);
-      await assertEveryLiveBusinessHasAUsableOwner();
+      expect(await activeOwnerCount(workspace.id)).toBe(1);
+      await assertEveryLiveWorkspaceHasAUsableOwner();
     });
 
     it('deletion racing another owner being demoted', async () => {
-      const { owner: staying, business } = await seedTenant();
+      const { owner: staying, workspace } = await seedTenant();
       const leaving = await createRegularUser(app, 'leaving@example.com');
       await addMembership(
         app,
-        business.id,
+        workspace.id,
         leaving.id,
-        SeededRoleName.BUSINESS_OWNER,
+        SeededRoleName.WORKSPACE_OWNER,
       );
-      const stayingMembershipId = await membershipIdOf(business.id, staying.id);
-      const adminRoleId = await roleIdFor(app, SeededRoleName.BUSINESS_ADMIN);
+      const stayingMembershipId = await membershipIdOf(
+        workspace.id,
+        staying.id,
+      );
+      const adminRoleId = await roleIdFor(app, SeededRoleName.WORKSPACE_ADMIN);
 
       await Promise.allSettled([
         request(app.getHttpServer())
@@ -496,24 +499,24 @@ describe('Ownership promotion races (e2e)', () => {
           .set('Authorization', `Bearer ${leaving.token}`),
         request(app.getHttpServer())
           .patch(
-            `/api/businesses/${business.id}/memberships/${stayingMembershipId}/role`,
+            `/api/workspaces/${workspace.id}/memberships/${stayingMembershipId}/role`,
           )
           .set('Authorization', `Bearer ${leaving.token}`)
           .send({ roleId: adminRoleId }),
       ]);
 
-      await assertEveryLiveBusinessHasAUsableOwner();
+      await assertEveryLiveWorkspaceHasAUsableOwner();
     });
   });
 
   // ── the non-concurrent rules the races depend on ─────────────────────────
 
   describe('an unusable account can never become an owner', () => {
-    it('refuses to add a deleted user to a business at all', async () => {
-      const { owner, business } = await seedTenant();
+    it('refuses to add a deleted user to a workspace at all', async () => {
+      const { owner, workspace } = await seedTenant();
       const admin = await createPlatformAdmin(app);
       const ghost = await createRegularUser(app, 'ghost@example.com');
-      const ownerRoleId = await roleIdFor(app, SeededRoleName.BUSINESS_OWNER);
+      const ownerRoleId = await roleIdFor(app, SeededRoleName.WORKSPACE_OWNER);
 
       await request(app.getHttpServer())
         .delete(`/api/users/${ghost.id}`)
@@ -521,24 +524,27 @@ describe('Ownership promotion races (e2e)', () => {
         .expect(204);
 
       await request(app.getHttpServer())
-        .post(`/api/businesses/${business.id}/memberships`)
+        .post(`/api/workspaces/${workspace.id}/memberships`)
         .set('Authorization', `Bearer ${owner.token}`)
         .send({ email: ghost.email, roleId: ownerRoleId })
         .expect(404);
     });
 
     it('refuses to promote a deactivated user to owner', async () => {
-      const { owner, business } = await seedTenant();
+      const { owner, workspace } = await seedTenant();
       const admin = await createPlatformAdmin(app);
       const benched = await createRegularUser(app, 'benched@example.com');
       await addMembership(
         app,
-        business.id,
+        workspace.id,
         benched.id,
-        SeededRoleName.BUSINESS_ADMIN,
+        SeededRoleName.WORKSPACE_ADMIN,
       );
-      const benchedMembershipId = await membershipIdOf(business.id, benched.id);
-      const ownerRoleId = await roleIdFor(app, SeededRoleName.BUSINESS_OWNER);
+      const benchedMembershipId = await membershipIdOf(
+        workspace.id,
+        benched.id,
+      );
+      const ownerRoleId = await roleIdFor(app, SeededRoleName.WORKSPACE_OWNER);
 
       await request(app.getHttpServer())
         .patch(`/api/users/${benched.id}`)
@@ -548,19 +554,19 @@ describe('Ownership promotion races (e2e)', () => {
 
       await request(app.getHttpServer())
         .patch(
-          `/api/businesses/${business.id}/memberships/${benchedMembershipId}/role`,
+          `/api/workspaces/${workspace.id}/memberships/${benchedMembershipId}/role`,
         )
         .set('Authorization', `Bearer ${owner.token}`)
         .send({ roleId: ownerRoleId })
         .expect(404);
-      await assertEveryLiveBusinessHasAUsableOwner();
+      await assertEveryLiveWorkspaceHasAUsableOwner();
     });
 
-    it('refuses to deactivate the sole owner of a live business', async () => {
-      const { owner, business } = await seedTenant();
+    it('refuses to deactivate the sole owner of a live workspace', async () => {
+      const { owner, workspace } = await seedTenant();
       const admin = await createPlatformAdmin(app);
 
-      // A deactivated owner cannot authenticate, so the business would be as
+      // A deactivated owner cannot authenticate, so the workspace would be as
       // stranded as if the account had been deleted. A platform admin is not
       // exempt: `manage all` bypasses authorization, not data integrity.
       const refused = await request(app.getHttpServer())
@@ -577,27 +583,27 @@ describe('Ownership promotion races (e2e)', () => {
         select: { isActive: true },
       });
       expect(unchanged.isActive).toBe(true);
-      expect(business.id).toBeDefined();
-      await assertEveryLiveBusinessHasAUsableOwner();
+      expect(workspace.id).toBeDefined();
+      await assertEveryLiveWorkspaceHasAUsableOwner();
     });
 
-    it('GDPR erasure closes the business rather than stranding it', async () => {
-      const { owner, business } = await seedTenant();
+    it('GDPR erasure closes the workspace rather than stranding it', async () => {
+      const { owner, workspace } = await seedTenant();
 
       // Erasure answers a legal obligation and cannot be refused for a
-      // commercial relationship — so the business is closed instead.
+      // commercial relationship — so the workspace is closed instead.
       await request(app.getHttpServer())
         .post('/api/users/me/gdpr-erase')
         .set('Authorization', `Bearer ${owner.token}`)
         .send({ currentPassword: TEST_PASSWORD })
         .expect(204);
 
-      const closed = await prisma.business.findUniqueOrThrow({
-        where: { id: business.id },
+      const closed = await prisma.workspace.findUniqueOrThrow({
+        where: { id: workspace.id },
         select: { deletedAt: true },
       });
       expect(closed.deletedAt).not.toBeNull();
-      await assertEveryLiveBusinessHasAUsableOwner();
+      await assertEveryLiveWorkspaceHasAUsableOwner();
     });
   });
 });

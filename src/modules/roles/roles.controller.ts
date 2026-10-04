@@ -37,7 +37,7 @@ export class RolesController {
   constructor(private readonly rolesService: RolesService) {}
 
   // Readable by every authenticated user — via AUTHENTICATED_USER_PERMISSIONS,
-  // not via a role. A business owner needs a `roleId` before they can invite
+  // not via a role. A workspace owner needs a `roleId` before they can invite
   // anyone, and role names and descriptions are a vocabulary, not a secret.
   @Get()
   @RequirePermission('read', 'Role')

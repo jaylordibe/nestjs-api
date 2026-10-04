@@ -54,25 +54,25 @@ describe('Audit logs (e2e)', () => {
   });
 
   /**
-   * How many audit rows one `POST /businesses` writes.
+   * How many audit rows one `POST /workspaces` writes.
    *
-   * Two, deliberately: `business.created`, and the `business_membership.added`
-   * event for the founding owner. The membership row is the business's first
+   * Two, deliberately: `workspace.created`, and the `workspace_membership.added`
+   * event for the founding owner. The membership row is the workspace's first
    * tenure, and audit events are this template's membership history — see the
-   * note on `BusinessMembership` in `schema.prisma` — so a founding owner with
+   * note on `WorkspaceMembership` in `schema.prisma` — so a founding owner with
    * no recorded join would be a hole in it.
    *
    * Named rather than inlined because several assertions below count "every row
    * this fixture produced", and a bare `2` in each of them says nothing about
    * why.
    */
-  const AUDIT_ROWS_PER_BUSINESS_CREATION = 2;
+  const AUDIT_ROWS_PER_WORKSPACE_CREATION = 2;
 
-  // Exercises the real write path: creating a business records `business.created`
+  // Exercises the real write path: creating a workspace records `workspace.created`
   // plus the founding owner's join.
   const generateAuditRow = async (owner: SeededUser): Promise<void> => {
     await request(app.getHttpServer())
-      .post('/api/businesses')
+      .post('/api/workspaces')
       .set('Authorization', `Bearer ${owner.token}`)
       .send({ name: 'Acme', slug: 'acme' })
       .expect(201);
@@ -95,7 +95,7 @@ describe('Audit logs (e2e)', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(200);
     const body = response.body as PageBody<AuditLogBody>;
-    expect(body.data.some((row) => row.action === 'business.created')).toBe(
+    expect(body.data.some((row) => row.action === 'workspace.created')).toBe(
       true,
     );
   });
@@ -141,7 +141,7 @@ describe('Audit logs (e2e)', () => {
     await generateAuditRow(owner);
 
     const byAction = await request(app.getHttpServer())
-      .get('/api/audit-logs?action=business.created')
+      .get('/api/audit-logs?action=workspace.created')
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(200);
     const actionBody = byAction.body as PageBody<AuditLogBody>;
@@ -154,7 +154,7 @@ describe('Audit logs (e2e)', () => {
       .expect(200);
     // Every row this actor produced, which is both of the creation's events.
     expect((byActor.body as PageBody<AuditLogBody>).meta.total).toBe(
-      AUDIT_ROWS_PER_BUSINESS_CREATION,
+      AUDIT_ROWS_PER_WORKSPACE_CREATION,
     );
 
     const noMatch = await request(app.getHttpServer())
@@ -170,14 +170,14 @@ describe('Audit logs (e2e)', () => {
 
     const prisma = app.get(PrismaService);
     const row = await prisma.auditLog.findFirstOrThrow({
-      where: { action: 'business.created' },
+      where: { action: 'workspace.created' },
     });
 
     const response = await request(app.getHttpServer())
       .get(`/api/audit-logs/${row.id}`)
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(200);
-    expect((response.body as AuditLogBody).action).toBe('business.created');
+    expect((response.body as AuditLogBody).action).toBe('workspace.created');
 
     await request(app.getHttpServer())
       .get('/api/audit-logs/00000000-0000-4000-8000-000000000000')
@@ -200,7 +200,7 @@ describe('Audit logs (e2e)', () => {
         .expect(200);
       const body = response.body as PageBody<AuditLogBody>;
       expect(body.meta.total).toBe(1);
-      expect(body.data[0].action).toBe('business.created');
+      expect(body.data[0].action).toBe('workspace.created');
     });
 
     it('matches an action substring, case-insensitively', async () => {
@@ -208,7 +208,7 @@ describe('Audit logs (e2e)', () => {
       await generateAuditRow(owner);
 
       const response = await request(app.getHttpServer())
-        .get('/api/audit-logs?search=BUSINESS.CREA')
+        .get('/api/audit-logs?search=WORKSPACE.CREA')
         .set('Authorization', `Bearer ${admin.token}`)
         .expect(200);
       expect((response.body as PageBody<AuditLogBody>).meta.total).toBe(1);
@@ -227,7 +227,7 @@ describe('Audit logs (e2e)', () => {
       const body = response.body as PageBody<AuditLogBody>;
       // The address matches on BOTH of the creation's events, since this person
       // is the actor on each.
-      expect(body.meta.total).toBe(AUDIT_ROWS_PER_BUSINESS_CREATION);
+      expect(body.meta.total).toBe(AUDIT_ROWS_PER_WORKSPACE_CREATION);
       expect(body.data.every((row) => row.actorId === owner.id)).toBe(true);
     });
 
@@ -262,20 +262,20 @@ describe('Audit logs (e2e)', () => {
 
       const prisma = app.get(PrismaService);
       const row = await prisma.auditLog.findFirstOrThrow({
-        where: { action: 'business.created' },
+        where: { action: 'workspace.created' },
       });
       const createdAt = row.createdAt.toISOString();
       const before = new Date(row.createdAt.getTime() - 60_000).toISOString();
       const after = new Date(row.createdAt.getTime() + 60_000).toISOString();
 
       // Pinned to ONE action, so this measures the range filter rather than how
-      // many events a business creation happens to write. Without the pin, the
+      // many events a workspace creation happens to write. Without the pin, the
       // founding owner's join event lands microseconds after `row.createdAt` and
       // the exact-instant bound below becomes a coin flip on millisecond
       // rounding.
       const totalFor = async (queryString: string): Promise<number> => {
         const response = await request(app.getHttpServer())
-          .get(`/api/audit-logs?action=business.created&${queryString}`)
+          .get(`/api/audit-logs?action=workspace.created&${queryString}`)
           .set('Authorization', `Bearer ${admin.token}`)
           .expect(200);
         return (response.body as PageBody<AuditLogBody>).meta.total;
@@ -360,19 +360,19 @@ describe('Audit logs (e2e)', () => {
       const owner = await createRegularUser(app, 'closing@example.com');
       await generateAuditRow(owner);
 
-      // Creating the business made this user its only owner, and an account
-      // deletion that would strand a business is now refused. A co-owner is the
+      // Creating the workspace made this user its only owner, and an account
+      // deletion that would strand a workspace is now refused. A co-owner is the
       // setup this test always implied — it is about the audit trail surviving a
       // closed account, not about who may close one.
-      const business = await app
+      const workspace = await app
         .get(PrismaService)
-        .business.findFirstOrThrow({ where: { slug: 'acme' } });
+        .workspace.findFirstOrThrow({ where: { slug: 'acme' } });
       const coOwner = await createRegularUser(app, 'remaining@example.com');
       await addMembership(
         app,
-        business.id,
+        workspace.id,
         coOwner.id,
-        SeededRoleName.BUSINESS_OWNER,
+        SeededRoleName.WORKSPACE_OWNER,
       );
 
       await request(app.getHttpServer())
@@ -381,7 +381,7 @@ describe('Audit logs (e2e)', () => {
         .expect(204);
 
       const response = await request(app.getHttpServer())
-        .get('/api/audit-logs?action=business.created')
+        .get('/api/audit-logs?action=workspace.created')
         .set('Authorization', `Bearer ${admin.token}`)
         .expect(200);
       const [auditLog] = (response.body as PageBody<AuditLogBody>).data;
@@ -413,7 +413,7 @@ describe('Audit logs (e2e)', () => {
 
       const prisma = app.get(PrismaService);
       const row = await prisma.auditLog.findFirstOrThrow({
-        where: { action: 'business.created' },
+        where: { action: 'workspace.created' },
       });
 
       const response = await request(app.getHttpServer())

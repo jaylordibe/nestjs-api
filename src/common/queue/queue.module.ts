@@ -26,7 +26,7 @@ import {
 // need and threading an import through every feature module would be noise.
 //
 // Two things this module deliberately does NOT do:
-//   - depend on any business module. The dependency only ever runs the other
+//   - depend on any workspace module. The dependency only ever runs the other
 //     way; a domain module imports nothing from here beyond types, decorators
 //     and QueueProducerService.
 //   - contain domain logic. The single handler it ships is the infrastructure

@@ -57,7 +57,7 @@ export enum ErrorCode {
    *  `details` is `{ action: string; subject?: string }`.
    *
    *  NOTE: a *cross-tenant* read never reaches this code. Tenant isolation
-   *  happens in the query (`accessibleBy`), so another business's record is
+   *  happens in the query (`accessibleBy`), so another workspace's record is
    *  simply not found → 404 RESOURCE_NOT_FOUND. A 403 here would confirm the
    *  record exists. */
   PERMISSION_DENIED = 'PERMISSION_DENIED',
@@ -77,11 +77,11 @@ export enum ErrorCode {
   /** Prisma P2003 — foreign-key references a record that doesn't exist.
    *  `details` is `{ field: string }`. */
   FK_REFERENCE_INVALID = 'FK_REFERENCE_INVALID',
-  /** A business-scoped permission was checked but no business could be
-   *  resolved from the request (no `:businessId` route param, no
-   *  `businessId` in the body). Indicates a client calling a tenant-scoped
+  /** A workspace-scoped permission was checked but no workspace could be
+   *  resolved from the request (no `:workspaceId` route param, no
+   *  `workspaceId` in the body). Indicates a client calling a tenant-scoped
    *  route without naming the tenant. */
-  BUSINESS_CONTEXT_MISSING = 'BUSINESS_CONTEXT_MISSING',
+  WORKSPACE_CONTEXT_MISSING = 'WORKSPACE_CONTEXT_MISSING',
 
   // ── Resource state (404, 409) ────────────────────────────────────────
   /** Generic 404. `details` is `{ resource: string }`. */
@@ -90,11 +90,11 @@ export enum ErrorCode {
    *  email). `details` is `{ field: string }`. */
   UNIQUE_CONSTRAINT_VIOLATION = 'UNIQUE_CONSTRAINT_VIOLATION',
   /** Generic 409 for application-level conflicts that aren't a DB unique
-   *  violation (e.g. business-rule clashes). */
+   *  violation (e.g. domain-rule clashes). */
   RESOURCE_CONFLICT = 'RESOURCE_CONFLICT',
 
-  // ── Business membership + invitations (400, 403, 409) ────────────────
-  /** 409 — the operation would leave a business with no active owner. Emitted
+  // ── Workspace membership + invitations (400, 403, 409) ────────────────
+  /** 409 — the operation would leave a workspace with no active owner. Emitted
    *  when the last active owner is removed, suspended, demoted, or leaves.
    *  Clients should tell the user to appoint another owner first. Enforced for
    *  EVERY caller including a platform admin: it is a data-integrity
@@ -103,7 +103,7 @@ export enum ErrorCode {
   /** 409 — the membership exists but is not in a state that permits this
    *  operation (e.g. reactivating one that was never suspended, or acting on
    *  a membership that has ended). `details` is
-   *  `{ status: BusinessMembershipStatus }`. */
+   *  `{ status: WorkspaceMembershipStatus }`. */
   MEMBERSHIP_NOT_ACTIVE = 'MEMBERSHIP_NOT_ACTIVE',
   /** 403 — the requested role cannot be assigned here. Covers a role from the
    *  wrong scope, and a role outranking the caller's own assignment ceiling.

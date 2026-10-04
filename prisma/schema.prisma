@@ -58,8 +58,8 @@ model User {
   timezone              String?
 
   deviceTokens DeviceToken[]
-  // PLATFORM-scope role assignments. BUSINESS-scope roles live on
-  // `businessMemberships` instead; `AbilityFactory` refuses to compile a
+  // PLATFORM-scope role assignments. WORKSPACE-scope roles live on
+  // `workspaceMemberships` instead; `AbilityFactory` refuses to compile a
   // permission that arrives through the wrong one.
   //
   // A user may hold NO platform role at all and still be a complete,
@@ -67,14 +67,14 @@ model User {
   // AUTHENTICATED_USER_PERMISSIONS, which the ability factory injects for
   // every authenticated caller rather than from a row in this table.
   userRoles    UserRole[]
-  // Every business this person belongs to, in any capacity — staff or
-  // customer, active or ended. One row per business, forever.
-  memberships  BusinessMembership[]
+  // Every workspace this person belongs to, in any role, active or ended. One
+  // row per workspace, forever.
+  memberships  WorkspaceMembership[]
   // Invitations this person sent. Distinct from `memberships` because an
   // inviter is not necessarily still a member by the time it is accepted.
-  sentInvitations    BusinessMembership[] @relation("BusinessMembershipInviter")
+  sentInvitations    WorkspaceMembership[] @relation("WorkspaceMembershipInviter")
   // Invitations addressed to this person, resolved when the invite was raised.
-  receivedInvitations BusinessInvitation[] @relation("BusinessInvitationInvitee")
+  receivedInvitations WorkspaceInvitation[] @relation("WorkspaceInvitationInvitee")
   refreshTokens      RefreshToken[]
 
   @@map("users")
@@ -148,7 +148,7 @@ model RefreshToken {
 // context. That is why there is no `condition` column here.
 // ─────────────────────────────────────────────────────────────────────────
 
-model Business {
+model Workspace {
   id          String    @id @default(uuid()) @db.Uuid
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
@@ -166,10 +166,10 @@ model Business {
   description String?
   isActive    Boolean   @default(true) @map("is_active")
 
-  memberships BusinessMembership[]
-  invitations BusinessInvitation[]
+  memberships WorkspaceMembership[]
+  invitations WorkspaceInvitation[]
 
-  @@map("businesses")
+  @@map("workspaces")
 }
 
 model Role {
@@ -193,8 +193,8 @@ model Role {
 
   permissions RolePermission[]
   userRoles   UserRole[]
-  memberships BusinessMembership[]
-  invitations BusinessInvitation[]
+  memberships WorkspaceMembership[]
+  invitations WorkspaceInvitation[]
 
   @@index([scope])
   @@map("roles")
@@ -247,40 +247,40 @@ model UserRole {
   // Only PLATFORM-scoped roles belong here. That is enforced in
   // `UserRolesService.loadPlatformRole` on the write path, and — the part that
   // actually bounds authority — in `AbilityFactory`, which refuses to compile a
-  // permission whose scope does not match the branch it arrived in. A business
+  // permission whose scope does not match the branch it arrived in. A workspace
   // permission reaching the platform branch would otherwise compile to an
-  // UNCONDITIONAL rule, because business permissions are always `ANY`.
+  // UNCONDITIONAL rule, because workspace permissions are always `ANY`.
   role Role @relation(fields: [roleId], references: [id], onDelete: Restrict)
 
   @@unique([userId, roleId])
   @@index([userId])
   /// Closes the otherwise-unindexed scan behind `ON DELETE RESTRICT` and the
-  /// holder count on a role. Same reasoning as `BusinessMembership.roleId`.
+  /// holder count on a role. Same reasoning as `WorkspaceMembership.roleId`.
   @@index([roleId])
   @@map("user_roles")
 }
 
-/// One person's relationship with one business — the ONLY such relationship
-/// there is. Staff and customers are the same table distinguished by `roleId`,
-/// which is what makes the platform's tenancy model Slack-shaped: one global
-/// account, many businesses, exactly one role in each.
+/// One person's relationship with one workspace — the ONLY such relationship
+/// there is. Every role is the same table distinguished by `roleId`, which is
+/// what makes the platform's tenancy model Slack-shaped: one global
+/// account, many workspaces, exactly one role in each.
 ///
-/// The row is created once per (business, user) pair and then moves between
+/// The row is created once per (workspace, user) pair and then moves between
 /// lifecycle states forever. It is never deleted and never soft-deleted, so
-/// `@@unique([businessId, userId])` is an UNCONDITIONAL database constraint —
-/// see `BusinessMembershipStatus` for why soft deletion cannot express it.
+/// `@@unique([workspaceId, userId])` is an UNCONDITIONAL database constraint —
+/// see `WorkspaceMembershipStatus` for why soft deletion cannot express it.
 ///
 /// **This row is CURRENT STATE, not a ledger.** One row per pair means a former
 /// member who re-joins reuses the row they already have: `status`, `roleId`,
 /// `joinedAt`, and `endedAt` are all overwritten, and the tenure that was there
 /// before is gone from the table. That is the deliberate trade for "exactly one
-/// current role per person per business" being a database constraint rather than
+/// current role per person per workspace" being a database constraint rather than
 /// an application convention.
 ///
 /// The HISTORY lives in `audit_logs`. Every transition — join, re-join,
 /// invitation accepted, leave, suspend, reactivate, role change, ownership
 /// transfer — writes an event, and the two paths that overwrite a tenure
-/// (`BusinessMembershipsService.add` and `BusinessInvitationsService.accept`)
+/// (`WorkspaceMembershipsService.add` and `WorkspaceInvitationsService.accept`)
 /// carry the replaced tenure in `metadata.previousTenure`. Report on tenure from
 /// those events, never by reading `joinedAt` and assuming it is the first one.
 ///
@@ -296,20 +296,20 @@ model UserRole {
 /// the row is loaded and therefore cannot see a status at all.
 ///
 /// This subject is BOTH ownable (by the person, via `userId`) and tenant-scoped
-/// (by the business, via `businessId`). The two CASL rules OR-compose, so
-/// someone who owns one business and is a customer of another gets exactly the
-/// union of the two — with no special case in application code. See
+/// (by the workspace, via `workspaceId`). The two CASL rules OR-compose, so
+/// someone who owns one workspace and is a plain member of another gets exactly
+/// the union of the two — with no special case in application code. See
 /// SUBJECT_OWNER_KEY / SUBJECT_TENANT_KEY.
-model BusinessMembership {
+model WorkspaceMembership {
   id         String    @id @default(uuid()) @db.Uuid
   createdAt  DateTime  @default(now()) @map("created_at")
   updatedAt  DateTime  @updatedAt @map("updated_at")
   createdBy  String?   @map("created_by") @db.Uuid
   updatedBy  String?   @map("updated_by") @db.Uuid
-  businessId String    @map("business_id") @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
   userId     String    @map("user_id") @db.Uuid
   roleId     String    @map("role_id") @db.Uuid
-  /// `BusinessMembershipStatus`. A plain String, per the no-DB-enums rule —
+  /// `WorkspaceMembershipStatus`. A plain String, per the no-DB-enums rule —
   /// constrained by the TS enum and `@IsEnum`, so widening the lifecycle needs
   /// no migration.
   status     String    @default("active")
@@ -332,7 +332,7 @@ model BusinessMembership {
   /// membership, never by the member themselves.
   notes      String?
 
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   /// Restrict, not Cascade: deleting a role must never silently strip access.
   /// Scope integrity lives in `AbilityFactory` and the service layer — see the
@@ -340,41 +340,41 @@ model BusinessMembership {
   role     Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
   /// SetNull, not Cascade: deleting the inviter's account must not delete the
   /// membership they created.
-  inviter  User?    @relation("BusinessMembershipInviter", fields: [invitedBy], references: [id], onDelete: SetNull)
+  inviter  User?    @relation("WorkspaceMembershipInviter", fields: [invitedBy], references: [id], onDelete: SetNull)
 
   /// The tenancy invariant. Unconditional precisely because the row is never
-  /// removed — one relationship per person per business, in any state.
-  @@unique([businessId, userId])
+  /// removed — one relationship per person per workspace, in any state.
+  @@unique([workspaceId, userId])
   /// Grant loading: every request resolves the caller's ACTIVE memberships.
   @@index([userId, status])
   /// Roster listing, and the owner-count check behind the last-owner invariant.
-  @@index([businessId, status])
+  @@index([workspaceId, status])
   /// Closes the otherwise-unindexed scan behind `ON DELETE RESTRICT` and the
-  /// assignment count in `RolesService`. This is the large table once customers
-  /// live here, so a sequential scan per role delete is not acceptable.
+  /// assignment count in `RolesService`. This is the large table once a product's
+  /// rosters grow, so a sequential scan per role delete is not acceptable.
   @@index([roleId])
-  @@map("business_memberships")
+  @@map("workspace_memberships")
 }
 
-/// An outstanding offer to join a business.
+/// An outstanding offer to join a workspace.
 ///
-/// Modelled separately from `BusinessMembership` because an invited email need
+/// Modelled separately from `WorkspaceMembership` because an invited email need
 /// not belong to a user yet — there is no `userId` to hang a membership row on
 /// until somebody accepts. No membership row is written until acceptance: a
-/// placeholder would consume the ONE row `@@unique([businessId, userId])`
+/// placeholder would consume the ONE row `@@unique([workspaceId, userId])`
 /// allows, overwriting a former member's history to record an offer they had
 /// not taken up.
 ///
 /// Acceptance is a conditional UPDATE out of `pending`, inside the same
 /// transaction that writes the membership, so two simultaneous redemptions of
 /// one token produce exactly one membership.
-model BusinessInvitation {
+model WorkspaceInvitation {
   id         String    @id @default(uuid()) @db.Uuid
   createdAt  DateTime  @default(now()) @map("created_at")
   updatedAt  DateTime  @updatedAt @map("updated_at")
   createdBy  String?   @map("created_by") @db.Uuid
   updatedBy  String?   @map("updated_by") @db.Uuid
-  businessId String    @map("business_id") @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
   /// Lowercased at the DTO boundary. Deliberately NOT a FK to `users`: the
   /// whole point is that the invitee may not exist yet.
   ///
@@ -397,7 +397,7 @@ model BusinessInvitation {
   /// same reasoning, as `RefreshToken.tokenHash`. The plaintext is emailed once
   /// and never stored.
   tokenHash  String    @unique @map("token_hash")
-  /// `BusinessInvitationStatus`.
+  /// `WorkspaceInvitationStatus`.
   status     String    @default("pending")
   invitedBy  String?   @map("invited_by") @db.Uuid
   /// Expiry is a timestamp rather than a status, so an unattended invitation
@@ -408,13 +408,13 @@ model BusinessInvitation {
   revokedAt  DateTime? @map("revoked_at")
   revokedBy  String?   @map("revoked_by") @db.Uuid
 
-  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   role     Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
   /// SetNull, not Cascade: an erased account must not take the invitation
-  /// history of a business with it. The address on the row is what remains.
-  invitedUser User? @relation("BusinessInvitationInvitee", fields: [invitedUserId], references: [id], onDelete: SetNull)
+  /// history of a workspace with it. The address on the row is what remains.
+  invitedUser User? @relation("WorkspaceInvitationInvitee", fields: [invitedUserId], references: [id], onDelete: SetNull)
 
-  @@index([businessId, status])
+  @@index([workspaceId, status])
   /// "What is this person still expected to accept?" — and the index behind
   /// the `SetNull` FK, which would otherwise scan on every account erasure.
   @@index([invitedUserId])
@@ -423,7 +423,7 @@ model BusinessInvitation {
   /// As on the other two role-referencing tables: `ON DELETE RESTRICT` scans
   /// the referencing side, and an unindexed one is a sequential scan.
   @@index([roleId])
-  @@map("business_invitations")
+  @@map("workspace_invitations")
 }
 
 model AuditLog {

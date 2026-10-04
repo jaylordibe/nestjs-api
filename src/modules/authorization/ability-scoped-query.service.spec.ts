@@ -1,14 +1,14 @@
 import { ForbiddenException } from '@nestjs/common';
 import { AbilityFactory } from './ability.factory';
 import { AbilityScopedQueryService } from './ability-scoped-query.service';
-import { BusinessMembershipStatus } from '../../common/enums/business-membership-status.enum';
+import { WorkspaceMembershipStatus } from '../../common/enums/workspace-membership-status.enum';
 import { PermissionOwnership } from '../../common/enums/permission-ownership.enum';
 import { RoleScope } from '../../common/enums/role-scope.enum';
 import { SeededRoleName } from '../../common/enums/seeded-role-name.enum';
 import type { AuthorizationGrants } from './ability.factory';
 
 const OWN_USER_ID = '11111111-1111-1111-1111-111111111111';
-const BUSINESS_ID = '22222222-2222-2222-2222-222222222222';
+const WORKSPACE_ID = '22222222-2222-2222-2222-222222222222';
 
 // An ordinary account: NO platform role, NO membership.
 //
@@ -19,7 +19,7 @@ const BUSINESS_ID = '22222222-2222-2222-2222-222222222222';
 // still reaches its own row, and reaches nothing else.
 const NO_ROLE_ACCOUNT_GRANTS: AuthorizationGrants = {
   platformPermissions: [],
-  businessMemberships: [],
+  workspaceMemberships: [],
 };
 
 const PLATFORM_ADMIN_GRANTS: AuthorizationGrants = {
@@ -31,23 +31,23 @@ const PLATFORM_ADMIN_GRANTS: AuthorizationGrants = {
       ownership: PermissionOwnership.ANY,
     },
   ],
-  businessMemberships: [],
+  workspaceMemberships: [],
 };
 
-const BUSINESS_MEMBER_GRANTS: AuthorizationGrants = {
+const WORKSPACE_MEMBER_GRANTS: AuthorizationGrants = {
   platformPermissions: [],
-  businessMemberships: [
+  workspaceMemberships: [
     {
       membershipId: '00000000-0000-4000-8000-0000000000aa',
-      businessId: BUSINESS_ID,
+      workspaceId: WORKSPACE_ID,
       roleId: '00000000-0000-4000-8000-0000000000bb',
-      roleName: SeededRoleName.BUSINESS_MEMBER,
-      status: BusinessMembershipStatus.ACTIVE,
+      roleName: SeededRoleName.WORKSPACE_MEMBER,
+      status: WorkspaceMembershipStatus.ACTIVE,
       permissions: [
         {
           action: 'read',
-          subject: 'Business',
-          scope: RoleScope.BUSINESS,
+          subject: 'Workspace',
+          scope: RoleScope.WORKSPACE,
           ownership: PermissionOwnership.ANY,
         },
       ],
@@ -121,22 +121,22 @@ describe('AbilityScopedQueryService', () => {
       expect(where).toEqual({ AND: [{}] });
     });
 
-    it('restricts a business-scoped caller to their tenant', () => {
+    it('restricts a workspace-scoped caller to their tenant', () => {
       const where = service.buildWhere(
-        abilityFor(BUSINESS_MEMBER_GRANTS),
+        abilityFor(WORKSPACE_MEMBER_GRANTS),
         'read',
-        'Business',
+        'Workspace',
       );
-      expect(where.OR).toEqual([{ id: BUSINESS_ID }]);
+      expect(where.OR).toEqual([{ id: WORKSPACE_ID }]);
     });
 
-    it('denies a business-scoped caller on an unrelated subject', () => {
+    it('denies a workspace-scoped caller on an unrelated subject', () => {
       // `AuditLog` rather than `User`: a tenant grant must not leak into a
       // subject it never named, and `User` can no longer prove that because
       // every caller holds an intrinsic `read User own`.
       expect(() =>
         service.buildWhere(
-          abilityFor(BUSINESS_MEMBER_GRANTS),
+          abilityFor(WORKSPACE_MEMBER_GRANTS),
           'read',
           'AuditLog',
         ),

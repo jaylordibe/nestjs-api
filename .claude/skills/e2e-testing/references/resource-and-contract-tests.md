@@ -29,7 +29,7 @@ Use shared fixtures:
 
 - seed the RBAC catalog after truncation;
 - create platform admin/support/regular users through helpers;
-- create business memberships through established helpers;
+- create workspace memberships through established helpers;
 - use register/login helpers only when the auth flow itself is under test.
 
 There is no authoritative `role` field on `users`. Do not fabricate one in

@@ -9,7 +9,7 @@ export class RoleQueryDto extends MetaQueryDto {
 
   /**
    * Narrows the list to roles the caller may actually assign inside this
-   * business — business-scoped, and at or below their own rank there.
+   * workspace — workspace-scoped, and at or below their own rank there.
    *
    * This exists because an assignment UI that lists every role invites a
    * request that is guaranteed to 403, and worse, tells a curious admin exactly

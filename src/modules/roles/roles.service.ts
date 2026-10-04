@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import type { AppAbility } from '../../common/authorization/app-ability';
 import { buildOrderBy } from '../../common/dto/meta-query.dto';
 import { PaginationMeta } from '../../common/dto/paginated-response.dto';
-import { BusinessMembershipStatus } from '../../common/enums/business-membership-status.enum';
+import { WorkspaceMembershipStatus } from '../../common/enums/workspace-membership-status.enum';
 import { RoleScope } from '../../common/enums/role-scope.enum';
 import { Errors } from '../../common/errors/errors';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -42,11 +42,11 @@ export class RolesService {
     }
 
     if (query.assignableIn) {
-      // An assignment picker: business-scoped roles, capped at the caller's own
-      // rank in that business. The write path enforces the same ceiling
+      // An assignment picker: workspace-scoped roles, capped at the caller's own
+      // rank in that workspace. The write path enforces the same ceiling
       // regardless — this only keeps the UI from offering doors that are
       // locked, and from advertising which roles outrank the viewer.
-      where.scope = RoleScope.BUSINESS;
+      where.scope = RoleScope.WORKSPACE;
       const ceiling = await this.resolveAssignmentCeiling(
         query.assignableIn,
         actorId,
@@ -90,28 +90,28 @@ export class RolesService {
   }
 
   /**
-   * The caller's assignment ceiling in one business, or `null` for unbounded.
+   * The caller's assignment ceiling in one workspace, or `null` for unbounded.
    *
    * Returns an empty ceiling (rank 0, matching nothing) rather than throwing
    * when the caller has no active membership: this is a LIST endpoint, and a
-   * 403 here would let anyone probe which businesses they are a member of by
+   * 403 here would let anyone probe which workspaces they are a member of by
    * watching the status code.
    */
   private async resolveAssignmentCeiling(
-    businessId: string,
+    workspaceId: string,
     actorId: string,
     ability: AppAbility,
   ): Promise<number | null> {
     if (ability.can('manage', 'all')) return null;
 
-    const membership = await this.prisma.businessMembership.findUnique({
-      where: { businessId_userId: { businessId, userId: actorId } },
+    const membership = await this.prisma.workspaceMembership.findUnique({
+      where: { workspaceId_userId: { workspaceId, userId: actorId } },
       select: { status: true, role: { select: { rank: true } } },
     });
     if (
       !membership ||
-      (membership.status as BusinessMembershipStatus) !==
-        BusinessMembershipStatus.ACTIVE
+      (membership.status as WorkspaceMembershipStatus) !==
+        WorkspaceMembershipStatus.ACTIVE
     ) {
       return 0;
     }

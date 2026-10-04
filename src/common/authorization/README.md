@@ -11,7 +11,7 @@ decorator.
 A **permission** is a tuple `(action, subject, scope, ownership)` defined once
 in [`permission-catalog.ts`](./permission-catalog.ts). A **role** is a named
 bundle of permissions. A user holds PLATFORM roles through `user_roles`, and
-BUSINESS roles through `business_memberships` — exactly one row per business, in
+WORKSPACE roles through `workspace_memberships` — exactly one row per workspace, in
 any capacity. On every request, `PermissionsGuard` loads the caller's grants
 (Redis-cached, DB-backed) and compiles them into a single CASL `Ability`.
 Handlers declare what they need; queries enforce which rows the caller may touch.
@@ -40,7 +40,7 @@ condition. `AbilityFactory` derives the condition from the row's `scope` and
 |---|---|---|
 | `platform` | `any` | `can(action, subject)` — unconditional |
 | `platform` | `own` | `can(action, subject, { [ownerKey]: userId })` |
-| `business` | (always `any`) | `can(action, subject, { [tenantKey]: businessId })` |
+| `workspace` | (always `any`) | `can(action, subject, { [tenantKey]: workspaceId })` |
 
 `ownerKey` and `tenantKey` come from [`subject-key.ts`](./subject-key.ts).
 
@@ -53,8 +53,8 @@ A guard runs **before** the record is loaded. CASL, by design, ignores rule
 conditions when you check against a subject *type* rather than an *instance*:
 
 ```ts
-ability.can('update', 'Business')                          // type     → ignores conditions
-ability.can('update', subject('Business', loadedRow))      // instance → evaluates them
+ability.can('update', 'Workspace')                          // type     → ignores conditions
+ability.can('update', subject('Workspace', loadedRow))      // instance → evaluates them
 ```
 
 So **tenant isolation cannot live in a guard.** It lives in the query, via
@@ -120,7 +120,7 @@ Without it, the intrinsic `update User (own)` that EVERY authenticated caller
 holds would pass the guard on `PATCH /users/:id` — a rule *does* exist, and the
 guard cannot see its
 condition. With it, the guard demands a granting rule that is **not**
-owner-conditioned. Tenant-conditioned rules still qualify: a `BUSINESS_ADMIN`
+owner-conditioned. Tenant-conditioned rules still qualify: a `WORKSPACE_ADMIN`
 administers a roster it does not personally own.
 
 ### `options.denyAsNotFound`
@@ -128,9 +128,9 @@ administers a roster it does not personally own.
 Answer a caller holding **no** grant on this subject as though the resource does
 not exist — empty page for a list, 404 for a record — rather than 403.
 
-Two reasons. It is *truthful*: a user who belongs to no business is not
-forbidden from listing businesses, they have none. And it is *consistent*:
-without it, a user **with** a business gets 404 on someone else's business (the
+Two reasons. It is *truthful*: a user who belongs to no workspace is not
+forbidden from listing workspaces, they have none. And it is *consistent*:
+without it, a user **with** a workspace gets 404 on someone else's workspace (the
 query filters it out) while a user with **none** gets 403 from the guard — the
 same request answered two ways depending on state the caller cannot see.
 
@@ -141,7 +141,7 @@ cannot READ the record        → 404   (never confirm existence across a tenant
 can read it, cannot act on it → 403   (they already see it; a 404 would be a lie)
 ```
 
-See `BusinessesService.findById` + `assertMayAct` for the canonical shape.
+See `WorkspacesService.findById` + `assertMayAct` for the canonical shape.
 
 ---
 
@@ -161,9 +161,9 @@ not boot on drift**, so catalog projection is a deploy step, never a manual one.
 
 **Never hand-edit `permissions` or seeded `roles` rows.** They are code.
 
-## Adding a business-scoped model
+## Adding a workspace-scoped model
 
-1. Add the Prisma model with a `businessId` column.
+1. Add the Prisma model with a `workspaceId` column.
 2. Add its name to `AUTHORIZATION_SUBJECTS`.
 3. Register its tenant key in `SUBJECT_TENANT_KEY` (one line).
 4. Add it to `WhereInputBySubject` in `ability-scoped-query.service.ts`.
@@ -185,8 +185,8 @@ catalog disagree, and the seeder reconciles every seeded role's grants back to
 the catalog — so a custom role's permissions would be reverted by the next
 deploy anyway.
 
-`GET /roles?assignableIn=<businessId>` narrows the list to roles the caller may
-actually hand out there (business-scoped, at or below their rank). That is
+`GET /roles?assignableIn=<workspaceId>` narrows the list to roles the caller may
+actually hand out there (workspace-scoped, at or below their rank). That is
 ergonomics, not a control — the ceiling is enforced on write regardless — but a
 picker that only offers reachable options is the difference between a boundary
 users understand and one they probe.
@@ -197,10 +197,10 @@ users understand and one they probe.
 
 `assignRole`, `suspend`, and `transferOwnership` are permissions distinct from
 `update`, because CASL's `manage` wildcard would otherwise swallow all three —
-and `manage BusinessMembership` would let a `BUSINESS_ADMIN` promote itself to
+and `manage WorkspaceMembership` would let a `WORKSPACE_ADMIN` promote itself to
 owner.
 
-**No BUSINESS-scoped role holds `manage`, including `BUSINESS_OWNER`.** The
+**No WORKSPACE-scoped role holds `manage`, including `WORKSPACE_OWNER`.** The
 owner genuinely holds every verb today, so `manage` would be equivalent *right
 now* — and would silently grant whatever verb is added to the vocabulary next,
 with nobody reviewing that decision. `permission-catalog.spec.ts` asserts it.
@@ -211,13 +211,13 @@ On top of the permission, `rank` bounds it:
 > above it.
 
 At-or-below is deliberate. A lateral grant is not an escalation (a
-`BUSINESS_ADMIN` minting a peer admin gains nothing it lacked), and
+`WORKSPACE_ADMIN` minting a peer admin gains nothing it lacked), and
 strictly-below would make appointing a co-owner impossible — which would in turn
 make the last-owner invariant's advice ("promote another member first")
 unreachable.
 
 `rank` orders roles **for this check only**. It does *not* imply inherited
-permissions. `BUSINESS_ADMIN` does not contain `BUSINESS_MEMBER`, and
+permissions. `WORKSPACE_ADMIN` does not contain `WORKSPACE_MEMBER`, and
 `PLATFORM_ENGINEER` (rank 90) holds no governance despite outranking both
 support roles — it is deliberately never granted `assignRole User`, so the
 highest *technical* authority on the platform cannot promote itself into the
@@ -240,7 +240,7 @@ Redis under `authz:v1:grants:{epoch}:{userId}`.
 | membership added, role changed, suspended, reactivated, or ended | `DEL` that one key |
 | invitation accepted | `DEL` the acceptor's key |
 | ownership transferred | `DEL` **both** parties' keys |
-| business soft-deleted | `DEL` every membership holder's key — every status, not just active, since a cached set written while they were active may still be live |
+| workspace soft-deleted | `DEL` every membership holder's key — every status, not just active, since a cached set written while they were active may still be live |
 | a **role's** permission set changes | `INCR authz:epoch` — retires every cached grant at once |
 
 Version the key (`v1` above) whenever `AuthorizationGrants` changes shape.
@@ -268,7 +268,7 @@ import { unpackRules } from '@casl/ability/extra';
 const { rules } = await api.get('/users/me/permissions');
 const ability = createMongoAbility(unpackRules(rules));
 
-ability.can('update', subject('Business', business));  // same verdict as the server
+ability.can('update', subject('Workspace', workspace));  // same verdict as the server
 ```
 
 One catalog, both sides. `test/authorization.e2e-spec.ts` asserts the rebuilt
@@ -277,75 +277,75 @@ client ability agrees with the server decision-for-decision. Client checks are a
 
 ---
 
-## One membership, staff and customers alike
+## One membership per person per workspace
 
-`BusinessMembership` is the **only** relationship between a person and a
-business. A customer is a membership holding `BUSINESS_CUSTOMER`, exactly as
-staff is a membership holding `BUSINESS_MEMBER`. `@@unique([businessId, userId])`
-is unconditional, so a person is one or the other in a given business — never
-both.
+`WorkspaceMembership` is the **only** relationship between a person and a
+workspace, and every workspace role is a membership holding a different `roleId`.
+`@@unique([workspaceId, userId])` is unconditional, so a person holds exactly one
+role in a given workspace.
 
 That constraint is a real product decision, not an accident. It buys a
 membership model with one table, one lifecycle, and one authorization path; it
-costs the ability to represent someone who both works at a business and buys
-from it. If your domain needs that (a stylist booking at their own salon), model
-the *customer relationship* as its own project-specific resource and leave
-`BusinessMembership` for authority.
+costs the ability to give one person two relationships with the same workspace.
+If your product needs a second relationship (its own clients, for example),
+model it as its own project-specific resource and leave `WorkspaceMembership`
+for authority.
 
 It is the one subject in **both** key maps, and that duality is the design:
 
 ```ts
-SUBJECT_OWNER_KEY  = { …, BusinessMembership: 'userId'     }  // your own row
-SUBJECT_TENANT_KEY = { …, BusinessMembership: 'businessId' }  // the whole roster
+SUBJECT_OWNER_KEY  = { …, WorkspaceMembership: 'userId'     }  // your own row
+SUBJECT_TENANT_KEY = { …, WorkspaceMembership: 'workspaceId' }  // the whole roster
 ```
 
 The rules OR-compose, so one endpoint serves both audiences with no branching:
-`GET /businesses/:businessId/memberships` returns a customer's single row, a
-staff member's whole tenant, and everything to a platform admin. Because the
+`GET /workspaces/:workspaceId/memberships` returns their single row to a member
+without roster access, the whole tenant to a roster reader, and everything to a platform admin. Because the
 subject is ownable *and* tenant-scoped, `PermissionsGuard` checks a stub carrying
 **both** keys — see `buildTenantStub`. Supplying only the tenant key would
 silently deny a member whose rule is conditioned on `userId`.
 
 ### Lifecycle
 
-`BusinessMembershipStatus` is `invited → active → suspended → left`, and the row
+`WorkspaceMembershipStatus` is `invited → active → suspended → left`, and the row
 is **never deleted**. `DELETE` ends a membership by moving it to `left`; a
 re-join moves that same row back to `active`. That is what lets the uniqueness
 constraint stay unconditional — soft deletion could not, because SQL treats
-`NULL != NULL`, so `@@unique([businessId, userId, deletedAt])` would accept two
+`NULL != NULL`, so `@@unique([workspaceId, userId, deletedAt])` would accept two
 live rows while reporting itself unique.
 
 **Only `ACTIVE` confers authority**, filtered in `PermissionLoaderService`'s
 query and asserted again in `AbilityFactory`. It cannot live in a guard: a guard
 runs before the row is loaded and cannot see a status.
 
-### Extending it for customer-owned resources
+### Adding a role without roster access
 
-`BUSINESS_CUSTOMER` deliberately gets the smallest coherent grant — `read
-Business`, plus the intrinsic read of its own membership. **No roster access**: a
-customer must never enumerate staff or other customers.
+The seeded workspace roles all read the roster. A product that needs a member
+who must not enumerate the others (a guest, a client) adds a role to
+`ROLE_DEFINITION_CATALOG` without `READ_WORKSPACE_MEMBERSHIP`: the intrinsic
+`READ_OWN_WORKSPACE_MEMBERSHIP` still returns their own row, and the roster query
+returns nothing else.
 
-To give customers authority over their own domain records (bookings, orders,
-tickets), do **not** widen the membership role. Add the resource as its own
-subject:
+To give such members authority over their own domain records, do **not** widen
+the membership role. Add the resource as its own subject:
 
-1. Add the Prisma model with a `userId` column (and `businessId` if staff also
+1. Add the Prisma model with a `userId` column (and `workspaceId` if staff also
    read it).
 2. Add its name to `AUTHORIZATION_SUBJECTS`.
 3. Register `SUBJECT_OWNER_KEY` (and `SUBJECT_TENANT_KEY` if tenant-scoped).
 4. Define `own`-scoped PLATFORM permissions and add them to
-   `AUTHENTICATED_USER_PERMISSIONS` — or business-scoped ones granted to
-   `BUSINESS_CUSTOMER`, if the authority should end when the membership does.
+   `AUTHENTICATED_USER_PERMISSIONS` — or workspace-scoped ones granted to the
+   new role, if the authority should end when the membership does.
 5. Read it through `AbilityScopedQueryService`.
 
-The template ships no booking or order module, because inventing one to
-demonstrate this would be product surface masquerading as infrastructure.
+The template ships no such role or module, because inventing one would be
+product surface masquerading as infrastructure.
 
 ## Membership history
 
-`BusinessMembership` holds exactly one row per (business, user) pair, forever.
-That is what makes "one current role per person per business" a database
-constraint (`@@unique([businessId, userId])`) instead of an application
+`WorkspaceMembership` holds exactly one row per (workspace, user) pair, forever.
+That is what makes "one current role per person per workspace" a database
+constraint (`@@unique([workspaceId, userId])`) instead of an application
 convention, and it is worth the trade — but the trade is real and worth stating
 plainly:
 
@@ -358,12 +358,12 @@ re-joins reuses the row they already have, so `status`, `roleId`, `joinedAt`, an
 
 | Event | Written by |
 |---|---|
-| `business_membership.added` | `BusinessMembershipsService.add`, and `BusinessesService.create` for the founding owner (`metadata.isFoundingOwner`) |
-| `business_invitation.accepted` | `BusinessInvitationsService.accept` |
-| `business_membership.ended` | `remove` — carries a full row snapshot |
-| `business_membership.suspended` / `.reactivated` | `suspend` / `reactivate` — full row snapshot |
-| `business_membership.role_changed` | `changeRole` |
-| `business_membership.ownership_transferred` | `transferOwnership` — carries `demotedUserIds` |
+| `workspace_membership.added` | `WorkspaceMembershipsService.add`, and `WorkspacesService.create` for the founding owner (`metadata.isFoundingOwner`) |
+| `workspace_invitation.accepted` | `WorkspaceInvitationsService.accept` |
+| `workspace_membership.ended` | `remove` — carries a full row snapshot |
+| `workspace_membership.suspended` / `.reactivated` | `suspend` / `reactivate` — full row snapshot |
+| `workspace_membership.role_changed` | `changeRole` |
+| `workspace_membership.ownership_transferred` | `transferOwnership` — carries `demotedUserIds` |
 
 The two events that overwrite a tenure (`added` and `invitation.accepted`) carry
 `metadata.isRejoin` and `metadata.previousTenure` — the replaced `status`,
@@ -406,23 +406,23 @@ acquires the same horizon.
 ## Invitations
 
 An invited email need not belong to a user yet, which is the entire reason
-`BusinessInvitation` is a separate model — `BusinessMembership.userId` is NOT
+`WorkspaceInvitation` is a separate model — `WorkspaceMembership.userId` is NOT
 NULL.
 
 **No membership row is written until acceptance.** When the address already has
 an account, the account id is recorded on the invitation as `invitedUserId` and
 nothing else changes. An earlier design wrote a placeholder `INVITED` membership
-to reserve the slot; because `@@unique([businessId, userId])` allows exactly one
+to reserve the slot; because `@@unique([workspaceId, userId])` allows exactly one
 row per pair, that placeholder *overwrote* a former member's `joinedAt` and
 `endedAt` — so sending an invitation silently rewrote somebody's employment
 history. Everything the placeholder was for is held elsewhere: "one outstanding
-invitation per address" by the partial unique index on `business_invitations`,
-and "who is pending?" by `GET /businesses/:id/invitations`.
+invitation per address" by the partial unique index on `workspace_invitations`,
+and "who is pending?" by `GET /workspaces/:id/invitations`.
 
-`POST /businesses/:id/invitations/:invitationId/resend` rotates the token,
-extends the expiry, and re-mails it. It requires `create BusinessInvitation`,
+`POST /workspaces/:id/invitations/:invitationId/resend` rotates the token,
+extends the expiry, and re-mails it. It requires `create WorkspaceInvitation`,
 because resending is the same authority as inviting — same address, same role,
-same business. The token is **rotated, never re-sent**: re-mailing the same
+same workspace. The token is **rotated, never re-sent**: re-mailing the same
 secret would leave every earlier copy live in every inbox it passed through.
 
 `POST /invitations/accept` is `@AuthenticatedOnly()`, not `@Public()`. Someone
@@ -454,14 +454,14 @@ the loser's whole transaction rolls back.
 
 `AbilityFactory` branches on where a grant **arrived from**, never on what the
 permission claims to be — and the platform branch emits an *unconditional* rule.
-Business permissions are always `ANY`, so a business role assigned through
+Workspace permissions are always `ANY`, so a workspace role assigned through
 `user_roles` would compile to platform-wide authority with no tenant bound.
 
 Both loops therefore drop any permission whose `scope` does not match the branch:
 
 ```ts
 if (permission.scope !== RoleScope.PLATFORM) continue;   // platform loop
-if (permission.scope !== RoleScope.BUSINESS) continue;   // membership loop
+if (permission.scope !== RoleScope.WORKSPACE) continue;   // membership loop
 ```
 
 An earlier design carried a constant `scope` column plus a CHECK and a composite
@@ -472,7 +472,7 @@ a mis-scoped grant is a data fault, and failing the build would turn one bad row
 into an outage for that account.
 
 The write path still validates (`loadPlatformRole`,
-`loadAssignableBusinessRole`), and `ability.factory.spec.ts` asserts both
+`loadAssignableWorkspaceRole`), and `ability.factory.spec.ts` asserts both
 directions.
 
 ## Deliberate non-goals

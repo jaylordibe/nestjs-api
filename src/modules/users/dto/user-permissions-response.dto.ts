@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import type { BusinessMembershipStatus } from '../../../common/enums/business-membership-status.enum';
+import type { WorkspaceMembershipStatus } from '../../../common/enums/workspace-membership-status.enum';
 
 /**
  * The caller's authorization, in a form the client can evaluate itself.
@@ -11,7 +11,7 @@ import type { BusinessMembershipStatus } from '../../../common/enums/business-me
  *   import { unpackRules } from '@casl/ability/extra';
  *
  *   const ability = createMongoAbility(unpackRules(response.rules));
- *   ability.can('update', subject('Business', business));   // same answer as the server
+ *   ability.can('update', subject('Workspace', workspace));   // same answer as the server
  *
  * One catalog, both sides. Without this, every frontend re-implements
  * permission logic by hand and drifts from the backend the first time a role
@@ -27,7 +27,7 @@ export class UserPermissionsResponseDto {
       'CASL rules, packed. Feed to `createMongoAbility(unpackRules(rules))`.',
     example: [
       ['read', 'User', { id: 'e1a…' }],
-      ['manage', 'Business', { id: 'b7c…' }],
+      ['manage', 'Workspace', { id: 'b7c…' }],
     ],
     type: 'array',
     items: { type: 'array', items: {} },
@@ -44,21 +44,21 @@ export class UserPermissionsResponseDto {
 
   @ApiProperty({
     description:
-      'Every business membership the caller holds, in ANY status. Only `active` ones contribute to `rules`; the rest are context so a client can show a pending invitation or a suspended membership rather than silently omitting it. Never infer authority from this list — read `rules`.',
+      'Every workspace membership the caller holds, in ANY status. Only `active` ones contribute to `rules`; the rest are context so a client can show a pending invitation or a suspended membership rather than silently omitting it. Never infer authority from this list — read `rules`.',
     example: [
       {
         membershipId: 'm3f…',
-        businessId: 'b7c…',
-        roleName: 'business_owner',
+        workspaceId: 'b7c…',
+        roleName: 'workspace_owner',
         status: 'active',
       },
     ],
   })
-  businessMemberships!: Array<{
+  workspaceMemberships!: Array<{
     membershipId: string;
-    businessId: string;
+    workspaceId: string;
     roleName: string;
-    status: BusinessMembershipStatus;
+    status: WorkspaceMembershipStatus;
   }>;
 
   constructor(value: UserPermissionsResponseDto) {

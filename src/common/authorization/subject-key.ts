@@ -5,43 +5,44 @@ import type { AuthorizationSubject } from './permission-catalog';
 //
 // A permission row says WHAT a role may do. These two maps say WHERE that
 // authority reaches, by naming the column that ties a subject back to its
-// owning user or its owning business. `AbilityFactory` reads them to build
+// owning user or its owning workspace. `AbilityFactory` reads them to build
 // the CASL condition; nothing else does.
 // ─────────────────────────────────────────────────────────────────────────
 
 // Which column ties a subject to the user who owns it. Used for
 // PLATFORM + OWN permissions (`{ [key]: actingUserId }`).
 //
-// `Business` is deliberately absent: business ownership is a
-// `business_memberships` row holding the BUSINESS_OWNER role, not authorship
+// `Workspace` is deliberately absent: workspace ownership is a
+// `workspace_memberships` row holding the WORKSPACE_OWNER role, not authorship
 // of the record. Keying it off `createdBy` would let a creator who has since
 // left the roster keep owner powers forever.
 export const SUBJECT_OWNER_KEY = {
   User: 'id',
   DeviceToken: 'userId',
   // A person owns their own membership row: it is how they see which
-  // businesses they belong to. This grants nothing over the business.
-  BusinessMembership: 'userId',
+  // workspaces they belong to. This grants nothing over the workspace.
+  WorkspaceMembership: 'userId',
 } as const satisfies Partial<Record<AuthorizationSubject, string>>;
 
-// Which column ties a subject to the business that owns it. Used for every
-// BUSINESS-scope permission (`{ [key]: businessId }`).
+// Which column ties a subject to the workspace that owns it. Used for every
+// WORKSPACE-scope permission (`{ [key]: workspaceId }`).
 //
-// EVERY business-scoped model added to this template registers its tenant key
+// EVERY workspace-scoped model added to this template registers its tenant key
 // here — one line — and is then covered by `AbilityScopedQueryService`. A model
-// that is missing from this map cannot be used with a business-scoped
+// that is missing from this map cannot be used with a workspace-scoped
 // permission: `resolveTenantKey` throws at ability-build time rather than
 // silently producing an unconditional rule.
 export const SUBJECT_TENANT_KEY = {
-  Business: 'id',
-  // `BusinessMembership` appears in BOTH maps, and that duality is the whole
+  Workspace: 'id',
+  // `WorkspaceMembership` appears in BOTH maps, and that duality is the whole
   // design. A person reaches their OWN membership through a `{ userId }` rule;
-  // staff reach EVERY membership in their tenant through a `{ businessId }`
-  // rule. CASL OR-composes the two, so a business owner who is also a customer
-  // elsewhere gets exactly the union — roster access here, own-row access
-  // there — with no special case anywhere in the code.
-  BusinessMembership: 'businessId',
-  BusinessInvitation: 'businessId',
+  // staff reach EVERY membership in their tenant through a `{ workspaceId }`
+  // rule. CASL OR-composes the two, so a person who owns one workspace and
+  // belongs to another without roster access gets exactly the union — roster
+  // access here, own-row access there — with no special case anywhere in the
+  // code.
+  WorkspaceMembership: 'workspaceId',
+  WorkspaceInvitation: 'workspaceId',
 } as const satisfies Partial<Record<AuthorizationSubject, string>>;
 
 export type OwnableSubject = keyof typeof SUBJECT_OWNER_KEY;
@@ -60,7 +61,7 @@ export function isTenantScopedSubject(
 }
 
 // Fail loudly rather than degrade to an unconditional rule. A missing entry
-// means someone granted an `own`/business-scoped permission on a subject that
+// means someone granted an `own`/workspace-scoped permission on a subject that
 // has no column to scope it by — that must never quietly become "allow all".
 export function resolveOwnerKey(subject: AuthorizationSubject): string {
   if (!isOwnableSubject(subject)) {
@@ -75,8 +76,8 @@ export function resolveOwnerKey(subject: AuthorizationSubject): string {
 export function resolveTenantKey(subject: AuthorizationSubject): string {
   if (!isTenantScopedSubject(subject)) {
     throw new Error(
-      `Subject "${subject}" has a business-scoped permission but no entry in ` +
-        `SUBJECT_TENANT_KEY. Add its owning-business column to src/common/authorization/subject-key.ts.`,
+      `Subject "${subject}" has a workspace-scoped permission but no entry in ` +
+        `SUBJECT_TENANT_KEY. Add its owning-workspace column to src/common/authorization/subject-key.ts.`,
     );
   }
   return SUBJECT_TENANT_KEY[subject];

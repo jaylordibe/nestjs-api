@@ -88,7 +88,7 @@ from API responses are asserted through `PrismaService`, not the HTTP body.
 
 **Redis and queues** — a spec asserting Redis-backed behavior flushes its own
 worker DB first and seeds its own keys. Prefer direct handler tests for queue job
-business behavior; use a live worker only when the contract genuinely spans
+workspace behavior; use a live worker only when the contract genuinely spans
 enqueue-to-processing infrastructure.
 
 See `references/resource-and-contract-tests.md` and
