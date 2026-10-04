@@ -1,6 +1,11 @@
 # Queue and scheduled-work tests
 
-## Queue job workspace behavior
+How the queue infrastructure is tested — the real BullMQ round trip, the worker
+disabled in `.env.test`, polling with `waitUntil` — is owned by
+`src/common/queue/README.md` (Testing), and the scheduler design by its
+"Adding a recurring job" section. This file is the checklist for a handler.
+
+## Queue job domain behavior
 
 Prefer calling the job handler directly with a typed payload.
 
@@ -15,20 +20,14 @@ Cover:
 - partial failure and reconciliation;
 - correlation/audit/log context where observable.
 
-The generic queue infrastructure should be proved once in its own e2e spec, not
-re-proved for every handler.
+The generic queue infrastructure is proved once in `test/queue.e2e-spec.ts`,
+not re-proved for every handler.
 
 ## Live worker tests
 
-Use a live worker only when the contract depends on the real round trip.
+Use a live worker only when the contract depends on the real round trip, and
+follow the queue spec's pattern for enabling it. Additionally:
 
-The worker is disabled by default in `.env.test`. Enable it before compiling the
-test app using the established queue-spec pattern, and restore state after the
-suite.
-
-Rules:
-
-- poll with a bounded `waitUntil`; never sleep;
 - pause/drain the worker before `truncateAll`, because flushing BullMQ keys while
   a job is active corrupts the job lifecycle;
 - close worker/queue/client resources;
@@ -37,11 +36,8 @@ Rules:
 
 ## Recurring jobs
 
-There is no in-process scheduler. A recurring job is a BullMQ job scheduler
-declared in `recurring-schedule-registry.ts` and installed only by the worker
-runtime, so there is no wall-clock firing to test and nothing to disarm.
-
-Test the three things that can actually break:
+There is no wall-clock firing to test and nothing to disarm. Test the three
+things that can actually break:
 
 - the handler's own logic — call its public seam (`runOnce()`, or the sweep
   method) directly with controlled time;

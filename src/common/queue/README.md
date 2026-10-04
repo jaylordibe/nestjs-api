@@ -199,7 +199,7 @@ export class BookingExpireHandler
       return skippedJob('superseded by a newer schedule');
     }
 
-    // 4. Workspace idempotence, for anything irreversible.
+    // 4. Domain idempotence, for anything irreversible.
     // 5. Delegate to the domain service — never inline the rules here.
     await this.bookingsService.expire(payload.bookingId, null);
     return completedJob();
@@ -328,7 +328,7 @@ call site → job registration → queue registration → shared default
 **Retry transient failures only** — network timeouts, provider outages, rate
 limits, a database or Redis blip.
 
-**Never retry an expected workspace outcome.** Entity gone, no longer eligible,
+**Never retry an expected domain outcome.** Entity gone, no longer eligible,
 already done, consent withdrawn, schedule superseded — those are `skippedJob()`,
 not failures. Retrying them burns five attempts to reach the same answer and
 buries the real signal.

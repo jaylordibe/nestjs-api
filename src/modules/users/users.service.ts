@@ -637,7 +637,7 @@ export class UsersService {
     // Self-close: mark the row deleted. The scoped Prisma client and the
     // auth hot paths both reject rows with deletedAt set, so the user
     // can't log back in. `isActive` is untouched — that flag exists for
-    // suspension (a separate workspace concept from deletion), not to
+    // suspension (a separate domain concept from deletion), not to
     // double-signal lifecycle state. The row stays for audit/FK integrity;
     // call gdprErase for true PII removal.
     //

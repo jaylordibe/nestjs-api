@@ -2,7 +2,7 @@
 //
 // A job ID is BullMQ's ONLY built-in de-duplication: enqueuing twice with the
 // same ID leaves one job. That makes it a guard against duplicate SCHEDULING —
-// it is NOT workspace idempotence, because it says nothing about whether the
+// it is NOT domain idempotence, because it says nothing about whether the
 // operation already ran (the job may have completed and been evicted by
 // retention long before the duplicate arrives). Anything irreversible still
 // needs its own has-this-already-happened check, owned by the domain that

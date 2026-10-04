@@ -1,66 +1,39 @@
 ---
 name: resource-pattern
-description: Applies this repository's canonical NestJS and Prisma API-resource pattern: model and lifecycle choice, five endpoints, DTO validation and serialization, RBAC/CASL query scoping, pagination, audit fields, Swagger, soft deletion, partial uniqueness, migration preparation, and e2e coverage.
+description: Applies this repository's canonical NestJS and Prisma API-resource pattern: lifecycle choice, module layout, the five endpoints, service and list-query shape, response relations, and the completion gate for a new resource.
 when_to_use: Use when adding a new API resource/module, completing an incomplete CRUD resource, adding list/search/filter behavior, changing response relations, choosing hard-delete versus soft-delete versus erasure, or modifying the canonical controller/service/DTO/Prisma pattern.
 user-invocable: false
 ---
 
 # API resource pattern
 
-Read first:
+The rules every resource obeys — errors, validation, response DTOs, schema
+naming, audit fields, the five endpoints, Swagger, partial uniqueness, soft
+delete, migrations — are one-liners in `AGENTS.md` with their mechanics and
+reasons in `docs/engineering-conventions.md`. This skill does not restate them.
+It holds the decisions a new resource needs and the gate it must pass.
 
-- `CLAUDE.md`
-- `docs/resource-pattern.md`
-- `src/common/authorization/README.md`
-- `src/common/errors/README.md`
-- the nearest complete resource module and e2e spec
-- the relevant Prisma models and migration state
+| Need | Owner |
+|---|---|
+| copy-pasteable controller/service/DTO code | `docs/resource-pattern.md` |
+| query scoping, 404 vs 403, a new subject | `src/common/authorization/README.md` (and the `authorization` skill) |
+| error codes and the envelope | `src/common/errors/README.md` |
+| migration policy | `AGENTS.md` (Non-obvious invariants); `docs/engineering-conventions.md` (Prisma 7) |
+| e2e coverage | the `e2e-testing` skill, `references/resource-and-contract-tests.md` |
 
-Use source-owned skeletons for literal code. This skill defines decisions,
-invariants, and completion checks.
+Then read the nearest complete resource module and its e2e spec.
 
-Load `authorization` and `e2e-testing` when their concerns apply.
+## 1. Decide lifecycle and authority
 
-## 1. Validate the model before scaffolding
+Explicitly choose one: hard delete, soft delete, anonymization/erasure,
+suspension through a distinct `isActive` state, or append-only/no-delete —
+`references/schema-and-lifecycle.md` says when each fits.
 
-Before creating a module:
+Identify the actor and tenant owner, the authoritative server-derived fields,
+immutable fields, state transitions, audit events, and historical references
+and retention.
 
-- search Prisma and `src/modules`;
-- verify the concept does not already belong on an existing model;
-- confirm ownership and cardinality;
-- identify actors and tenant scope;
-- decide whether the API truly needs a new resource;
-- separate requested outcome from a ticket's suggested table/endpoint shape;
-- reconcile consumer and migration impact.
-
-Do not create a clean parallel resource for a concept the repository already
-owns elsewhere.
-
-## 2. Decide lifecycle and authority
-
-Explicitly decide:
-
-- hard delete;
-- soft delete;
-- anonymization/erasure;
-- suspension through a distinct `isActive` state;
-- append-only/no-delete.
-
-Identify:
-
-- actor/tenant owner;
-- authoritative server-derived fields;
-- immutable fields;
-- state transitions;
-- audit events;
-- historical references and retention.
-
-Soft deletion is a visibility/lifecycle mechanism, never an authorization
-boundary.
-
-## 3. Apply the canonical module contract
-
-Default layout:
+## 2. Module layout
 
 ```text
 src/modules/<resource>/
@@ -73,14 +46,9 @@ src/modules/<resource>/
 └── <resource>.module.ts
 ```
 
-Keep transport, behavior, persistence, static registries, and pure helpers in
-their proper layers.
-
 Register the feature module through the established `AppModule` pattern.
 
-## 4. Apply the five-endpoint API pattern
-
-Where standard CRUD applies:
+## 3. Endpoint details the conventions leave open
 
 | Verb | Path | Controller method |
 |---|---|---|
@@ -90,86 +58,20 @@ Where standard CRUD applies:
 | PATCH | `/:id` | `update` |
 | DELETE | `/:id` | `remove` |
 
-Rules:
-
-- use `findPaginated` and `findById`, never `findAll` or `findOne`;
-- no unpaginated `/all`;
 - static routes appear before `/:id`;
 - UUID params use the established `ParseUUIDPipe`;
-- update is PATCH with Swagger `PartialType`;
-- delete returns 204;
-- every handler declares exactly one access decorator;
-- paginated handlers use `@ApiPaginatedResponse(T)`;
-- non-paginated handlers declare an explicit response DTO;
-- use a shared acknowledgement DTO for side-effect endpoints.
+- update DTOs use Swagger `PartialType`.
 
-A resource may need fewer or additional domain-specific operations, but the plan
-must explain why it departs from the canonical contract.
+A resource may need fewer or additional domain operations; the plan says why it
+departs from this contract.
 
-## 5. Scope every query correctly
+## 4. Service and list query
 
-Do not inspect roles or trust client owner/tenant filters.
+`references/query-and-contract.md` — what each service method is responsible
+for, how `buildListArgs` composes one `where` for `findMany` and `count`, and
+how loaded relations are serialized.
 
-Build visibility through `AbilityScopedQueryService`:
-
-- list query scope;
-- record query scope;
-- owner and WORKSPACE/PLATFORM conditions;
-- 404 for invisible records;
-- 403 only after a visible record is loaded and the action is denied.
-
-Compose search, resource filters, soft-delete behavior, and ability scope into
-one authoritative `where` used by both `findMany` and `count`.
-
-## 6. Preserve repository contracts
-
-### Errors
-
-- throw through `Errors.*`;
-- let the global filter map standard Prisma errors;
-- preserve stable `errorCode`;
-- do not catch and rethrow generic framework exceptions.
-
-### DTOs and responses
-
-- request DTOs contain client-settable fields only;
-- response DTOs wrap every Prisma row;
-- sensitive/audit/lifecycle fields use both runtime and Swagger hiding;
-- relation fields are exposed only when loaded and are re-wrapped through their
-  own DTOs;
-- never spread a raw included relation into the response.
-
-### Audit
-
-Every mutation accepts `actorId: string | null` and writes the required actor
-columns.
-
-Controllers pass the authenticated user ID, or `null` only for an intentionally
-unauthenticated create.
-
-Use `AuditService` for privileged/security-relevant domain actions.
-
-### Configuration and providers
-
-Use typed configuration and provider abstractions. No direct `process.env`,
-unbounded remote call, or raw generic provider send.
-
-## 7. Prepare data and migration safely
-
-Follow:
-
-- `references/schema-and-lifecycle.md`
-- `references/query-and-contract.md`
-- `references/migration-and-tests.md`
-
-Do not run `prisma migrate dev`, `migrate reset`, `db push`, or apply a migration
-to the local development database.
-
-Prepare the complete schema change and one coherent migration file according to
-the repository's deployed/not-yet-deployed migration policy. Use `yarn build`
-to verify Prisma-generated shape.
-
-## 8. Completion gate
+## 5. Completion gate
 
 A new resource is not complete until it has:
 

@@ -11,7 +11,7 @@ import type { JobOutcome } from './queue-job-outcome';
 //
 // The lifecycle a handler sits inside:
 //   receive → validate name + payload → load current domain state →
-//   is this job still applicable? → workspace idempotence check →
+//   is this job still applicable? → domain idempotence check →
 //   execute → report completed | skipped
 //
 // Two rules the base class cannot enforce for you:

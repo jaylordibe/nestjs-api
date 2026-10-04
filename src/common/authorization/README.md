@@ -143,6 +143,21 @@ can read it, cannot act on it → 403   (they already see it; a 404 would be a l
 
 See `WorkspacesService.findById` + `assertMayAct` for the canonical shape.
 
+### `PermissionCheckService` — the one narrow exception
+
+`assertCan(ability, action, subjectType, record)` checks an **already-loaded**
+record, for the single case a `where` clause cannot express: derived ownership
+needing a join ("I may edit this booking because I own the workspace that owns
+it") — load the parent, then assert against it. Everything else stays in the
+query, because a filtered read never loads the cross-tenant row and yields the
+404 the rule above requires.
+
+Its other method, `createAbilityForUser(userId)`, exists for work with **no HTTP
+request** (queue handlers, `prisma/scripts/`). Inside a request use
+`@CurrentAbility()`, which the guard has already built — re-deriving it costs a
+Redis round trip for nothing. Reaching for either one to avoid scoping a list
+query is the failure mode this split exists to prevent.
+
 ---
 
 ## Adding a permission
@@ -171,6 +186,19 @@ not boot on drift**, so catalog projection is a deploy step, never a manual one.
    with a raw id.
 
 Steps 2–4 are enforced by the compiler; step 5 by the ESLint rule.
+
+## Adding an owner-scoped model
+
+1. Add the Prisma model with the owning user's id column.
+2. Add its name to `AUTHORIZATION_SUBJECTS` and register the column in
+   `SUBJECT_OWNER_KEY`.
+3. Build list and record visibility through `AbilityScopedQueryService`.
+4. Derive owner and actor fields from the authenticated context — never accept
+   a client-supplied owner id as authoritative.
+
+A model that is both owner- and workspace-scoped registers both keys; see
+[One membership per person per workspace](#one-membership-per-person-per-workspace)
+for how the two rules compose.
 
 ## Roles are code — there is no runtime role API
 

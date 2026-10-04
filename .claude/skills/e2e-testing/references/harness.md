@@ -1,19 +1,9 @@
 # E2E harness reference
 
-## Test environment
-
-The repository commits `.env.test`. CI and local e2e runs use the same
-configuration and Compose services.
-
-The normal entrypoint is the repository script:
-
-```text
-yarn test:e2e [supported Jest filter]
-```
-
-Its pretest hook starts the dedicated test stack. Do not start the dev stack as
-a substitute and do not shadow `.env.test` with workflow/shell values unless
-the repository explicitly requires a diagnostic override.
+The test-stack invariants — two stacks, `.env.test` as the only test config,
+never pointing at dev — are in `AGENTS.md`, with their reasons in
+`docs/engineering-conventions.md` (Runtime and local stacks). This file holds
+the harness mechanics.
 
 ## Global setup and worker isolation
 
@@ -25,15 +15,11 @@ Global setup:
 4. clones a database per Jest worker.
 
 Worker setup derives both database and Redis destinations from the same
-`worker-isolation.ts` helpers.
-
-Each worker receives:
-
-- one PostgreSQL database;
-- one Redis logical DB.
+`worker-isolation.ts` helpers. Each worker receives one PostgreSQL database and
+one Redis logical DB.
 
 The configured worker limit must remain below the Redis logical DB capacity.
-Redis DB 0 is reserved/protected and must never be flushed by tests.
+Redis DB 0 is reserved and must never be flushed by tests.
 
 ## `createTestApp`
 
@@ -45,7 +31,9 @@ It:
 - applies HTTP globals equivalent to production bootstrap;
 - listens once on port 0;
 - supports scoped provider overrides;
-- leaves the live queue worker disabled under normal test config, which also means no recurring job schedulers are installed (both are gated on `QUEUE_WORKER_ENABLED`).
+- leaves the live queue worker disabled under normal test config, which also
+  means no recurring job schedulers are installed (both are gated on
+  `QUEUE_WORKER_ENABLED`).
 
 A bare `init()` can let Supertest create and destroy ephemeral listeners for
 each request, producing misleading socket/parse failures. Preserve the
