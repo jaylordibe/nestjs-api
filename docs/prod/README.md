@@ -198,7 +198,7 @@ docker compose up -d caddy
 # Seed the BOOTSTRAP USERS (first deploy only). Runs on the `migrate` service,
 # NOT `api`: the seeder is `ts-node prisma/seed.ts`, and the pruned api runtime
 # image has no ts-node / prisma CLI / source. The migrate service uses the
-# Dockerfile `build` target, which has them. Reads SEED_* from .env.
+# Dockerfile `migrate` target, built on the `build` stage, which has them. Reads SEED_* from .env.
 #
 # NOTE: the authorization catalog (permissions + system roles) is NOT seeded
 # here. It is projected by `yarn rbac:sync`, which the `migrate` service already

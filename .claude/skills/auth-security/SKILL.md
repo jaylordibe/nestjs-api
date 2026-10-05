@@ -78,14 +78,18 @@ Permissions, roles, scope, ownership and 403-versus-404 belong to the
 - Consumption that changes account state runs inside a transaction.
 - A new sensitive body field extends `redact.paths` (see `AGENTS.md`, Logging).
 
-## Throttling public authentication routes
+## Throttling authentication routes
 
 The global throttle is **not sufficient** for these. `POST /auth/login` is keyed
 by lower-cased identifier + IP (`loginThrottleTracker`, 5/min); there is no
 account lockout. Registration, login, refresh, verify-email, resend
 verification, request/reset password, and phone OTP request/verify each carry
-their own `@Throttle({ default: { limit, ttl } })`. The re-authenticated
-`/users/me/*` routes (password, email, gdpr-erase) rely on the global throttle.
+their own `@Throttle({ default: { limit, ttl } })`. So does every route that
+checks `currentPassword` (`/users/me/password`, `/users/me/email`,
+`/users/me/gdpr-erase`, 5/min — a stolen access token must not become a
+password oracle) or hashes one for an admin (`POST /users`,
+`PATCH /users/:id/password`, 20/min). E2e runs skip throttling, so a new
+limit is pinned in a controller spec (`users-controller-throttle.spec.ts`).
 
 ## Required tests when relevant
 

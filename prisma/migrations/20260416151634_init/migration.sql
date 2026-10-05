@@ -377,7 +377,7 @@ ALTER TABLE "device_tokens" ADD CONSTRAINT "device_tokens_user_id_fkey" FOREIGN 
 -- that existed solely to be a foreign-key target.
 --
 -- The write path still validates: `UserRolesService.loadPlatformRole` and
--- `loadAssignableWorkspaceRole` in both workspace services.
+-- `WorkspaceRoleAssignmentPolicy.loadAssignableRole`.
 
 -- Soft-delete-aware uniqueness.
 --

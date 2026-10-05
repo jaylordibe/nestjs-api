@@ -121,12 +121,13 @@ services:
       redis:
         condition: service_healthy
 
-  # One-off migration runner. Uses the API Dockerfile's `build` target which
-  # retains the prisma CLI + schema. Behind the `migrate` profile so it
+  # One-off migration runner. Uses the API Dockerfile's `migrate` target, which
+  # is built on the `build` stage (prisma CLI + schema) and whose CMD is the
+  # deploy step itself — stated once there, not repeated here. Behind the `migrate` profile so it
   # never starts with `up`. Invoke during deploy:
   #   docker compose --profile migrate run --rm --build migrate
   #
-  # GIT_SHA is forwarded as a build arg so migrate's build of the `build`
+  # GIT_SHA is forwarded as a build arg so migrate's build of the shared `build`
   # stage uses the same cache key as api's. Without this, migrate (which
   # runs first in the deploy) would build the shared build stage with
   # GIT_SHA=unknown, then api's build a moment later — with the actual
@@ -136,17 +137,14 @@ services:
   migrate:
     build:
       context: ./${SERVICE_NAME}-api
-      target: build
+      target: migrate
       args:
         GIT_SHA: ${GIT_SHA:-unknown}
     image: ${SERVICE_NAME}-migrate:latest
     profiles: ['migrate']
-    # Schema, then authorization catalog. BOTH are required before the api
-    # container can boot: it refuses to start when the permission catalog in
-    # the code and the rows in the database disagree. `rbac:sync` is idempotent
-    # and needs only DATABASE_URL — unlike `prisma:seed`, which also creates the
-    # bootstrap users and therefore needs SEED_*.
-    command: sh -c "yarn prisma:deploy && yarn rbac:sync"
+    # No `command:` — the image's CMD (`yarn prisma:deploy && yarn rbac:sync`,
+    # Dockerfile `migrate` stage) is the step, and the Dockerfile says why both
+    # halves are required. `run migrate yarn prisma:seed` overrides it.
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}?schema=public

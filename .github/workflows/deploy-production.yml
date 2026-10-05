@@ -180,7 +180,7 @@ jobs:
       # never starts against an old schema; this assumes migrations are
       # backwards-compatible with the currently-running build (standard
       # expand/contract pattern). The `migrate` service uses the Dockerfile's
-      # `build` target (has the prisma CLI); the `api` service uses the
+      # `migrate` target (built on `build`, has the prisma CLI); the `api` service uses the
       # pruned `runtime` target.
       - name: Deploy api to production
         env:

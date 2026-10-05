@@ -137,6 +137,9 @@ export class UsersController {
   // re-auth via currentPassword to prevent stolen-token erasure.
   @Post('me/gdpr-erase')
   @RequirePermission('delete', 'User')
+  // Checks currentPassword: with a stolen access token this is a password
+  // oracle, so it gets the same per-IP ceiling as reset-password.
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.NO_CONTENT)
   async gdprErase(
     @Body() dto: GdprEraseDto,
@@ -177,6 +180,9 @@ export class UsersController {
   // must replace their stored tokens.
   @Patch('me/email')
   @RequirePermission('update', 'User')
+  // Checks currentPassword: with a stolen access token this is a password
+  // oracle, so it gets the same per-IP ceiling as reset-password.
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @ApiOkResponse({ type: LoginResponseDto })
   async updateAuthUserEmail(
     @Body() dto: UpdateAuthUserEmailDto,
@@ -195,6 +201,9 @@ export class UsersController {
   // must replace their stored tokens.
   @Patch('me/password')
   @RequirePermission('update', 'User')
+  // Checks currentPassword: with a stolen access token this is a password
+  // oracle, so it gets the same per-IP ceiling as reset-password.
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @ApiOkResponse({ type: LoginResponseDto })
   async updateAuthUserPassword(
     @Body() dto: UpdateAuthUserPasswordDto,
@@ -285,6 +294,9 @@ export class UsersController {
 
   @Post()
   @RequirePermission('create', 'User', { administrative: true })
+  // Hashes a password (bcrypt cost 12): bounded so a compromised admin
+  // token cannot pin the CPU, loose enough for routine administration.
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @ApiCreatedResponse({ type: UserResponseDto })
   async create(
     @Body() dto: CreateUserDto,
@@ -331,6 +343,9 @@ export class UsersController {
 
   @Patch(':id/password')
   @RequirePermission('resetPassword', 'User', { administrative: true })
+  // Hashes a password (bcrypt cost 12): bounded so a compromised admin
+  // token cannot pin the CPU, loose enough for routine administration.
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @ApiOkResponse({ type: UserResponseDto })
   async updatePassword(
     @Param('id', new ParseUUIDPipe()) id: string,
