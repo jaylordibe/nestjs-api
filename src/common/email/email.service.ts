@@ -78,4 +78,16 @@ export class EmailService {
       occurredAt: occurredAt.toISOString(),
     });
   }
+
+  // Sent to the previous address after an email change.
+  sendEmailChangedNotification(
+    email: string,
+    firstName: string,
+    occurredAt: Date,
+  ): Promise<void> {
+    return this.sendTemplate('email-changed-notification', email, {
+      firstName,
+      occurredAt: occurredAt.toISOString(),
+    });
+  }
 }

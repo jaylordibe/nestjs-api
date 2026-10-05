@@ -4,13 +4,11 @@ import {
   RegisterQueueJobHandler,
   type QueueJobHandler,
 } from '../../../common/queue/queue-job-handler';
-import {
-  completedJob,
-  skippedJob,
-  type JobOutcome,
-} from '../../../common/queue/queue-job-outcome';
+import type { JobOutcome } from '../../../common/queue/queue-job-outcome';
+import { deliveryJobOutcome } from '../../../common/send-limit/delivery-outcome';
 import { UsersService } from '../users.service';
 import {
+  EmailChangedNoticePayloadDto,
   PasswordChangedNoticePayloadDto,
   UserEmailJobPayloadDto,
 } from './user-email-job-payload.dto';
@@ -27,9 +25,10 @@ export class EmailVerificationJobHandler implements QueueJobHandler<UserEmailJob
   constructor(private readonly usersService: UsersService) {}
 
   async handle(payload: UserEmailJobPayloadDto): Promise<JobOutcome> {
-    return (await this.usersService.deliverEmailVerification(payload.userId))
-      ? completedJob()
-      : skippedJob('account gone or already verified');
+    return deliveryJobOutcome(
+      await this.usersService.deliverEmailVerification(payload.userId),
+      'account gone or already verified',
+    );
   }
 }
 
@@ -42,9 +41,10 @@ export class PasswordResetJobHandler implements QueueJobHandler<UserEmailJobPayl
   constructor(private readonly usersService: UsersService) {}
 
   async handle(payload: UserEmailJobPayloadDto): Promise<JobOutcome> {
-    return (await this.usersService.deliverPasswordReset(payload.userId))
-      ? completedJob()
-      : skippedJob('account gone or inactive');
+    return deliveryJobOutcome(
+      await this.usersService.deliverPasswordReset(payload.userId),
+      'account gone or inactive',
+    );
   }
 }
 
@@ -57,11 +57,31 @@ export class PasswordChangedNoticeJobHandler implements QueueJobHandler<Password
   constructor(private readonly usersService: UsersService) {}
 
   async handle(payload: PasswordChangedNoticePayloadDto): Promise<JobOutcome> {
-    return (await this.usersService.deliverPasswordChangedNotice(
-      payload.userId,
-      new Date(payload.occurredAt),
-    ))
-      ? completedJob()
-      : skippedJob('account gone');
+    return deliveryJobOutcome(
+      await this.usersService.deliverPasswordChangedNotice(
+        payload.userId,
+        new Date(payload.occurredAt),
+      ),
+      'account gone',
+    );
+  }
+}
+
+@Injectable()
+@RegisterQueueJobHandler()
+export class EmailChangedNoticeJobHandler implements QueueJobHandler<EmailChangedNoticePayloadDto> {
+  readonly jobName = JobName.USER_EMAIL_CHANGED_NOTICE_V1;
+  readonly payloadType = EmailChangedNoticePayloadDto;
+
+  constructor(private readonly usersService: UsersService) {}
+
+  async handle(payload: EmailChangedNoticePayloadDto): Promise<JobOutcome> {
+    return deliveryJobOutcome(
+      await this.usersService.deliverEmailChangedNotice(
+        payload.userId,
+        payload.auditLogId,
+      ),
+      'account or audit record gone',
+    );
   }
 }

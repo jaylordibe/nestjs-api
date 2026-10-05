@@ -26,6 +26,7 @@ export enum JobName {
   USER_EMAIL_VERIFICATION_V1 = 'user.email-verification.v1',
   USER_PASSWORD_RESET_V1 = 'user.password-reset.v1',
   USER_PASSWORD_CHANGED_NOTICE_V1 = 'user.password-changed-notice.v1',
+  USER_EMAIL_CHANGED_NOTICE_V1 = 'user.email-changed-notice.v1',
   WORKSPACE_INVITATION_EMAIL_V1 = 'workspace.invitation-email.v1',
 }
 
@@ -85,6 +86,12 @@ export const JOB_REGISTRATIONS: Record<JobName, JobRegistration> = {
     queueName: QueueName.NOTIFICATIONS,
     payloadVersion: 1,
     description: 'Tells the user their password was changed.',
+  },
+  [JobName.USER_EMAIL_CHANGED_NOTICE_V1]: {
+    queueName: QueueName.NOTIFICATIONS,
+    payloadVersion: 1,
+    description:
+      "Tells a verified address that the account's email was changed away from it. The address is read from the `user.email_changed` audit row the payload points at, so it never sits in Redis.",
   },
   [JobName.WORKSPACE_INVITATION_EMAIL_V1]: {
     queueName: QueueName.NOTIFICATIONS,

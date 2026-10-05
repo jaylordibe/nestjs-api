@@ -132,7 +132,13 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
   an explicit `@ApiOkResponse`/`@ApiCreatedResponse({ type })`. Mapped types
   import from `@nestjs/swagger`.
 - **Rate limiting:** every `@Public()` or OTP/SMS/email endpoint gets its own
-  `@Throttle`.
+  `@Throttle`. Every email or SMS send also goes through
+  `DestinationSendLimitService`, reserving the destination's budget before
+  minting any token or code (an invitation token is minted at the request, so
+  `resend` checks the budget before rotating it); a refused send is skipped
+  silently. The only
+  uncapped sends are the security notices to a VERIFIED address
+  (password changed, email changed); `UsersService` says why.
 - **Logging:** pino to stdout only; for a new secret extend
   `buildRedactPaths()` (headers) or `redactUrlSecrets` (query strings).
   Request bodies are never logged.

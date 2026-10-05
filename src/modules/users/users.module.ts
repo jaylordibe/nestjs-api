@@ -2,6 +2,7 @@ import { forwardRef, Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { WorkspacesModule } from '../workspaces/workspaces.module';
 import {
+  EmailChangedNoticeJobHandler,
   EmailVerificationJobHandler,
   PasswordChangedNoticeJobHandler,
   PasswordResetJobHandler,
@@ -20,6 +21,7 @@ import { UsersService } from './users.service';
     EmailVerificationJobHandler,
     PasswordResetJobHandler,
     PasswordChangedNoticeJobHandler,
+    EmailChangedNoticeJobHandler,
   ],
   exports: [UsersService],
 })

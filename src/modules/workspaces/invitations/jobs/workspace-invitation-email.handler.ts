@@ -4,11 +4,8 @@ import {
   RegisterQueueJobHandler,
   type QueueJobHandler,
 } from '../../../../common/queue/queue-job-handler';
-import {
-  completedJob,
-  skippedJob,
-  type JobOutcome,
-} from '../../../../common/queue/queue-job-outcome';
+import type { JobOutcome } from '../../../../common/queue/queue-job-outcome';
+import { deliveryJobOutcome } from '../../../../common/send-limit/delivery-outcome';
 import { WorkspaceInvitationsService } from '../workspace-invitations.service';
 import { WorkspaceInvitationEmailJobPayloadDto } from './workspace-invitation-email-job-payload.dto';
 
@@ -25,12 +22,13 @@ export class WorkspaceInvitationEmailJobHandler implements QueueJobHandler<Works
   async handle(
     payload: WorkspaceInvitationEmailJobPayloadDto,
   ): Promise<JobOutcome> {
-    return (await this.workspaceInvitationsService.deliverInvitationEmail(
-      payload.invitationId,
-      payload.token,
-      payload.inviterId,
-    ))
-      ? completedJob()
-      : skippedJob('invitation no longer pending');
+    return deliveryJobOutcome(
+      await this.workspaceInvitationsService.deliverInvitationEmail(
+        payload.invitationId,
+        payload.token,
+        payload.inviterId,
+      ),
+      'invitation no longer pending',
+    );
   }
 }

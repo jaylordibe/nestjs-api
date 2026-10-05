@@ -2,6 +2,9 @@ import { INestApplication } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import request from 'supertest';
 import { App } from 'supertest/types';
+import { AuditService } from '../src/common/audit/audit.service';
+import { JobName } from '../src/common/queue/job-registry';
+import { QueueProducerService } from '../src/common/queue/queue-producer.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { createTestApp } from './setup/test-app';
 import { truncateAll } from './setup/db';
@@ -216,11 +219,191 @@ describe('Users (e2e)', () => {
           .expect(200);
 
         await deliverQueuedEmails(app);
-        expect(emails.sent).toHaveLength(1);
-        expect(emails.sent[0]).toMatchObject({
-          to: 'new@example.com',
-          template: 'email-verification-link',
+        // The new address gets its link; the verified previous address is
+        // told, so a takeover cannot move the account's email silently.
+        expect(
+          emails.sent.map(({ to, template }) => ({ to, template })),
+        ).toEqual(
+          expect.arrayContaining([
+            { to: 'new@example.com', template: 'email-verification-link' },
+            { to: 'old@example.com', template: 'email-changed-notification' },
+          ]),
+        );
+        expect(emails.sent).toHaveLength(2);
+        const audit = await prisma.auditLog.findFirstOrThrow({
+          where: { action: 'user.email_changed', targetUserId: id },
         });
+        expect(audit.actorId).toBe(id);
+        expect(audit.metadata).toMatchObject({
+          previousEmail: 'old@example.com',
+          newEmail: 'new@example.com',
+        });
+      } finally {
+        emails.restore();
+      }
+    });
+
+    // An unverified address was never proven to be the owner's, so moving
+    // away from it tells it nothing — otherwise switching an account's email
+    // back and forth would mail an inbox the account never controlled.
+    it('PATCH /api/users/me/email tells nothing to a previous address that was never verified', async () => {
+      const { token } = await registerVerifiedUser(app, 'first@example.com');
+      const moved = await request(app.getHttpServer())
+        .patch('/api/users/me/email')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ newEmail: 'second@example.com', currentPassword: PASSWORD })
+        .expect(200);
+      await deliverQueuedEmails(app);
+
+      const emails = captureEmails(app);
+      try {
+        await request(app.getHttpServer())
+          .patch('/api/users/me/email')
+          .set('Authorization', `Bearer ${moved.body.accessToken as string}`)
+          .send({ newEmail: 'third@example.com', currentPassword: PASSWORD })
+          .expect(200);
+        await deliverQueuedEmails(app);
+
+        expect(
+          emails.sent.map(({ to, template }) => ({ to, template })),
+        ).toEqual([
+          { to: 'third@example.com', template: 'email-verification-link' },
+        ]);
+      } finally {
+        emails.restore();
+      }
+    });
+
+    it('PATCH /api/users/me/email to the current address records no change and tells nobody', async () => {
+      const { id, token } = await registerVerifiedUser(app, 'same@example.com');
+      await deliverQueuedEmails(app);
+      const emails = captureEmails(app);
+      try {
+        await request(app.getHttpServer())
+          .patch('/api/users/me/email')
+          .set('Authorization', `Bearer ${token}`)
+          .send({ newEmail: 'Same@Example.com', currentPassword: PASSWORD })
+          .expect(200);
+        await deliverQueuedEmails(app);
+
+        expect(emails.sent.map((email) => email.template)).not.toContain(
+          'email-changed-notification',
+        );
+        expect(
+          await app.get(PrismaService).auditLog.count({
+            where: { action: 'user.email_changed', targetUserId: id },
+          }),
+        ).toBe(0);
+      } finally {
+        emails.restore();
+      }
+    });
+
+    // The audit write is best-effort; when it fails the change still
+    // succeeds, and the notice — which needs the row — is simply not queued.
+    it('PATCH /api/users/me/email still succeeds when the audit write fails', async () => {
+      const { token } = await registerVerifiedUser(
+        app,
+        'audit-down@example.com',
+      );
+      await deliverQueuedEmails(app);
+      const auditService = app.get(AuditService);
+      const record = auditService.record.bind(auditService);
+      const spy = jest
+        .spyOn(auditService, 'record')
+        .mockImplementation((entry) =>
+          entry.action === 'user.email_changed'
+            ? Promise.resolve(null)
+            : record(entry),
+        );
+      const emails = captureEmails(app);
+      try {
+        await request(app.getHttpServer())
+          .patch('/api/users/me/email')
+          .set('Authorization', `Bearer ${token}`)
+          .send({ newEmail: 'moved@example.com', currentPassword: PASSWORD })
+          .expect(200);
+        await deliverQueuedEmails(app);
+
+        expect(emails.sent.map((email) => email.template)).toEqual([
+          'email-verification-link',
+        ]);
+      } finally {
+        emails.restore();
+        spy.mockRestore();
+      }
+    });
+
+    // The change has committed by the time the notice is queued; a queue
+    // failure for the notice must not fail the request or skip the link.
+    it('PATCH /api/users/me/email still succeeds when the notice cannot be queued', async () => {
+      const { token } = await registerVerifiedUser(
+        app,
+        'queue-down@example.com',
+      );
+      await deliverQueuedEmails(app);
+      const producer = app.get(QueueProducerService);
+      const enqueue = producer.enqueue.bind(producer);
+      const spy = jest
+        .spyOn(producer, 'enqueue')
+        .mockImplementation((jobName, payload) =>
+          jobName === JobName.USER_EMAIL_CHANGED_NOTICE_V1
+            ? Promise.reject(new Error('Connection is closed.'))
+            : enqueue(jobName, payload),
+        );
+      const emails = captureEmails(app);
+      try {
+        await request(app.getHttpServer())
+          .patch('/api/users/me/email')
+          .set('Authorization', `Bearer ${token}`)
+          .send({ newEmail: 'queued@example.com', currentPassword: PASSWORD })
+          .expect(200);
+        await deliverQueuedEmails(app);
+
+        expect(emails.sent.map((email) => email.template)).toEqual([
+          'email-verification-link',
+        ]);
+      } finally {
+        emails.restore();
+        spy.mockRestore();
+      }
+    });
+
+    // The worker trusts only an email-change row about the payload's own user:
+    // a mismatched id must never mail some other address.
+    it('sends no email-changed notice for an audit row that is not that user\u2019s email change', async () => {
+      const first = await registerVerifiedUser(app, 'one@example.com');
+      const second = await registerVerifiedUser(app, 'two@example.com');
+      await request(app.getHttpServer())
+        .patch('/api/users/me/email')
+        .set('Authorization', `Bearer ${second.token}`)
+        .send({ newEmail: 'two-new@example.com', currentPassword: PASSWORD })
+        .expect(200);
+      await deliverQueuedEmails(app);
+      const prisma = app.get(PrismaService);
+      const othersChange = await prisma.auditLog.findFirstOrThrow({
+        where: { action: 'user.email_changed', targetUserId: second.id },
+      });
+      const unrelated = await prisma.auditLog.create({
+        data: {
+          action: 'user.updated.by_admin',
+          targetUserId: first.id,
+          metadata: { previousEmail: 'stranger@example.com' },
+        },
+      });
+      const producer = app.get(QueueProducerService);
+      for (const auditLogId of [othersChange.id, unrelated.id]) {
+        await producer.enqueue(JobName.USER_EMAIL_CHANGED_NOTICE_V1, {
+          payloadVersion: 1,
+          userId: first.id,
+          auditLogId,
+        });
+      }
+      const emails = captureEmails(app);
+      try {
+        await deliverQueuedEmails(app);
+
+        expect(emails.sent).toEqual([]);
       } finally {
         emails.restore();
       }
@@ -642,9 +825,27 @@ describe('Users (e2e)', () => {
         expect(row.emailVerifiedAt).toBeNull();
 
         await deliverQueuedEmails(app);
-        expect(emails.sent.map((email) => email.to)).toEqual([
-          'after@example.com',
-        ]);
+        // The verified previous address is told about the change too.
+        expect(
+          emails.sent.map(({ to, template }) => ({ to, template })),
+        ).toEqual(
+          expect.arrayContaining([
+            { to: 'after@example.com', template: 'email-verification-link' },
+            {
+              to: 'before@example.com',
+              template: 'email-changed-notification',
+            },
+          ]),
+        );
+        expect(emails.sent).toHaveLength(2);
+        const audit = await app.get(PrismaService).auditLog.findFirstOrThrow({
+          where: { action: 'user.email_changed', targetUserId: target.id },
+        });
+        expect(audit.actorId).toBe(adminId);
+        expect(audit.metadata).toMatchObject({
+          previousEmail: 'before@example.com',
+          newEmail: 'after@example.com',
+        });
       } finally {
         emails.restore();
       }

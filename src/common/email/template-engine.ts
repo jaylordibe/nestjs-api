@@ -14,6 +14,9 @@ export interface EmailTemplates {
     expiresInMinutes: number;
   };
   'password-changed-notification': { firstName: string; occurredAt: string };
+  // Sent to the PREVIOUS address after an email change, so the owner of a
+  // taken-over account hears about it at the address they verified.
+  'email-changed-notification': { firstName: string; occurredAt: string };
   // Sent to an invited address, which may or may not already have an account —
   // that is the whole reason invitations are a separate model. Carries the
   // single-use token in the URL; the database holds only its SHA-256 digest.
@@ -47,6 +50,7 @@ const TEMPLATE_SUBJECTS: {
   'email-verification-link': 'Verify your email',
   'password-reset-link': 'Reset your password',
   'password-changed-notification': 'Your password was changed',
+  'email-changed-notification': 'Your email address was changed',
   'workspace-invitation': (vars) => `Join ${vars.workspaceName}`,
 };
 

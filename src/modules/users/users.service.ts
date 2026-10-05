@@ -1,4 +1,4 @@
-import { forwardRef, Inject, Injectable } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Prisma, User } from '@prisma/client';
@@ -12,6 +12,11 @@ import { AuditService } from '../../common/audit/audit.service';
 import { Errors } from '../../common/errors/errors';
 import { EmailService } from '../../common/email/email.service';
 import { SmsService } from '../../common/sms/sms.service';
+import type { DeliveryOutcome } from '../../common/send-limit/delivery-outcome';
+import { DestinationSendLimitService } from '../../common/send-limit/destination-send-limit.service';
+import { SendPurpose } from '../../common/send-limit/send-limit.config';
+import { formatErrorMessage } from '../../common/util/error-message.util';
+import { canonicalEmailDestination } from '../../common/util/message-destination.util';
 import { WorkspaceMembershipStatus } from '../../common/enums/workspace-membership-status.enum';
 import { OtpPurpose } from '../../common/enums/otp-purpose.enum';
 import { JobName } from '../../common/queue/job-registry';
@@ -52,10 +57,13 @@ function generateOtp(): string {
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly emailService: EmailService,
     private readonly smsService: SmsService,
+    private readonly destinationSendLimit: DestinationSendLimitService,
     private readonly auditService: AuditService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
@@ -84,6 +92,51 @@ export class UsersService {
     });
   }
 
+  /**
+   * Records an email change and, when the previous address was verified,
+   * tells it. Without this an account taken over with a stolen password could
+   * move its email first, and every later alert — the password-changed notice
+   * included — would go to the attacker. The previous address travels in the
+   * audit row; the job carries only that row's id.
+   */
+  private async recordEmailChange(
+    user: User,
+    newEmail: string,
+    actorId: string | null,
+  ): Promise<void> {
+    const auditLogId = await this.auditService.record({
+      action: 'user.email_changed',
+      actorId,
+      targetUserId: user.id,
+      metadata: { previousEmail: user.email, newEmail },
+    });
+    // An unverified previous address was never proven to be the owner's, so
+    // it gets nothing — otherwise moving an account's email back and forth
+    // would mail an inbox the account never controlled.
+    if (!user.emailVerifiedAt) {
+      return;
+    }
+    if (!auditLogId) {
+      this.logger.error(
+        `Email-changed notice not queued for user ${user.id}: the audit write failed`,
+      );
+      return;
+    }
+    // The email change has already committed; a queue outage here must not
+    // turn it into a failed request that also skips the verification email.
+    await this.queueProducer
+      .enqueue(JobName.USER_EMAIL_CHANGED_NOTICE_V1, {
+        payloadVersion: 1,
+        userId: user.id,
+        auditLogId,
+      })
+      .catch((error: unknown) =>
+        this.logger.error(
+          `Email-changed notice not queued for user ${user.id}: ${formatErrorMessage(error)}`,
+        ),
+      );
+  }
+
   private async queuePasswordChangedNotice(userId: string): Promise<void> {
     await this.queueProducer.enqueue(JobName.USER_PASSWORD_CHANGED_NOTICE_V1, {
       payloadVersion: 1,
@@ -93,38 +146,62 @@ export class UsersService {
   }
 
   /**
-   * Worker side of `USER_EMAIL_VERIFICATION_V1`. Returns false when there is
-   * nothing to send (account gone or already verified). The link is a 24h JWT
-   * whose `purpose` claim stops it being used as an access token.
+   * Worker side of `USER_EMAIL_VERIFICATION_V1`. Nothing to send when the
+   * account is gone or already verified; skipped when the address has used its
+   * send budget. The link is a 24h JWT whose `purpose` claim stops it being
+   * used as an access token.
    */
-  async deliverEmailVerification(userId: string): Promise<boolean> {
+  async deliverEmailVerification(userId: string): Promise<DeliveryOutcome> {
     const user = await this.findByIdOrNull(userId);
     if (!user || user.emailVerifiedAt) {
-      return false;
+      return 'nothing-to-send';
     }
-    const token = this.jwtService.sign(
-      { sub: user.id, purpose: 'email_verify' },
-      { expiresIn: '24h' },
+    const sent = await this.destinationSendLimit.sendWithinLimit(
+      SendPurpose.EMAIL_VERIFICATION,
+      canonicalEmailDestination(user.email),
+      async () => {
+        const token = this.jwtService.sign(
+          // Bound to the address it is mailed to: redeeming it verifies THAT
+          // address, never whatever the account holds by the time the link is
+          // opened (see verifyEmailByToken).
+          { sub: user.id, purpose: 'email_verify', email: user.email },
+          { expiresIn: '24h' },
+        );
+        const baseUrl = this.configService.getOrThrow<string>('apiBaseUrl');
+        await this.emailService.sendEmailVerificationLink(
+          user.email,
+          user.firstName,
+          `${baseUrl}/auth/verify-email?token=${encodeURIComponent(token)}`,
+        );
+      },
     );
-    const baseUrl = this.configService.getOrThrow<string>('apiBaseUrl');
-    await this.emailService.sendEmailVerificationLink(
-      user.email,
-      user.firstName,
-      `${baseUrl}/auth/verify-email?token=${encodeURIComponent(token)}`,
-    );
-    return true;
+    return sent ? 'sent' : 'destination-limited';
   }
 
   /**
    * Worker side of `USER_PASSWORD_RESET_V1`: mints a random token, stores its
    * SHA-256 hash with a 60-minute expiry (replacing any earlier one), and
-   * emails the reset link. Returns false when the account can't be reset.
+   * emails the reset link. Nothing to send when the account can't be reset.
+   *
+   * The send budget is checked BEFORE the token is minted. Minting replaces
+   * the stored hash, so a limited request that still minted would kill the
+   * link the account holder already has and send nothing in its place —
+   * letting anyone lock a victim out of recovery by requesting resets.
    */
-  async deliverPasswordReset(userId: string): Promise<boolean> {
+  async deliverPasswordReset(userId: string): Promise<DeliveryOutcome> {
     const user = await this.findByIdOrNull(userId);
     if (!user || !user.isActive) {
-      return false;
+      return 'nothing-to-send';
     }
+    const sent = await this.destinationSendLimit.sendWithinLimit(
+      SendPurpose.PASSWORD_RESET,
+      canonicalEmailDestination(user.email),
+      () => this.mintAndSendPasswordReset(user),
+    );
+    return sent ? 'sent' : 'destination-limited';
+  }
+
+  private async mintAndSendPasswordReset(user: User): Promise<void> {
     const token = generateOpaqueToken();
     await this.prisma.user.update({
       where: { id: user.id },
@@ -147,24 +224,69 @@ export class UsersService {
       resetUrl.toString(),
       PASSWORD_RESET_EXPIRY_MINUTES,
     );
-    return true;
   }
 
   /** Worker side of `USER_PASSWORD_CHANGED_NOTICE_V1`. */
   async deliverPasswordChangedNotice(
     userId: string,
     occurredAt: Date,
-  ): Promise<boolean> {
+  ): Promise<DeliveryOutcome> {
     const user = await this.findByIdOrNull(userId);
     if (!user) {
-      return false;
+      return 'nothing-to-send';
     }
-    await this.emailService.sendPasswordChangedNotification(
-      user.email,
-      user.firstName,
-      occurredAt,
+    const send = () =>
+      this.emailService.sendPasswordChangedNotification(
+        user.email,
+        user.firstName,
+        occurredAt,
+      );
+    // A verified address always gets this alert: it is the one an account
+    // takeover would most like to suppress. An UNVERIFIED address is capped,
+    // because anyone can point their own account at a victim's inbox (the
+    // email change stores the new address unverified) and then change their
+    // own password over and over.
+    if (user.emailVerifiedAt) {
+      await send();
+      return 'sent';
+    }
+    const sent = await this.destinationSendLimit.sendWithinLimit(
+      SendPurpose.UNVERIFIED_PASSWORD_CHANGED_NOTICE,
+      canonicalEmailDestination(user.email),
+      send,
     );
-    return true;
+    return sent ? 'sent' : 'destination-limited';
+  }
+
+  /**
+   * Worker side of `USER_EMAIL_CHANGED_NOTICE_V1`. Uncapped: it is only queued
+   * for a previous address that was verified, so it reaches nobody but the
+   * address's proven owner.
+   */
+  async deliverEmailChangedNotice(
+    userId: string,
+    auditLogId: string,
+  ): Promise<DeliveryOutcome> {
+    const user = await this.findByIdOrNull(userId);
+    const change = await this.prisma.auditLog.findFirst({
+      where: {
+        id: auditLogId,
+        action: 'user.email_changed',
+        targetUserId: userId,
+      },
+      select: { createdAt: true, metadata: true },
+    });
+    const previousEmail = (change?.metadata as { previousEmail?: unknown })
+      ?.previousEmail;
+    if (!user || !change || typeof previousEmail !== 'string') {
+      return 'nothing-to-send';
+    }
+    await this.emailService.sendEmailChangedNotification(
+      previousEmail,
+      user.firstName,
+      change.createdAt,
+    );
+    return 'sent';
   }
 
   // Consume a verification JWT. No-op for an already-verified user. Every
@@ -174,6 +296,7 @@ export class UsersService {
     interface VerifyPayload {
       sub?: unknown;
       purpose?: unknown;
+      email?: unknown;
     }
     let payload: VerifyPayload;
     try {
@@ -185,16 +308,36 @@ export class UsersService {
       throw Errors.invalidLink();
     }
     const user = await this.findByIdOrNull(payload.sub);
-    if (!user) {
+    // The link proves control of the address it was sent to, and only that
+    // one. Without this check a link for the owner's own address, redeemed
+    // after the account's email was changed, would mark the NEW address —
+    // which nobody has proven they control — as verified.
+    if (!user || payload.email !== user.email) {
       throw Errors.invalidLink();
     }
     if (user.emailVerifiedAt) {
       return;
     }
-    await this.prisma.user.update({
-      where: { id: user.id },
+    // Conditional on the address the link was mailed to, not just the id: the
+    // check above read the row unlocked, and an email change committing in
+    // between must not let this write verify the NEW address.
+    const verified = await this.prisma.user.updateMany({
+      where: {
+        id: user.id,
+        email: payload.email,
+        emailVerifiedAt: null,
+        deletedAt: null,
+      },
       data: { emailVerifiedAt: new Date(), updatedBy: user.id },
     });
+    if (verified.count !== 1) {
+      const current = await this.findByIdOrNull(user.id);
+      // Verified concurrently by the same link — the outcome it asked for.
+      if (current?.email === payload.email && current.emailVerifiedAt) {
+        return;
+      }
+      throw Errors.invalidLink();
+    }
     await this.auditService.record({
       action: 'user.email_verified',
       actorId: user.id,
@@ -424,6 +567,7 @@ export class UsersService {
       });
     }
     if (isEmailChanged) {
+      await this.recordEmailChange(existing, newEmail, actorId);
       await this.queueEmailVerification(id);
     }
     return updated;
@@ -684,11 +828,15 @@ export class UsersService {
     if (!passwordMatches) {
       throw Errors.currentPasswordIncorrect();
     }
+    const newEmail = dto.newEmail.toLowerCase();
     const updated = await this.refreshTokenService.endAllSessions(
       userId,
       userId,
-      { email: dto.newEmail.toLowerCase(), emailVerifiedAt: null },
+      { email: newEmail, emailVerifiedAt: null },
     );
+    if (newEmail !== user.email) {
+      await this.recordEmailChange(user, newEmail, userId);
+    }
     await this.queueEmailVerification(userId);
     const tokens = await this.refreshTokenService.startSession(
       userId,
@@ -818,17 +966,37 @@ export class UsersService {
     if (!passwordMatches) {
       throw Errors.currentPasswordIncorrect();
     }
-    const otp = generateOtp();
-    const otpHash = await bcrypt.hash(`${otp}:${phoneNumber}`, BCRYPT_ROUNDS);
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        otpHash,
-        otpPurpose: OtpPurpose.PHONE_VERIFY,
-        otpExpiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
-      },
+    // The number's send budget is checked before the OTP is minted, so a
+    // refused request leaves the caller's last code valid. A refusal answers
+    // exactly like a send: whether anyone else recently texted this number is
+    // not the caller's to learn. If Redis cannot answer, no SMS goes out —
+    // failing open would turn a Redis outage into unlimited SMS spend.
+    const reservation = await this.destinationSendLimit
+      .reserve(SendPurpose.PHONE_VERIFICATION, phoneNumber)
+      .catch((error: unknown) => {
+        this.logger.error(
+          `SMS send limit unavailable: ${formatErrorMessage(error)}`,
+        );
+        throw Errors.externalServiceUnavailable(
+          'Phone verification is temporarily unavailable.',
+        );
+      });
+    if (!reservation) {
+      return;
+    }
+    await this.destinationSendLimit.sendReserved(reservation, async () => {
+      const otp = generateOtp();
+      const otpHash = await bcrypt.hash(`${otp}:${phoneNumber}`, BCRYPT_ROUNDS);
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: {
+          otpHash,
+          otpPurpose: OtpPurpose.PHONE_VERIFY,
+          otpExpiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
+        },
+      });
+      await this.smsService.sendPhoneVerificationOtp(phoneNumber, otp);
     });
-    await this.smsService.sendPhoneVerificationOtp(phoneNumber, otp);
   }
 
   // Step 2 of the verified-phone flow: verify the OTP against the *same*

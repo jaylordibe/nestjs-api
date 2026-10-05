@@ -24,6 +24,7 @@ import { EmailModule } from './common/email/email.module';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { QueueModule } from './common/queue/queue.module';
 import { RedisModule } from './common/redis/redis.module';
+import { SendLimitModule } from './common/send-limit/send-limit.module';
 import { RedisService } from './common/redis/redis.service';
 import { TelemetryShutdownService } from './common/telemetry/telemetry-shutdown.service';
 import { SmsModule } from './common/sms/sms.module';
@@ -248,6 +249,7 @@ import { UsersModule } from './modules/users/users.module';
     QueueModule,
     EmailModule,
     SmsModule,
+    SendLimitModule,
     AuditModule,
     FileStorageModule,
     AuthorizationModule,

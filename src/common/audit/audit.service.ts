@@ -52,23 +52,31 @@ export class AuditService {
     private readonly cls: ClsService<RequestContextStore>,
   ) {}
 
-  async record(entry: AuditEntry): Promise<void> {
+  /**
+   * Writes the entry and returns its id, or null when the write failed — a
+   * caller that hands the row to a later job (by id, so no personal data sits
+   * in the queue) must handle the null.
+   */
+  async record(entry: AuditEntry): Promise<string | null> {
     try {
       const metadata = this.mergeRequestContext(entry.metadata);
-      await this.prisma.auditLog.create({
+      const row = await this.prisma.auditLog.create({
         data: {
           action: entry.action,
           actorId: entry.actorId,
           targetUserId: entry.targetUserId,
           metadata,
         },
+        select: { id: true },
       });
+      return row.id;
     } catch (error) {
       this.logger.error(
         `Failed to write audit log for action ${entry.action}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
+      return null;
     }
   }
 

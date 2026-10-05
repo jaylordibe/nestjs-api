@@ -4,6 +4,10 @@ import { Prisma } from '@prisma/client';
 import { AuditService } from '../../../common/audit/audit.service';
 import type { AppAbility } from '../../../common/authorization/app-ability';
 import { EmailService } from '../../../common/email/email.service';
+import type { DeliveryOutcome } from '../../../common/send-limit/delivery-outcome';
+import { DestinationSendLimitService } from '../../../common/send-limit/destination-send-limit.service';
+import { SendPurpose } from '../../../common/send-limit/send-limit.config';
+import { canonicalEmailDestination } from '../../../common/util/message-destination.util';
 import { WorkspaceInvitationStatus } from '../../../common/enums/workspace-invitation-status.enum';
 import { WorkspaceMembershipStatus } from '../../../common/enums/workspace-membership-status.enum';
 import { Errors } from '../../../common/errors/errors';
@@ -48,6 +52,7 @@ export class WorkspaceInvitationsService {
     private readonly abilityScopedQueryService: AbilityScopedQueryService,
     private readonly permissionLoaderService: PermissionLoaderService,
     private readonly emailService: EmailService,
+    private readonly destinationSendLimit: DestinationSendLimitService,
     private readonly queueProducer: QueueProducerService,
     private readonly workspaceOwnershipPolicy: WorkspaceOwnershipPolicy,
     private readonly workspaceRoleAssignmentPolicy: WorkspaceRoleAssignmentPolicy,
@@ -368,6 +373,25 @@ export class WorkspaceInvitationsService {
     });
     if (!workspace) {
       throw Errors.resourceNotFound('Workspace');
+    }
+
+    // Checked BEFORE the rotation below: rotating kills the link the invitee
+    // already holds, so a resend whose email would be refused leaves the
+    // invitation untouched — same token, same expiry — and returns it as is.
+    // No error: a failed resend would tell the caller more about the
+    // invitee's other mail than an unchanged expiry does. The check is
+    // advisory (the delivery job reserves), so another send landing between
+    // here and delivery can still refuse the new link after the rotation.
+    if (
+      !(await this.destinationSendLimit.hasBudget(
+        SendPurpose.WORKSPACE_INVITATION,
+        canonicalEmailDestination(existing.email),
+      ))
+    ) {
+      return this.prisma.workspaceInvitation.findUniqueOrThrow({
+        where: { id: invitationId },
+        include: INVITATION_INCLUDE,
+      });
     }
 
     const token = generateOpaqueToken();
@@ -702,12 +726,16 @@ export class WorkspaceInvitationsService {
     });
   }
 
-  /** Sends a queued invitation email. False when it is no longer pending. */
+  /**
+   * Sends a queued invitation email. Nothing to send when it is no longer
+   * pending; skipped when the address has used its invitation send budget —
+   * one address invited from many workspaces is the bombing case.
+   */
   async deliverInvitationEmail(
     invitationId: string,
     token: string,
     inviterId: string,
-  ): Promise<boolean> {
+  ): Promise<DeliveryOutcome> {
     const invitation = await this.prisma.workspaceInvitation.findFirst({
       where: { id: invitationId, status: WorkspaceInvitationStatus.PENDING },
       include: { role: true },
@@ -719,7 +747,7 @@ export class WorkspaceInvitationsService {
         })
       : null;
     if (!invitation || !workspace) {
-      return false;
+      return 'nothing-to-send';
     }
     const inviter = await this.prisma.scoped.user.findUnique({
       where: { id: inviterId },
@@ -729,17 +757,22 @@ export class WorkspaceInvitationsService {
       ? `${inviter.firstName} ${inviter.lastName}`.trim()
       : 'Someone';
 
-    await this.emailService.sendTemplate(
-      'workspace-invitation',
-      invitation.email,
-      {
-        workspaceName: workspace.name,
-        inviterName,
-        roleName: invitation.role.name,
-        acceptUrl: `${this.webBaseUrl}/invitations/accept?token=${encodeURIComponent(token)}`,
-        expiresInDays: this.expiresInDays,
-      },
+    const sent = await this.destinationSendLimit.sendWithinLimit(
+      SendPurpose.WORKSPACE_INVITATION,
+      canonicalEmailDestination(invitation.email),
+      () =>
+        this.emailService.sendTemplate(
+          'workspace-invitation',
+          invitation.email,
+          {
+            workspaceName: workspace.name,
+            inviterName,
+            roleName: invitation.role.name,
+            acceptUrl: `${this.webBaseUrl}/invitations/accept?token=${encodeURIComponent(token)}`,
+            expiresInDays: this.expiresInDays,
+          },
+        ),
     );
-    return true;
+    return sent ? 'sent' : 'destination-limited';
   }
 }

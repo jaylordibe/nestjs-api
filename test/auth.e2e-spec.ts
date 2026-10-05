@@ -2,6 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import request from 'supertest';
 import { App } from 'supertest/types';
+import { UsersService } from '../src/modules/users/users.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { createTestApp } from './setup/test-app';
 import { truncateAll } from './setup/db';
@@ -417,8 +418,104 @@ describe('Auth (e2e)', () => {
       const userId = await getUserIdByEmail(app, email);
       return app
         .get(JwtService)
-        .sign({ sub: userId, purpose }, { expiresIn: '10m' });
+        .sign({ sub: userId, purpose, email }, { expiresIn: '10m' });
     }
+
+    // A link proves control of the address it was mailed to and nothing
+    // else. Redeemed after the account's email changed, it must not mark the
+    // NEW address — which nobody has proven they control — as verified.
+    it('refuses a link redeemed after the account email changed (400 INVALID_LINK)', async () => {
+      const token = await registerAndSignEmailVerifyToken(
+        'link-owner@example.com',
+      );
+      await request(app.getHttpServer())
+        .post('/api/auth/verify-email')
+        .send({ token })
+        .expect(200);
+      const login = await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({
+          identifier: 'link-owner@example.com',
+          password: VALID_PASSWORD,
+        })
+        .expect(200);
+      await request(app.getHttpServer())
+        .patch('/api/users/me/email')
+        .set('Authorization', `Bearer ${login.body.accessToken as string}`)
+        .send({
+          newEmail: 'someone-else@example.com',
+          currentPassword: VALID_PASSWORD,
+        })
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .post('/api/auth/verify-email')
+        .send({ token })
+        .expect(400);
+
+      expect(res.body.errorCode).toBe('INVALID_LINK');
+      const user = await app.get(PrismaService).user.findFirstOrThrow({
+        where: { email: 'someone-else@example.com' },
+      });
+      expect(user.emailVerifiedAt).toBeNull();
+    });
+
+    // A link minted without the address (e.g. before links were bound to one)
+    // proves nothing about the current address.
+    it('refuses a link that carries no address (400 INVALID_LINK)', async () => {
+      await request(app.getHttpServer()).post('/api/auth/register').send({
+        email: 'no-claim@example.com',
+        password: VALID_PASSWORD,
+        firstName: 'No',
+        lastName: 'Claim',
+      });
+      const userId = await getUserIdByEmail(app, 'no-claim@example.com');
+      const token = app
+        .get(JwtService)
+        .sign({ sub: userId, purpose: 'email_verify' }, { expiresIn: '10m' });
+
+      const res = await request(app.getHttpServer())
+        .post('/api/auth/verify-email')
+        .send({ token })
+        .expect(400);
+
+      expect(res.body.errorCode).toBe('INVALID_LINK');
+    });
+
+    // The address check reads the row unlocked; an email change landing
+    // between that read and the write must not get the NEW address verified.
+    it('does not verify an address that replaced the linked one mid-request', async () => {
+      const token = await registerAndSignEmailVerifyToken('raced@example.com');
+      const userId = await getUserIdByEmail(app, 'raced@example.com');
+      const prisma = app.get(PrismaService);
+      const staleRow = await prisma.user.findUniqueOrThrow({
+        where: { id: userId },
+      });
+      await prisma.user.update({
+        where: { id: userId },
+        data: { email: 'swapped-in@example.com' },
+      });
+      const usersService = app.get(UsersService);
+      const spy = jest
+        .spyOn(usersService, 'findByIdOrNull')
+        .mockResolvedValueOnce(staleRow);
+      try {
+        await request(app.getHttpServer())
+          .post('/api/auth/verify-email')
+          .send({ token })
+          .expect(400)
+          .expect((response) =>
+            expect(response.body.errorCode).toBe('INVALID_LINK'),
+          );
+      } finally {
+        spy.mockRestore();
+      }
+
+      const row = await prisma.user.findUniqueOrThrow({
+        where: { id: userId },
+      });
+      expect(row.emailVerifiedAt).toBeNull();
+    });
 
     it('verifies a user via a valid token and unblocks login', async () => {
       const token = await registerAndSignEmailVerifyToken(

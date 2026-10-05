@@ -13,3 +13,10 @@ export class PasswordChangedNoticePayloadDto extends UserEmailJobPayloadDto {
   @IsUtcIsoString()
   occurredAt!: string;
 }
+
+// The previous address is not carried here: the worker reads it from the
+// `user.email_changed` audit row this id names.
+export class EmailChangedNoticePayloadDto extends UserEmailJobPayloadDto {
+  @IsUUID()
+  auditLogId!: string;
+}

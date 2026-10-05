@@ -149,7 +149,10 @@ describe('Request metadata (e2e)', () => {
       ).id;
       const token = app
         .get(JwtService)
-        .sign({ sub: userId, purpose: 'email_verify' }, { expiresIn: '10m' });
+        .sign(
+          { sub: userId, purpose: 'email_verify', email },
+          { expiresIn: '10m' },
+        );
 
       await request(app.getHttpServer())
         .get(`/api/auth/verify-email?token=${encodeURIComponent(token)}`)
