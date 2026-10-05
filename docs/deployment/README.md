@@ -95,8 +95,9 @@ count, surviving the replacement of every process that touched it.
 One process does everything, because there is no autoscaler to duplicate work:
 
 ```bash
-docker compose up -d      # PostgreSQL + Redis
+docker compose up -d      # PostgreSQL + Redis + S3-compatible storage
 yarn prisma:deploy        # or yarn prisma:migrate
+yarn rbac:sync            # the API refuses to boot until the catalog is projected
 yarn start:dev            # QUEUE_WORKER_ENABLED=true, API + worker in one process
 ```
 
