@@ -65,7 +65,7 @@ class CorrelationRecordingHeartbeatHandler extends QueueHeartbeatHandler {
     super(redisService, configService);
   }
 
-  handle(payload: QueueHeartbeatPayloadDto): Promise<JobOutcome> {
+  override handle(payload: QueueHeartbeatPayloadDto): Promise<JobOutcome> {
     this.observedCorrelationIds.push(this.clsService.getId());
     return super.handle(payload);
   }
@@ -666,8 +666,8 @@ describe('Queue infrastructure (e2e)', () => {
         const body = response.body as {
           details: Record<string, { status: string }>;
         };
-        expect(body.details.queue.status).toBe('up');
-        expect(body.details.database.status).toBe('up');
+        expect(body.details.queue?.status).toBe('up');
+        expect(body.details.database?.status).toBe('up');
       });
 
       it('keeps worker liveness OFF readiness so a stopped worker cannot pull the API out of rotation', async () => {
@@ -711,7 +711,7 @@ describe('Queue infrastructure (e2e)', () => {
         const body = response.body as {
           details: Record<string, { status: string }>;
         };
-        expect(body.details.queue_worker.status).toBe('up');
+        expect(body.details.queue_worker?.status).toBe('up');
       });
     });
   });

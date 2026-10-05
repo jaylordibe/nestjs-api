@@ -80,6 +80,15 @@ The `TOKEN_*` / `REFRESH_TOKEN_INVALID` / `SESSION_INVALIDATED` / `USER_INACTIVE
 | `INSUFFICIENT_ROLE` | Generic 403 fallback for a bare framework `ForbiddenException`. Application code should emit `PERMISSION_DENIED` instead — it names the refused action and subject. |
 | `ADMIN_SELF_TARGET_FORBIDDEN` | Admin trying an operation that's refused against themselves (e.g. `PATCH /users/:id/password` when `:id === self.id`). |
 
+### Request body rejected by the parser (HTTP 413, 415)
+
+Raised before any handler runs, by Express's body parser; mapped to the envelope by `fromBodyParserError` (`errors.ts`). `details` is `null`.
+
+| Code | Trigger |
+|---|---|
+| `PAYLOAD_TOO_LARGE` | The body exceeds the parser's size limit. |
+| `UNSUPPORTED_MEDIA_TYPE` | The body's charset or content-encoding is not one the parser accepts. |
+
 ### Validation / bad input (HTTP 400)
 
 | Code | Trigger | `details` shape |

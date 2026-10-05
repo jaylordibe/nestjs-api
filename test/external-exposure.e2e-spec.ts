@@ -191,7 +191,7 @@ function expectNothingSensitive(
 // once at import; env.validation.spec.ts owns the production refusals.
 // SWAGGER_ENABLED=true on purpose: the production floor must win over an
 // operator who turns Swagger on.
-const PRODUCTION_ENV: Record<string, string> = {
+const PRODUCTION_ENV = {
   NODE_ENV: 'production',
   SWAGGER_ENABLED: 'true',
   CORS_ORIGIN: 'https://www.example.test',
@@ -203,7 +203,7 @@ const PRODUCTION_ENV: Record<string, string> = {
   TWILIO_ACCOUNT_SID: `AC${'0'.repeat(32)}`,
   TWILIO_AUTH_TOKEN: 'exposure-spec-inert-token',
   TWILIO_FROM: '+15005550006',
-};
+} as const satisfies Record<string, string>;
 
 describe('External exposure (e2e)', () => {
   describe('production runtime', () => {

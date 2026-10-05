@@ -27,6 +27,7 @@ import {
   TEST_PASSWORD,
 } from './setup/rbac';
 import { createTestApp } from './setup/test-app';
+import { firstElement } from './setup/elements';
 
 interface ErrorBody {
   errorCode: string;
@@ -130,7 +131,7 @@ describe('Workspace invitations (e2e)', () => {
         await deliverQueuedEmails(app);
 
         expect(emails.sent).toHaveLength(1);
-        const [sent] = emails.sent;
+        const sent = firstElement(emails.sent, 'sent email');
         expect(sent.to).toBe('invitee@example.com');
         expect(sent.template).toBe('workspace-invitation');
         const token = linkParameter(sent, 'acceptUrl', 'token');
@@ -278,7 +279,7 @@ describe('Workspace invitations (e2e)', () => {
         select: { status: true },
       });
       expect(invitations).toHaveLength(1);
-      expect(invitations[0].status as WorkspaceInvitationStatus).toBe(
+      expect(invitations[0]?.status as WorkspaceInvitationStatus).toBe(
         WorkspaceInvitationStatus.PENDING,
       );
     });
@@ -382,7 +383,7 @@ describe('Workspace invitations (e2e)', () => {
         select: { status: true },
       });
       expect(theirInvitations).toHaveLength(1);
-      expect(theirInvitations[0].status as WorkspaceInvitationStatus).toBe(
+      expect(theirInvitations[0]?.status as WorkspaceInvitationStatus).toBe(
         WorkspaceInvitationStatus.PENDING,
       );
 
@@ -393,7 +394,7 @@ describe('Workspace invitations (e2e)', () => {
         select: { status: true },
       });
       expect(bystanderInvitations).toHaveLength(1);
-      expect(bystanderInvitations[0].status as WorkspaceInvitationStatus).toBe(
+      expect(bystanderInvitations[0]?.status as WorkspaceInvitationStatus).toBe(
         WorkspaceInvitationStatus.PENDING,
       );
     });
@@ -704,8 +705,8 @@ describe('Workspace invitations (e2e)', () => {
         where: { workspaceId: workspace.id },
       });
       expect(invitations).toHaveLength(1);
-      expect(invitations[0].status).toBe(WorkspaceInvitationStatus.ACCEPTED);
-      expect(invitations[0].acceptedBy).toBe(invitee.id);
+      expect(invitations[0]?.status).toBe(WorkspaceInvitationStatus.ACCEPTED);
+      expect(invitations[0]?.acceptedBy).toBe(invitee.id);
     });
 
     it('someone who LEFT can be re-invited, reusing the same row', async () => {
@@ -728,8 +729,8 @@ describe('Workspace invitations (e2e)', () => {
       // `@@unique([workspaceId, userId])` is unconditional — there can only ever
       // be one.
       expect(rows).toHaveLength(1);
-      expect(rows[0].status).toBe(WorkspaceMembershipStatus.ACTIVE);
-      expect(rows[0].endedAt).toBeNull();
+      expect(rows[0]?.status).toBe(WorkspaceMembershipStatus.ACTIVE);
+      expect(rows[0]?.endedAt).toBeNull();
     });
 
     it('requires authentication — there is no anonymous redemption', async () => {

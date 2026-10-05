@@ -87,7 +87,7 @@ describe('Workspaces (e2e)', () => {
       .expect(200);
     const body = response.body as PageBody<WorkspaceBody>;
     expect(body.meta.total).toBe(1);
-    expect(body.data[0].slug).toBe('alice-co');
+    expect(body.data[0]?.slug).toBe('alice-co');
   });
 
   // `denyAsNotFound` — belonging to no workspace is not a refusal.

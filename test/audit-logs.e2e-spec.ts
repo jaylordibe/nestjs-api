@@ -13,6 +13,7 @@ import {
   SeededUser,
 } from './setup/rbac';
 import { createTestApp } from './setup/test-app';
+import { firstElement } from './setup/elements';
 
 interface PageBody<T> {
   data: T[];
@@ -146,7 +147,7 @@ describe('Audit logs (e2e)', () => {
       .expect(200);
     const actionBody = byAction.body as PageBody<AuditLogBody>;
     expect(actionBody.meta.total).toBe(1);
-    expect(actionBody.data[0].actorId).toBe(owner.id);
+    expect(actionBody.data[0]?.actorId).toBe(owner.id);
 
     const byActor = await request(app.getHttpServer())
       .get(`/api/audit-logs?actorId=${owner.id}`)
@@ -200,7 +201,7 @@ describe('Audit logs (e2e)', () => {
         .expect(200);
       const body = response.body as PageBody<AuditLogBody>;
       expect(body.meta.total).toBe(1);
-      expect(body.data[0].action).toBe('workspace.created');
+      expect(body.data[0]?.action).toBe('workspace.created');
     });
 
     it('matches an action substring, case-insensitively', async () => {
@@ -328,7 +329,10 @@ describe('Audit logs (e2e)', () => {
         .get('/api/audit-logs?action=user.role_assigned')
         .set('Authorization', `Bearer ${admin.token}`)
         .expect(200);
-      const [auditLog] = (response.body as PageBody<AuditLogBody>).data;
+      const auditLog = firstElement(
+        (response.body as PageBody<AuditLogBody>).data,
+        'audit log',
+      );
 
       expect(auditLog.actor).toMatchObject({ id: admin.id });
       expect(auditLog.targetUser).toMatchObject({
@@ -384,7 +388,10 @@ describe('Audit logs (e2e)', () => {
         .get('/api/audit-logs?action=workspace.created')
         .set('Authorization', `Bearer ${admin.token}`)
         .expect(200);
-      const [auditLog] = (response.body as PageBody<AuditLogBody>).data;
+      const auditLog = firstElement(
+        (response.body as PageBody<AuditLogBody>).data,
+        'audit log',
+      );
       expect(auditLog.actor).toMatchObject({ id: owner.id });
     });
 
@@ -402,7 +409,10 @@ describe('Audit logs (e2e)', () => {
         .get('/api/audit-logs?action=system.maintenance_ran')
         .set('Authorization', `Bearer ${admin.token}`)
         .expect(200);
-      const [auditLog] = (response.body as PageBody<AuditLogBody>).data;
+      const auditLog = firstElement(
+        (response.body as PageBody<AuditLogBody>).data,
+        'audit log',
+      );
       expect(auditLog.actor).toBeNull();
       expect(auditLog.targetUser).toBeNull();
     });
@@ -445,7 +455,7 @@ describe('Audit logs (e2e)', () => {
       .expect(200);
     const body = response.body as PageBody<AuditLogBody>;
     expect(body.meta.total).toBe(1);
-    expect(body.data[0].actorId).toBe(admin.id);
-    expect(body.data[0].targetUserId).toBe(user.id);
+    expect(body.data[0]?.actorId).toBe(admin.id);
+    expect(body.data[0]?.targetUserId).toBe(user.id);
   });
 });

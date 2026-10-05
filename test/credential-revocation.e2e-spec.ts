@@ -14,6 +14,7 @@ import {
   TEST_PASSWORD,
 } from './setup/rbac';
 import { createTestApp } from './setup/test-app';
+import { firstElement } from './setup/elements';
 
 const NEW_PASSWORD = 'brand-new-passphrase-9';
 
@@ -128,7 +129,11 @@ describe('Credential change revokes every session (e2e)', () => {
           .send({ email: 'reset@example.com' })
           .expect(200);
         await deliverQueuedEmails(app);
-        const token = linkParameter(emails.sent[0], 'resetUrl', 'token');
+        const token = linkParameter(
+          firstElement(emails.sent, 'sent email'),
+          'resetUrl',
+          'token',
+        );
 
         await request(app.getHttpServer())
           .post('/api/users/reset-password')

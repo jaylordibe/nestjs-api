@@ -9,8 +9,8 @@ describe('buildObjectName', () => {
 
     const [subdirectory, fileName] = objectName.split('/');
     expect(subdirectory).toBe('avatars');
-    expect(fileName.endsWith('.png')).toBe(true);
-    expect(fileName.replace('.png', '')).toMatch(UUID_PATTERN);
+    expect(fileName?.endsWith('.png')).toBe(true);
+    expect(fileName?.replace('.png', '')).toMatch(UUID_PATTERN);
   });
 
   it('stores flat at the bucket root when the subdirectory is empty', () => {

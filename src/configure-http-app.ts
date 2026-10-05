@@ -1,7 +1,44 @@
 import { ConfigService } from '@nestjs/config';
-import type { NestExpressApplication } from '@nestjs/platform-express';
+import {
+  ExpressAdapter,
+  type NestExpressApplication,
+} from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
+import { fromBodyParserError } from './common/errors/errors';
+
+// The Express adapter every entrypoint creates the application with
+// (`main.ts`, and the e2e harness through `createNestApplication`).
+//
+// Nest 12 mounts its not-found handler under the global prefix only, so one
+// Express instance can host several Nest apps. This server hosts exactly one,
+// and every route it serves lives under `api` — so a request OUTSIDE the prefix
+// (`GET /`, `/.env`, `/.git/HEAD`: what scanners probe first) fell through to
+// Express's built-in HTML 404, skipping the exception filter, the JSON
+// envelope, the request id and the log line. Mounting the same Nest handler at
+// the root as well restores the v11 contract: every miss, anywhere, is
+// answered through the one envelope. test/external-exposure.e2e-spec.ts pins it.
+//
+// It also maps the body parser's own client errors (oversized body,
+// unsupported charset) to their 4xx, which Nest's adapter leaves as 500 — see
+// `fromBodyParserError`. test/request-metadata.e2e-spec.ts pins that.
+export class SingleAppExpressAdapter extends ExpressAdapter {
+  override mapException(error: unknown): unknown {
+    const mapped = super.mapException(error);
+    return mapped === error ? (fromBodyParserError(error) ?? error) : mapped;
+  }
+
+  override setNotFoundHandler(
+    ...args: Parameters<ExpressAdapter['setNotFoundHandler']>
+  ): void {
+    const [handler, prefix] = args;
+    super.setNotFoundHandler(handler, prefix);
+    // Without a prefix the base class has already mounted it at the root.
+    if (prefix) {
+      this.use(handler);
+    }
+  }
+}
 
 // Everything Swagger serves — the UI, its init script (which embeds the whole
 // document), and the raw JSON and YAML documents — lives under this ONE

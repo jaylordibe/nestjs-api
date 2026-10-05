@@ -1,7 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import request from 'supertest';
-import { App } from 'supertest/types';
+import type { Server } from 'node:http';
 import { createTestApp } from './setup/test-app';
 
 // Guards the harness invariants that determinism depends on. Each was once
@@ -10,7 +10,9 @@ import { createTestApp } from './setup/test-app';
 // of failure to chase. A regression here would silently reintroduce that, so
 // they are asserted rather than left to a comment in `setup/test-app.ts`.
 describe('E2E harness invariants', () => {
-  let app: INestApplication<App>;
+  // createTestApp() binds the Express adapter's node http.Server — the
+  // binding these invariants inspect via address().
+  let app: INestApplication<Server>;
 
   beforeAll(async () => {
     app = await createTestApp();

@@ -55,6 +55,11 @@ export class AuditLogsService {
       throw Errors.resourceNotFound('Audit log');
     }
     const [hydrated] = await this.hydrateUserRefs([row]);
+    // hydrateUserRefs maps one row out per row in; an empty result is a broken
+    // invariant (a 500 through the filter), never a 404 for a row that exists.
+    if (!hydrated) {
+      throw new Error(`Audit log ${id} was found but lost during hydration`);
+    }
     return hydrated;
   }
 

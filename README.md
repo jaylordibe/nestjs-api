@@ -1,6 +1,6 @@
 # NestJS API Template
 
-A production-grade scaffold for building JSON APIs with **NestJS 11 + Prisma 7 + PostgreSQL + Redis**. Click **Use this template** on GitHub, clone, set a few env vars, and start adding feature modules. Security-hardened, documented end-to-end in [`AGENTS.md`](./AGENTS.md) (imported by `CLAUDE.md`).
+A production-grade scaffold for building JSON APIs with **NestJS 12 + Prisma 7 + PostgreSQL + Redis**. Click **Use this template** on GitHub, clone, set a few env vars, and start adding feature modules. Security-hardened, documented end-to-end in [`AGENTS.md`](./AGENTS.md) (imported by `CLAUDE.md`).
 
 Every e2e spec runs against a **real Postgres and Redis** — no mocks, no in-memory substitutes — so what passes locally is what runs in CI. The suite asserts invariants rather than counts: tenant isolation holds under a forged path parameter, a workspace never reaches zero owners under concurrent demotion, a replayed refresh token revokes its whole family, and an invitation redeemed twice at the same instant produces one membership.
 
@@ -45,7 +45,7 @@ Every e2e spec runs against a **real Postgres and Redis** — no mocks, no in-me
 - **Cloud-provider neutral.** The app depends on generic capabilities — an HTTP runtime, PostgreSQL, a Redis-compatible backend, object storage, runtime-injected env secrets, a worker runtime, stdout logging, HTTP health checks — and nothing vendor-specific. Object storage has four adapters (`stub`/`s3`/`gcs`/`azure`) behind one interface, each SDK confined to its own file and loaded only when selected; **no adapter accepts a long-lived cloud credential**. There is no secret-manager SDK anywhere. Same image and same three commands on AWS, Google Cloud, Azure, Kubernetes, Compose or a VM — see [`docs/deployment/README.md`](docs/deployment/README.md).
 - **Health checks** — `/api/health/liveness` (k8s liveness, no DB) + `/api/health/readiness` (DB ping + queue connectivity) + `/api/health/workers` (queue-worker heartbeat, deliberately *off* readiness so a restarting worker can't pull the API out of rotation) + `/api/health/version` (baked-in commit SHA and process start time, for deploy verification). All four are unauthenticated, so a failing check logs the real cause and returns a fixed string — Prisma's `P1001`/`P1000` quote your internal host and database user, and an ioredis failure quotes host and port (CWE-209). Enforced by co-located specs on both indicators.
 - **Docker** — pinned Postgres + Redis + RustFS (S3-compatible) for dev; multi-stage production Dockerfile (separate `migrate` target; runtime is non-root, tini, npm stripped).
-- **CI** — lint + build + unit + sharded e2e + Trivy image scan on every PR and push to `main`/`staging`/`develop`; dependency audit + Trivy filesystem scan on every PR, weekly, and before each deploy; a weekly OWASP ZAP API scan (`security-dast.yml`). The audit gate fails on any high/critical advisory *except* ones with a documented, dated exception in `.github/scripts/audit-gate.mjs` — so one genuinely-unfixable finding can't force the choice between a permanently red build and deleting the gate. It also nags when an exception goes stale or past review.
+- **CI** — lint + build + unit + sharded e2e + Trivy image scan on every PR and push to `main`/`staging`/`develop`; dependency audit + Trivy filesystem scan on every PR, weekly, and before each deploy; a weekly authenticated OWASP ZAP API scan (`security-dast.yml`; the routes that would end its session are excluded, listed in `.zap/`). The audit gate fails on any high/critical advisory *except* ones with a documented, dated exception in `.github/scripts/audit-gate.mjs` — so one genuinely-unfixable finding can't force the choice between a permanently red build and deleting the gate. It also nags when an exception goes stale or past review.
 - **DB seeder** — `yarn prisma:seed` creates admin + user accounts from env-configured credentials (idempotent, password-complexity-enforced).
 
 ## Setup guide
@@ -276,7 +276,7 @@ Before the first real deploy, confirm:
 ## Tech stack
 
 - **Runtime** — Node 24 everywhere: `.nvmrc`, `.node-version`, `engines`, the Dockerfile, and CI all name the same major, and `yarn@1.22.22` is pinned via `packageManager`.
-- **Framework** — NestJS 11 on Express
+- **Framework** — NestJS 12 on Express
 - **Language** — TypeScript (strict, `isolatedModules`, `emitDecoratorMetadata`)
 - **DB** — PostgreSQL 18 + Prisma 7 via `@prisma/adapter-pg`
 - **Cache / sessions** — Redis 8 (ioredis)

@@ -180,6 +180,47 @@ describe('Request metadata (e2e)', () => {
       expect(body.path).toBe('/api/auth/verify-email?token=[redacted]');
       expect(body.path).not.toContain('NOT-A-REAL-TOKEN-VALUE');
     });
+
+    // An unmatched route is answered inside the `/api` router mount, where
+    // Express rewrites `req.url` relative to the mount. The envelope must still
+    // report the path the client sent — prefix included, secrets redacted.
+    it('reports the full client path for an unmatched route', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/api/does-not-exist?token=NOT-A-REAL-TOKEN-VALUE')
+        .expect(404);
+
+      const body = response.body as { path: string; errorCode: string };
+      expect(body.errorCode).toBe('RESOURCE_NOT_FOUND');
+      expect(body.path).toBe('/api/does-not-exist?token=[redacted]');
+    });
+  });
+
+  // The body parser rejects these before any handler runs. They are the
+  // client's fault, so they answer 4xx through the envelope — never a 500.
+  describe('bodies the parser rejects', () => {
+    it('answers an oversized body with 413 PAYLOAD_TOO_LARGE', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .set('Content-Type', 'application/json')
+        .send(JSON.stringify({ identifier: 'x'.repeat(2_000_000) }))
+        .expect(413);
+
+      expect((response.body as { errorCode: string }).errorCode).toBe(
+        'PAYLOAD_TOO_LARGE',
+      );
+    });
+
+    it('answers an unsupported charset with 415 UNSUPPORTED_MEDIA_TYPE', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .set('Content-Type', 'application/json; charset=klingon')
+        .send('{}')
+        .expect(415);
+
+      expect((response.body as { errorCode: string }).errorCode).toBe(
+        'UNSUPPORTED_MEDIA_TYPE',
+      );
+    });
   });
 
   describe('Cloudflare headers', () => {

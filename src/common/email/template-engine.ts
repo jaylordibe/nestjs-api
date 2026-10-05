@@ -83,8 +83,8 @@ export class EmailTemplateEngine implements OnModuleInit {
     const files = fs.readdirSync(dir);
     const keys = new Set<string>();
     for (const file of files) {
-      const match = /^(.+)\.(html|text)\.hbs$/.exec(file);
-      if (match) keys.add(match[1]);
+      const key = /^(.+)\.(html|text)\.hbs$/.exec(file)?.[1];
+      if (key) keys.add(key);
     }
 
     for (const key of keys) {

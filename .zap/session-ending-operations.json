@@ -1,0 +1,11 @@
+{
+  "//": "Operations the authenticated ZAP scan must not call: each ends the one admin session the scan runs on (or deletes its account), after which every protected route answers 401 and is scanned only as an anonymous caller. Removed from the scanned OpenAPI document by filter-openapi.mjs. Each entry is a route the scan does not cover — keep the list to session- and account-ending operations.",
+  "operations": [
+    { "method": "post", "path": "/api/auth/logout" },
+    { "method": "post", "path": "/api/auth/logout-all" },
+    { "method": "patch", "path": "/api/users/me/password" },
+    { "method": "patch", "path": "/api/users/me/email" },
+    { "method": "post", "path": "/api/users/me/gdpr-erase" },
+    { "method": "delete", "path": "/api/users/me" }
+  ]
+}

@@ -13,6 +13,7 @@ import {
   TEST_PASSWORD,
 } from './setup/rbac';
 import { createTestApp } from './setup/test-app';
+import { definedValue } from './setup/elements';
 
 const NEW_PASSWORD = 'a-completely-different-passphrase-4';
 
@@ -279,7 +280,10 @@ describe('Session issuance races (e2e)', () => {
       const user = await createRegularUser(app, 'stamped@example.com');
       const pair = await loginPair(user.email);
 
-      const [, payloadSegment] = pair.accessToken.split('.');
+      const payloadSegment = definedValue(
+        pair.accessToken.split('.')[1],
+        'the access token payload segment',
+      );
       const payload = JSON.parse(
         Buffer.from(payloadSegment, 'base64url').toString('utf8'),
       ) as { iat: number };

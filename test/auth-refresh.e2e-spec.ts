@@ -5,6 +5,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { truncateAll } from './setup/db';
 import { seedRbacCatalog } from './setup/rbac';
 import { createTestApp } from './setup/test-app';
+import { firstElement } from './setup/elements';
 
 const PASSWORD = 'correct-horse-battery-1';
 
@@ -103,9 +104,10 @@ describe('Auth refresh tokens (e2e)', () => {
       select: { tokenHash: true },
     });
     expect(stored).toHaveLength(1);
-    expect(stored[0].tokenHash).not.toBe(tokens.refreshToken);
+    const storedToken = firstElement(stored, 'stored refresh token');
+    expect(storedToken.tokenHash).not.toBe(tokens.refreshToken);
     // SHA-256, hex-encoded.
-    expect(stored[0].tokenHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(storedToken.tokenHash).toMatch(/^[a-f0-9]{64}$/);
   });
 
   // ── rotation ─────────────────────────────────────────────────────────────

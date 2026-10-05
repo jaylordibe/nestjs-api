@@ -16,6 +16,7 @@ import {
   SeededUser,
 } from './setup/rbac';
 import { createTestApp } from './setup/test-app';
+import { definedValue } from './setup/elements';
 
 interface ErrorBody {
   errorCode: string;
@@ -518,13 +519,18 @@ describe('Workspace memberships (e2e)', () => {
       );
 
       const prisma = app.get(PrismaService);
-      const [first, second] = await prisma.workspaceMembership.findMany({
+      const owners = await prisma.workspaceMembership.findMany({
         where: {
           workspaceId: workspace.id,
           role: { name: SeededRoleName.WORKSPACE_OWNER },
         },
         orderBy: { createdAt: 'asc' },
       });
+      // The race needs exactly two owners; with fewer, both requests would
+      // 404 against a missing id and the test would measure nothing.
+      expect(owners).toHaveLength(2);
+      const first = definedValue(owners[0], 'the first owner');
+      const second = definedValue(owners[1], 'the second owner');
       const adminRoleId = await roleIdFor(app, SeededRoleName.WORKSPACE_ADMIN);
 
       // Both owners demoted at the same instant. The workspace-row lock
@@ -633,7 +639,7 @@ describe('Workspace memberships (e2e)', () => {
         },
       });
       expect(owners).toHaveLength(1);
-      expect(owners[0].userId).toBe(successor.id);
+      expect(owners[0]?.userId).toBe(successor.id);
     });
 
     it('refuses to transfer to a non-active membership', async () => {

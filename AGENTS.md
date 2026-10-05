@@ -17,7 +17,7 @@ something most changes need; feature detail belongs in the code, its tests and
 
 ## Project
 
-NestJS 11 (TypeScript, Express) + Prisma 7 + PostgreSQL + Redis + BullMQ.
+NestJS 12 (TypeScript, Express) + Prisma 7 + PostgreSQL + Redis + BullMQ.
 JWT auth with DB-backed RBAC + CASL over two scopes (PLATFORM / WORKSPACE).
 Unversioned `/api/...`; Swagger at `/api/docs`. Package manager: yarn 1,
 `yarn.lock` committed.

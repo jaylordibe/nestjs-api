@@ -57,6 +57,8 @@ const HTTP_REASON: Record<number, string> = {
   [HttpStatus.FORBIDDEN]: 'Forbidden',
   [HttpStatus.NOT_FOUND]: 'Not Found',
   [HttpStatus.CONFLICT]: 'Conflict',
+  [HttpStatus.PAYLOAD_TOO_LARGE]: 'Payload Too Large',
+  [HttpStatus.UNSUPPORTED_MEDIA_TYPE]: 'Unsupported Media Type',
   [HttpStatus.UNPROCESSABLE_ENTITY]: 'Unprocessable Entity',
   [HttpStatus.TOO_MANY_REQUESTS]: 'Too Many Requests',
   [HttpStatus.INTERNAL_SERVER_ERROR]: 'Internal Server Error',
@@ -99,7 +101,12 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       // an unredacted `path` puts the credential in a third-party system the
       // moment an email-verification link expires. The field still answers what
       // it exists to answer — which endpoint failed.
-      path: redactUrlSecrets(request.url),
+      //
+      // `originalUrl`, not `url`: Express rewrites `url` relative to the router
+      // mount, and since Nest 12 an unmatched route is answered inside the
+      // `/api` mount — `url` would report `/does-not-exist` for a request to
+      // `/api/does-not-exist`. `originalUrl` is the path the client sent.
+      path: redactUrlSecrets(request.originalUrl),
       timestamp: new Date().toISOString(),
       requestId: this.extractRequestId(request),
     };
@@ -283,8 +290,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
   // Composite: "... on the fields: (`platform`,`version`)" → picks
   // `platform`.
   private extractFieldFromMessage(message: string): string | undefined {
-    const match = /fields:\s*\(`?([^`,)]+)`?/.exec(message);
-    return match ? match[1].trim() : undefined;
+    return /fields:\s*\(`?([^`,)]+)`?/.exec(message)?.[1]?.trim();
   }
 
   private humanize(field: string): string {
@@ -300,7 +306,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
   // this method, so the unredacted form would put a bearer credential in the
   // logs on every expired-link click.
   private log(status: number, request: Request, exception: unknown): void {
-    const safeUrl = redactUrlSecrets(request.url);
+    const safeUrl = redactUrlSecrets(request.originalUrl);
     if (status >= 500) {
       this.logger.error(
         `${request.method} ${safeUrl} -> ${status}`,

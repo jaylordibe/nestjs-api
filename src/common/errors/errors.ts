@@ -5,8 +5,10 @@ import {
   HttpException,
   HttpStatus,
   NotFoundException,
+  PayloadTooLargeException,
   ServiceUnavailableException,
   UnauthorizedException,
+  UnsupportedMediaTypeException,
 } from '@nestjs/common';
 import { ErrorCode } from './error-code.enum';
 
@@ -241,6 +243,20 @@ export const Errors = {
       HttpStatus.TOO_MANY_REQUESTS,
     ),
 
+  // ── 413 / 415 ──────────────────────────────────────────────────────
+  // Raised by the body parser, not by application code — see
+  // `fromBodyParserError` below.
+  payloadTooLarge: (message: string): PayloadTooLargeException =>
+    new PayloadTooLargeException({
+      errorCode: ErrorCode.PAYLOAD_TOO_LARGE,
+      message,
+    }),
+  unsupportedMediaType: (message: string): UnsupportedMediaTypeException =>
+    new UnsupportedMediaTypeException({
+      errorCode: ErrorCode.UNSUPPORTED_MEDIA_TYPE,
+      message,
+    }),
+
   // ── 503 ────────────────────────────────────────────────────────────
   externalServiceUnavailable: (message: string): ServiceUnavailableException =>
     new ServiceUnavailableException({
@@ -248,3 +264,32 @@ export const Errors = {
       message,
     }),
 } as const;
+
+// Express's body parser rejects some requests before any handler runs, with
+// an `http-errors` object rather than an HttpException: oversized bodies
+// (413), unsupported charsets and encodings (415). Nest's adapter maps only a
+// malformed-JSON SyntaxError, so these reached the filter as unknown errors
+// and answered 500 — a server fault for the client's own request.
+//
+// `expose === true` is http-errors' marker for a client error whose message
+// is safe to return. Anything else stays unmapped and keeps the 500 path.
+export function fromBodyParserError(error: unknown): HttpException | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const { status, expose, message } = error as {
+    status?: unknown;
+    expose?: unknown;
+    message?: unknown;
+  };
+  if (expose !== true || typeof message !== 'string') return undefined;
+
+  switch (status) {
+    case HttpStatus.PAYLOAD_TOO_LARGE:
+      return Errors.payloadTooLarge(message);
+    case HttpStatus.UNSUPPORTED_MEDIA_TYPE:
+      return Errors.unsupportedMediaType(message);
+    case HttpStatus.BAD_REQUEST:
+      return Errors.badRequest(message);
+    default:
+      return undefined;
+  }
+}

@@ -137,9 +137,14 @@ jobs:
           echo "::add-mask::$TOKEN"
           echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
 
-      # OpenAPI-driven scan: ZAP reads /api/docs/json and exercises every
-      # declared endpoint — far better coverage than spidering a headless API.
+      # OpenAPI-driven scan: ZAP reads the app's own OpenAPI document and
+      # exercises every declared endpoint — far better coverage than spidering
+      # a headless API. It scans a FILTERED copy: .zap/filter-openapi.mjs drops
+      # the operations in .zap/session-ending-operations.json, which would end
+      # the one admin session the scan runs on and leave every later request
+      # anonymous (401) — a scan that looks authenticated and is not.
       #  --network host  -> the ZAP container reaches the app on localhost:3001
+      #  -O              -> base URL for the operations in the filtered file
       #  -f openapi      -> import the definition as OpenAPI
       #  -I              -> do not fail the build on WARN-level alerts; gating
       #                     is opt-in per-rule via .zap/rules.tsv (set to FAIL)
@@ -171,12 +176,15 @@ jobs:
             echo 'replacer.full_list(0).regex=false'
             echo "replacer.full_list(0).replacement=Bearer ${TOKEN}"
           } > zap-out/auth.properties
+          curl -sf http://localhost:3001/api/docs/json -o zap-out/openapi.full.json
+          node .zap/filter-openapi.mjs zap-out/openapi.full.json zap-out/openapi.json
           chmod -R 0777 zap-out
           docker run --rm --network host \
             -v "$PWD/zap-out:/zap/wrk:rw" \
             ghcr.io/zaproxy/zaproxy:stable \
             zap-api-scan.py \
-              -t http://localhost:3001/api/docs/json \
+              -t /zap/wrk/openapi.json \
+              -O http://localhost:3001 \
               -f openapi \
               -I \
               -c rules.tsv \

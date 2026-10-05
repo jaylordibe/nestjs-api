@@ -68,7 +68,7 @@ describe('Enums (e2e)', () => {
       'deviceOs',
     ]) {
       expect(Array.isArray(body[key])).toBe(true);
-      expect(body[key].length).toBeGreaterThan(0);
+      expect(body[key]?.length).toBeGreaterThan(0);
     }
   });
 
@@ -91,7 +91,7 @@ describe('Enums (e2e)', () => {
     const first = await request(app.getHttpServer())
       .get('/api/enums/role-scopes')
       .expect(200);
-    const etag = first.headers['etag'] as string | undefined;
+    const etag = first.headers['etag'];
     expect(etag).toBeDefined();
 
     // A conditional re-fetch with the same ETag revalidates to a bodyless 304.

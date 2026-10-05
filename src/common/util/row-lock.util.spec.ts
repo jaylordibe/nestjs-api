@@ -40,11 +40,11 @@ describe('row-lock util', () => {
       await lockUserRow(transaction, 'a5f0c1d2-0000-4000-8000-000000000001');
 
       expect(statements).toHaveLength(1);
-      expect(statements[0].sql).toBe(
+      expect(statements[0]?.sql).toBe(
         'SELECT id FROM users WHERE id = ?::uuid FOR UPDATE',
       );
       // Interpolated as a bound parameter, never concatenated into the SQL.
-      expect(statements[0].values).toEqual([
+      expect(statements[0]?.values).toEqual([
         'a5f0c1d2-0000-4000-8000-000000000001',
       ]);
     });
@@ -59,7 +59,7 @@ describe('row-lock util', () => {
         'b5f0c1d2-0000-4000-8000-000000000002',
       );
 
-      expect(statements[0].sql).toBe(
+      expect(statements[0]?.sql).toBe(
         'SELECT id FROM workspaces WHERE id = ?::uuid FOR UPDATE',
       );
     });
@@ -76,7 +76,7 @@ describe('row-lock util', () => {
         'c5f0c1d2-0000-4000-8000-000000000003',
       );
 
-      expect(statements[0].sql).toBe(
+      expect(statements[0]?.sql).toBe(
         'SELECT id FROM refresh_tokens WHERE family_id = ?::uuid FOR UPDATE',
       );
     });

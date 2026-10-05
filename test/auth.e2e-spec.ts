@@ -11,6 +11,7 @@ import {
   linkParameter,
 } from './setup/emails';
 import { seedRbacCatalog } from './setup/rbac';
+import { firstElement } from './setup/elements';
 
 const VALID_PASSWORD = 'correct-horse-battery-1';
 
@@ -128,7 +129,11 @@ describe('Auth (e2e)', () => {
           template: 'email-verification-link',
         });
 
-        const token = linkParameter(emails.sent[0], 'verifyUrl', 'token');
+        const token = linkParameter(
+          firstElement(emails.sent, 'sent email'),
+          'verifyUrl',
+          'token',
+        );
         await request(app.getHttpServer())
           .post('/api/auth/verify-email')
           .send({ token })
@@ -165,7 +170,7 @@ describe('Auth (e2e)', () => {
         .get(PrismaService)
         .user.findMany({ where: { email: 'dup@example.com' } });
       expect(rows).toHaveLength(1);
-      expect(rows[0].firstName).toBe('Dup');
+      expect(rows[0]?.firstName).toBe('Dup');
     });
 
     it('audits a successful self-signup with the request envelope', async () => {

@@ -15,6 +15,7 @@ import {
   registerVerifiedUser,
   seedRbacCatalog,
 } from './setup/rbac';
+import { firstElement } from './setup/elements';
 
 const PASSWORD = 'correct-horse-battery-1';
 
@@ -376,10 +377,18 @@ describe('Users (e2e)', () => {
             to: email,
             template: 'password-reset-link',
           });
-          expect(linkParameter(emails.sent[0], 'resetUrl', 'email')).toBe(
-            email,
+          expect(
+            linkParameter(
+              firstElement(emails.sent, 'sent email'),
+              'resetUrl',
+              'email',
+            ),
+          ).toBe(email);
+          return linkParameter(
+            firstElement(emails.sent, 'sent email'),
+            'resetUrl',
+            'token',
           );
-          return linkParameter(emails.sent[0], 'resetUrl', 'token');
         } finally {
           emails.restore();
         }

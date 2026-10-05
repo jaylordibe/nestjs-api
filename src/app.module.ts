@@ -54,7 +54,9 @@ import { UsersModule } from './modules/users/users.module';
       expandVariables: true,
       load: [configuration],
       validationSchema: envValidationSchema,
-      validationOptions: { abortEarly: true },
+      // @nestjs/config 12 validates through Standard Schema; Joi's own options
+      // go under `libraryOptions` (merged over its allowUnknown: true default).
+      validationOptions: { libraryOptions: { abortEarly: true } },
     }),
     // Continuation-local storage: opens an async-local context for every
     // HTTP request so downstream services (AuditService, …) can read request

@@ -13,13 +13,35 @@
     "target": "ES2023",
     "sourceMap": true,
     "outDir": "./dist",
-    "baseUrl": "./",
+    // TypeScript 6 refuses an `outDir` without an explicit `rootDir` when the
+    // compiled files share a narrower root — exactly what ts-jest does when it
+    // compiles one spec at a time. The build pins its own (`./src`) in
+    // tsconfig.build.json; this base config covers src/, test/, prisma/ and
+    // scripts/ together.
+    "rootDir": "./",
+    // TypeScript 6 defaults `types` to [] instead of every package under
+    // node_modules/@types. Name the two the code relies on: Node's globals,
+    // and Jest's for the co-located *.spec.ts files.
+    "types": ["node", "jest"],
     "incremental": true,
     "skipLibCheck": true,
-    "strictNullChecks": true,
+    // Every strict-family check, including useUnknownInCatchVariables and
+    // strictPropertyInitialization. Stated explicitly even though TypeScript 6
+    // defaults it on, so the guarantee does not rest on a compiler default.
+    "strict": true,
     "forceConsistentCasingInFileNames": true,
-    "noImplicitAny": true,
-    "strictBindCallApply": true,
+    // A method meant to override a base (the global JWT guard's canActivate,
+    // a queue handler's handle) must say so, so a renamed base method fails
+    // the build instead of leaving the override as a dead, never-called method.
+    "noImplicitOverride": true,
+    // `items[0]` and `record[key]` are `T | undefined`, so code that assumes an
+    // element exists has to show it (a regex group, a hydrated row, a race
+    // test's precondition) instead of reading `undefined` downstream.
+    "noUncheckedIndexedAccess": true,
+    // Deliberately NOT enabled: noPropertyAccessFromIndexSignature. With the
+    // flag above, an index-signature read is already `T | undefined`; this one
+    // would only force `process.env['X']` over `process.env.X` (~110 sites,
+    // nearly all of them configuration.ts and test setup) and find nothing new.
     "noFallthroughCasesInSwitch": true
   }
 }

@@ -74,11 +74,11 @@ export function buildDeterministicJobId({
 // `payloadVersion: 1` is a build failure rather than a guard silently enforcing
 // the wrong number.
 export function readPayloadVersionFromJobName(jobName: string): number {
-  const match = JOB_NAME_PATTERN.exec(jobName);
-  if (!match) {
+  const version = JOB_NAME_PATTERN.exec(jobName)?.[3];
+  if (version === undefined) {
     throw new Error(
       `Invalid job name "${jobName}" — expected {domain}.{operation}.v{version}`,
     );
   }
-  return Number.parseInt(match[3], 10);
+  return Number.parseInt(version, 10);
 }

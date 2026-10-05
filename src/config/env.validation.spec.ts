@@ -37,9 +37,9 @@ export function parseDocumentedEnvironmentKeys(
   const documentedKeys = new Set<string>();
 
   for (const line of exampleContent.split('\n')) {
-    const match = DOCUMENTED_KEY_PATTERN.exec(line);
-    if (match) {
-      documentedKeys.add(match[1]);
+    const documentedKey = DOCUMENTED_KEY_PATTERN.exec(line)?.[1];
+    if (documentedKey) {
+      documentedKeys.add(documentedKey);
     }
   }
 

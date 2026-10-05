@@ -62,6 +62,12 @@ export enum ErrorCode {
    *  record exists. */
   PERMISSION_DENIED = 'PERMISSION_DENIED',
 
+  // ── Request body rejected before parsing (413, 415) ─────────────────
+  /** The body exceeds the parser's size limit. */
+  PAYLOAD_TOO_LARGE = 'PAYLOAD_TOO_LARGE',
+  /** The body's charset or content-encoding is not one the parser accepts. */
+  UNSUPPORTED_MEDIA_TYPE = 'UNSUPPORTED_MEDIA_TYPE',
+
   // ── Validation / bad input (400) ─────────────────────────────────────
   /** class-validator failure on a DTO. `details` is
    *  `Array<{ field: string; constraints: string[] }>`. */
