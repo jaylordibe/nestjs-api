@@ -11,7 +11,7 @@ Three commands deploy it anywhere:
 |---|---|---|
 | API | `node dist/main.js` | `false` |
 | Worker | `node dist/worker.js` | `true` |
-| Migration | the Prisma deploy script | n/a |
+| Migration | the `migrate` image — `yarn prisma:deploy && yarn rbac:sync` | n/a |
 
 | Document | What it is |
 |---|---|
@@ -38,11 +38,6 @@ managed container platform:
   `REDIS_TLS_ENABLED=true` and a `rediss://` URL.
 - **The Swagger gate is Caddy Basic Auth.** A managed container platform has
   no Caddy in front of it, so use `SWAGGER_ENABLED` instead.
-- **Object storage credentials.** Those READMEs still discuss supplying static
-  access keys. The application no longer accepts any long-lived cloud
-  credential for any provider — every storage adapter authenticates through
-  its platform's keyless identity chain. Both env templates have been updated;
-  prefer [`deployment/`](./deployment/README.md) for the current contract.
 
 The per-environment files remain self-contained (compose, Caddyfile, env
 template, backup script, README) so the two VM environments can drift to
@@ -149,8 +144,8 @@ worked example (substitute your own `<name>`):
 4. **`CORS_ORIGIN`.** Append `https://${<NAME>_HOSTNAME}` to the env-file
    `CORS_ORIGIN` list (e.g. it becomes
    `https://${ADMIN_HOSTNAME},https://www.${WEB_HOSTNAME}`). The API
-   rejects boot in prod/staging if `CORS_ORIGIN` contains `*`, so
-   explicit enumeration is mandatory.
+   refuses to boot in production if `CORS_ORIGIN` is `*`; staging accepts
+   it, so enumerate origins explicitly in both.
 5. **Vite build args.** Define `<NAME>_VITE_API_BASE_URL` (e.g.
    `ADMIN_VITE_API_BASE_URL`, and any other build args the SPA needs) in
    `.env.example` alongside `WEB_VITE_API_BASE_URL`. The matching

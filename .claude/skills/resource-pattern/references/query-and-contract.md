@@ -36,9 +36,11 @@ ids) is owned by `src/common/authorization/README.md`; the skeleton code is in
 
 ## List query
 
-`buildListArgs` is the single source for: allowed sort fields, the fallback
-deterministic sort, search, resource-specific filters, ability/tenant scope,
-soft-delete scope, and pagination.
+`buildListArgs` (a private method per service) is the single source for the
+sort allowlist and fallback deterministic sort (`buildOrderBy`), and is where a
+search/filter `where` is added. Ability/tenant scope comes from
+`AbilityScopedQueryService.buildWhere`, soft-delete scope from `prisma.scoped`,
+and pagination is `skip`/`take` from `MetaQueryDto` in `findPaginated`.
 
 - never pass an untrusted `sortBy` string directly to Prisma;
 - apply the identical `where` to `findMany` and `count`;

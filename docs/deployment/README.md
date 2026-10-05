@@ -33,7 +33,7 @@ environment variable names deploy to all of them.
                     └── BullMQ job schedulers   (recurring work lives in Redis)
 
                  ┌──────────────────┐
-                 │  Migration job   │   yarn prisma:deploy
+                 │  Migration job   │   yarn prisma:deploy && yarn rbac:sync
                  │ (runs to exit)   │   run once, before the new API revision
                  └──────────────────┘
 ```
@@ -399,7 +399,12 @@ environment, including production.
 `DATABASE_IDLE_TIMEOUT_MS` (30000), `REDIS_TLS_ENABLED` (false), `REDIS_TLS_CA`,
 `THROTTLE_TTL_MS`, `THROTTLE_LIMIT`, `SWAGGER_ENABLED`,
 `AUTHORIZATION_GRANTS_CACHE_TTL_SECONDS`, `GIT_SHA`,
-`OTEL_EXPORTER_OTLP_ENDPOINT`.
+`OTEL_EXPORTER_OTLP_ENDPOINT`, `JWT_EXPIRES_IN` (15m),
+`REFRESH_TOKEN_EXPIRES_IN_DAYS` (30), `WORKSPACE_INVITATION_EXPIRES_IN_DAYS` (7),
+`TRUST_CLOUDFLARE_HEADERS` (false — set true only when the origin is reachable
+solely through Cloudflare), `EMAIL_VERIFIED_REDIRECT_URL`, `PASSWORD_RESET_URL`,
+`STORAGE_PROVIDER` (stub), `STORAGE_PUBLIC_URL_BASE` (unset),
+`STORAGE_SIGNED_URL_TTL_SECONDS` (300), `STORAGE_REQUEST_TIMEOUT_MS` (15000).
 
 ### Optional, only when the matching adapter is selected
 

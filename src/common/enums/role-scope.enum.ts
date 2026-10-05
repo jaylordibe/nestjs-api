@@ -12,7 +12,8 @@
 // `ANY`, so a workspace role assigned platform-wide would grant authority over
 // every tenant. A constraint guards the write only, and cannot see a grant set
 // arriving from the Redis cache. The write path validates too — see
-// `UserRolesService.loadPlatformRole` and `loadAssignableWorkspaceRole`.
+// `UserRolesService.loadPlatformRole` and
+// `WorkspaceRoleAssignmentPolicy.loadAssignableRole`.
 export enum RoleScope {
   PLATFORM = 'platform',
   WORKSPACE = 'workspace',

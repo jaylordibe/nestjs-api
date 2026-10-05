@@ -6,7 +6,7 @@ most changes. The reasoning behind each rule lives in
 situational playbooks live in `.claude/skills/` and `docs/`.
 
 Engineering methodology (gates, risk tiers, evidence language, review lenses,
-`/work-item`) comes from the `himoa` plugin and is not restated here.
+`/himoa:work-item`) comes from the `himoa` plugin and is not restated here.
 **Where a framework standard conflicts with this file, this file wins.** It
 also supersedes any parent-workspace `CLAUDE.md`. No `tasks/` directory; a
 correction worth keeping becomes an edit here.
@@ -59,23 +59,29 @@ Every change: `yarn build` + `yarn lint` + the affected e2e specs. Full
 | `src/common/errors/*` | The `errorCode` contract clients program against |
 | `src/modules/queue-admin/*` | Privileged retry/cancel over every tenant's jobs |
 | `prisma/schema.prisma`, `prisma/migrations/*` | Schema and applied migrations |
+| `.claude/settings.json` | The committed permission rules; an unmatched rule is a hole |
+| `eslint.config.mjs` | Tenant-isolation, layering and error guardrails; block order can silently disable a rule |
 
 ## Architecture
 
 ```
 src/
+  telemetry.ts   OpenTelemetry bootstrap; imported first by both entrypoints
   main.ts        HTTP entrypoint: configureHttpApp + listen
   configure-http-app.ts  the HTTP edge (helmet, /api prefix, CORS, trust
                  proxy, gated Swagger under /api/docs); the e2e harness uses it
   worker.ts      queue-only entrypoint into the same AppModule
-  app.module.ts  global pipe, serializer, one exception filter, throttler
+  app.module.ts  global pipe, serializer, one exception filter, throttler +
+                 JWT + permissions guards
   config/        configuration.ts (typed) + env.validation.ts (Joi)
   prisma/        PrismaService + soft-delete extension
-  common/        leaf layer: authorization catalog, decorators, errors,
-                 dto, enums, email/sms/storage, queue, redis, logging, util
+  common/        leaf layer: authorization catalog, audit, constants,
+                 decorators, dto, enums, errors, filters, pipes,
+                 email/sms/storage, queue, redis, logging, telemetry, util
   modules/       feature modules; authorization/ holds the global guard,
                  AbilityScopedQueryService and the boot-time integrity gates
-prisma/          schema, migrations, scripts/ (one-off), seeds/ (JSON)
+prisma/          schema, migrations, seed.ts + rbac-seeder.ts, scripts/
+                 (one-off), seeds/ (JSON inputs; empty in the template)
 test/            e2e specs + setup/ (global DB setup, worker isolation)
 ```
 
@@ -84,7 +90,8 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
 - **Naming (ESLint `id-length` + `id-denylist`):** full words everywhere,
   including loop variables, callbacks and declared names. No `i`/`j`, no
   `req`/`res`, no truncated morphemes (`Ack`, `Msg`, `Svc`). Allowed:
-  `id`, `dto`, `url`, `db`, `ttl`, `jwt`, `otp`, `ip`, generic `T`/`K`.
+  `id`, `dto`, `url`, `db`, `ttl`, `jwt`, `otp`, `ip`, `to`, `_`, generic
+  `T`/`K`/`V`.
 - **Placement:** services hold behaviour. Static tables go to a co-located
   config module; pure helpers to `src/common/util/*.util.ts` with a spec.
   Delete what you replace; no parallel implementations.
@@ -112,21 +119,23 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
 - **Audit fields:** mutating service methods take `actorId` and write
   `createdBy`/`updatedBy`. Privileged actions go through `AuditService.record`.
 - **Soft delete:** `prisma.scoped.*` filters top-level reads only; nested
-  includes need explicit filters. Never a security boundary.
+  includes need explicit filters (ESLint bans bare `user: true` /
+  `workspace: true`). Never a security boundary.
 - **Partial-unique columns** (`users.email`, `users.username`,
   `workspaces.slug`): look up with `findFirst`, never `findUnique`.
 - **Lists:** five standard endpoints; read handlers are `findPaginated` /
   `findById`, one resource per controller, no unpaginated `GET /all`,
   `perPage` clamped to 100.
 - **Config:** `configService.getOrThrow()` only; no `process.env` outside
-  `configuration.ts`.
+  `configuration.ts` (sole exception: `src/telemetry.ts`, which runs first).
 - **Swagger:** paginated handlers use `@ApiPaginatedResponse(T)`; others need
   an explicit `@ApiOkResponse`/`@ApiCreatedResponse({ type })`. Mapped types
   import from `@nestjs/swagger`.
 - **Rate limiting:** every `@Public()` or OTP/SMS/email endpoint gets its own
   `@Throttle`.
-- **Logging:** pino to stdout only; extend `redact.paths` (bodies) or
-  `redactUrlSecrets` (query strings) for new secrets.
+- **Logging:** pino to stdout only; for a new secret extend
+  `buildRedactPaths()` (headers) or `redactUrlSecrets` (query strings).
+  Request bodies are never logged.
 - **Health indicators** log the real error and return a fixed string.
 - **Providers:** email/SMS/storage adapters are selected by env; a provider
   SDK is imported only by its own adapter. Store `storageKey`, never a URL;

@@ -6,12 +6,9 @@
 > [`docs/deployment/README.md`](../deployment/README.md), which is where to
 > start for any container platform.
 >
-> Two things below differ from that contract: **one container runs both the API
-> and the queue worker here** (`QUEUE_WORKER_ENABLED` defaults to `true`,
-> correct only where nothing autoscales), and the **object-storage prose still
-> discusses static cloud access keys** — the application now accepts no
-> long-lived credential for any storage provider, and the `.env.example` in this
-> folder reflects that even where the surrounding text does not.
+> One thing below differs from that contract: **one container runs both the API
+> and the queue worker here** (`QUEUE_WORKER_ENABLED=true`), which is correct
+> only where nothing autoscales.
 
 Runs on a generic Linux VM behind Cloudflare + Caddy. Two app
 services — `api` + `web` — plus `postgres` + `redis`, all on
@@ -183,8 +180,9 @@ openssl rand -hex 48     # → JWT_SECRET
 openssl rand -base64 32  # → DB_PASSWORD
 openssl rand -base64 32  # → REDIS_PASSWORD
 
-nano .env                # paste secrets, fill hostnames, STORAGE_GCS_*,
-                         # RESEND_API_KEY, EMAIL_FROM, TWILIO_*, SEED_*
+nano .env                # paste secrets, fill hostnames, STORAGE_PROVIDER +
+                         # its STORAGE_* vars, RESEND_API_KEY, EMAIL_FROM,
+                         # TWILIO_*, SEED_*
 chmod 600 .env
 ```
 
@@ -296,10 +294,10 @@ do **either**:
 - **Simplest — remove the gate (recommended per project):** delete the
   `if: ${{ vars.DEPLOY_ENABLED == 'true' }}` line (and the comment above
   it) from the `deploy` job in **both** `.github/workflows/deploy-production.yml`
-  and `deploy-staging.yml`. After that the deploy runs on every push (once
-  tests pass). Do this **only after the secrets above are set** — the
-  commit that removes the line, pushed to `main`, is itself the first
-  deploy.
+  and `deploy-staging.yml`. After that, staging deploys on every push to
+  `staging` (once tests pass); production deploys only when someone runs
+  **Actions → Deploy to Production → Run workflow** with `main` selected.
+  Do this **only after the secrets above are set**.
 - **Or keep the gate and flip a switch:** set a **repository** variable
   `DEPLOY_ENABLED=true` under **Settings → Secrets and variables → Actions
   → Variables** — repository scope, NOT environment-scoped (a job's `if:`
@@ -316,10 +314,14 @@ production environment so a human approves every prod deploy.
 
 ## Deploys after the first
 
-CI handles them. On `git push origin main`:
+Production deploys are manual. Dispatch **Actions → Deploy to Production**
+with `main` selected (there is no `push:` trigger):
 
-1. `.github/workflows/test.yml` runs lint + tests + Trivy scan.
-2. `.github/workflows/deploy-production.yml` SSHes into the server,
+1. The `guard` job refuses any ref other than `refs/heads/main`.
+2. `.github/workflows/test.yml` (lint, tests, image Trivy scan) and
+   `.github/workflows/security.yml` (dependency audit, Trivy filesystem scan)
+   must both pass.
+3. The `deploy` job in `.github/workflows/deploy-production.yml` SSHes into the server,
    hard-resets `<service>-api` to `origin/main`, syncs
    `docker-compose.yml`/`Caddyfile` from `docs/prod/`, runs migrations,
    rebuilds + force-recreates the api service, graceful-reloads Caddy,

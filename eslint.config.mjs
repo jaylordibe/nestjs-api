@@ -47,6 +47,13 @@ const COMMON_LAYER_IMPORT_RESTRICTION = {
     'src/common/ must not import from src/modules/ — common is the leaf layer that modules build on. Move code that needs a service into src/modules/.',
 };
 
+// The only files allowed to import `@casl/prisma`.
+const CASL_PRISMA_ALLOWED_FILES = [
+  'src/modules/authorization/ability-scoped-query.service.ts',
+  'src/modules/authorization/ability.factory.ts',
+  'src/common/authorization/app-ability.ts',
+];
+
 function restrictedImports({ paths = [], patterns = [] }) {
   return ['error', { paths, patterns }];
 }
@@ -189,7 +196,7 @@ export default tseslint.config(
       ],
     },
   },
-  // Authorization guardrail.
+  // Authorization guardrail, applied to everything under src/.
   //
   // `accessibleBy` turns a CASL ability into a Prisma `where`, and the way that
   // fragment is composed is a security boundary, not a style choice: Prisma
@@ -200,47 +207,29 @@ export default tseslint.config(
   // `AbilityScopedQueryService` is the single place that composition is
   // written, spec-locked by shape, and fails closed twice over. Nowhere else
   // may reach for `@casl/prisma`.
+  //
+  // ESLint flat config merges rules BY NAME, last match wins: every block below
+  // that configures `no-restricted-imports` REPLACES this one for the files it
+  // matches, so each must restate CASL_PRISMA_IMPORT_RESTRICTION. This block
+  // once lived apart from the scheduler/cloud-SDK one, and the later block
+  // silently dropped the CASL ban for all of src/modules/.
   {
     files: ['src/**/*.ts'],
-    ignores: [
-      'src/modules/authorization/ability-scoped-query.service.ts',
-      'src/modules/authorization/ability.factory.ts',
-      'src/common/authorization/app-ability.ts',
-    ],
+    ignores: CASL_PRISMA_ALLOWED_FILES,
     rules: {
-      'no-restricted-imports': [
-        'error',
-        {
-          paths: [
-            {
-              name: '@casl/prisma',
-              message:
-                'Do not build Prisma filters from an ability by hand — an empty `OR: []` nested inside `AND` is silently dropped by Prisma and leaks every row. Use AbilityScopedQueryService (buildWhere / buildWhereOrEmpty / buildRecordWhere). See src/common/authorization/README.md.',
-            },
-          ],
-        },
-      ],
+      'no-restricted-imports': restrictedImports({
+        paths: [
+          CASL_PRISMA_IMPORT_RESTRICTION,
+          IN_PROCESS_SCHEDULER_IMPORT_RESTRICTION,
+        ],
+        patterns: [CLOUD_SDK_IMPORT_RESTRICTION],
+      }),
     },
   },
-  // Layering guardrail — MUST come after the @casl/prisma block above.
-  //
-  // ESLint flat config merges rules BY NAME, last match wins. Both blocks
-  // configure `no-restricted-imports`, so a `src/common/**` file matches both
-  // and only the LAST one applies. This block therefore restates the
-  // `@casl/prisma` restriction alongside the layering one — dropping it here
-  // would silently un-restrict CASL inside `common/`.
-  //
-  // The layering rule: `src/common/` is the leaf layer. `src/modules/` builds on
-  // it, never the reverse. A `common/` file importing from `modules/` inverts
-  // the dependency graph and is how import cycles start. Added after
-  // `PermissionsGuard` (which needs AbilityFactory + PermissionLoaderService)
-  // was written into `common/guards/`; it now lives in
-  // `modules/authorization/guards/`. Pure metadata — decorators, DTOs, enums,
-  // errors, the permission catalog — stays in `common/` precisely because it
-  // depends on nothing.
-  // Everything under src/, including src/modules/.
+  // The files that legitimately compose CASL with Prisma keep every OTHER
+  // src/-wide restriction.
   {
-    files: ['src/**/*.ts'],
+    files: CASL_PRISMA_ALLOWED_FILES,
     rules: {
       'no-restricted-imports': restrictedImports({
         paths: [IN_PROCESS_SCHEDULER_IMPORT_RESTRICTION],
@@ -248,12 +237,21 @@ export default tseslint.config(
       }),
     },
   },
+  // Layering guardrail. The layering rule: `src/common/` is the leaf layer.
+  // `src/modules/` builds on it, never the reverse. A `common/` file importing
+  // from `modules/` inverts the dependency graph and is how import cycles
+  // start. Added after `PermissionsGuard` (which needs AbilityFactory +
+  // PermissionLoaderService) was written into `common/guards/`; it now lives in
+  // `modules/authorization/guards/`. Pure metadata — decorators, DTOs, enums,
+  // errors, the permission catalog — stays in `common/` precisely because it
+  // depends on nothing.
+  //
   // The leaf layer adds the CASL and layering restrictions, and RESTATES the
   // two above — dropping them here would un-restrict them for all of
   // src/common/, which is where the storage adapters live.
   {
     files: ['src/common/**/*.ts'],
-    ignores: ['src/common/authorization/app-ability.ts'],
+    ignores: CASL_PRISMA_ALLOWED_FILES,
     rules: {
       'no-restricted-imports': restrictedImports({
         paths: [

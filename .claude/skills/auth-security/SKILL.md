@@ -24,8 +24,9 @@ Permissions, roles, scope, ownership and 403-versus-404 belong to the
 
 ## JWT and session authority
 
-- Claims are exactly `{ sub, jti }` — no roles, permissions, membership or
-  ownership in the token. Grants are re-read per request
+- Claims are `sub`, `jti` and the registered `iat`/`exp`/`iss`/`aud` only — no
+  roles, permissions, membership or ownership in the token. `iat` is pinned to
+  the session's issue instant; the `passwordChangedAt` cutoff compares against it. Grants are re-read per request
   (`src/common/authorization/README.md`, Caching and invalidation).
 - Preserve the `jti` session/revocation contract. Issuer and audience derive
   from `SERVICE_NAME`; the JWT strategy validates issuer, audience, signature,
@@ -67,7 +68,8 @@ Permissions, roles, scope, ownership and 403-versus-404 belong to the
 - Verification links are 24h JWTs with a `purpose` claim; `JwtStrategy` refuses
   any token carrying `purpose`.
 - Account emails are queued (`notifications` queue). The payload is the user id
-  only; the worker mints the token and renders the email.
+  (plus `occurredAt` for the password-changed notice); the worker mints any
+  token and renders the email.
 
 ## OTPs
 
@@ -80,10 +82,10 @@ Permissions, roles, scope, ownership and 403-versus-404 belong to the
 
 The global throttle is **not sufficient** for these. `POST /auth/login` is keyed
 by lower-cased identifier + IP (`loginThrottleTracker`, 5/min); there is no
-account lockout. Registration, login, resend verification, forgot/reset
-password, email/phone OTP issue and verify, account recovery, and anything that
-hashes a password or calls a provider each carry their own
-`@Throttle({ default: { limit, ttl } })`.
+account lockout. Registration, login, refresh, verify-email, resend
+verification, request/reset password, and phone OTP request/verify each carry
+their own `@Throttle({ default: { limit, ttl } })`. The re-authenticated
+`/users/me/*` routes (password, email, gdpr-erase) rely on the global throttle.
 
 ## Required tests when relevant
 

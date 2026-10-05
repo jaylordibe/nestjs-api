@@ -66,7 +66,8 @@ confirms the record exists.
 
 ## ⚠️ The Prisma empty-`OR` landmine
 
-Verified against Prisma 7.7 + Postgres 16. When a caller holds **no** rules for
+Last verified against Prisma 7.7 + Postgres 16; re-verify the table after a
+Prisma major or minor upgrade. When a caller holds **no** rules for
 a subject, `accessibleBy(...).ofType(M)` returns `{ OR: [] }`. Prisma's handling
 depends on *where that fragment sits*:
 
@@ -202,8 +203,9 @@ for how the two rules compose.
 
 ## Roles are code — there is no runtime role API
 
-`GET /roles` and `GET /permissions` are the only role endpoints. There is no
-`POST`, `PATCH`, or `DELETE`, and their absence is the feature: an operator who
+`GET /roles`, `GET /roles/:id` and `GET /permissions` are the only
+role-*definition* endpoints (assignment is `POST`/`DELETE /users/:userId/roles`
+and workspace memberships). There is no `POST`, `PATCH`, or `DELETE` on a role, and their absence is the feature: an operator who
 can add `platform.all.manage` to a role they already hold has made themselves an
 admin with no diff for anyone to review.
 
@@ -213,9 +215,10 @@ catalog disagree, and the seeder reconciles every seeded role's grants back to
 the catalog — so a custom role's permissions would be reverted by the next
 deploy anyway.
 
-`GET /roles?assignableIn=<workspaceId>` narrows the list to roles the caller may
-actually hand out there (workspace-scoped, at or below their rank). That is
-ergonomics, not a control — the ceiling is enforced on write regardless — but a
+`GET /roles?assignableIn=<workspaceId>` narrows the list to workspace-scoped
+roles at or below the caller's rank there. It does not apply the `assignRole`
+authority bound (see the escalation guard), so a caller without `assignRole` may
+still be offered roles the write path refuses. That is ergonomics, not a control — the ceiling is enforced on write regardless — but a
 picker that only offers reachable options is the difference between a boundary
 users understand and one they probe.
 
@@ -237,6 +240,12 @@ On top of the permission, `rank` bounds it:
 
 > You may grant, or act upon, a role **at or below** your own rank — never one
 > above it.
+
+A second bound applies first: a caller without `assignRole WorkspaceMembership`
+(e.g. `WORKSPACE_MANAGER`, who holds `create WorkspaceMembership`) may hand out
+only `WORKSPACE_MEMBER` — otherwise at-or-below would let a manager appoint peer
+managers without the permission that governs roles. Both bounds live in
+`WorkspaceRoleAssignmentPolicy` and apply to memberships and invitations alike.
 
 At-or-below is deliberate. A lateral grant is not an escalation (a
 `WORKSPACE_ADMIN` minting a peer admin gains nothing it lacked), and
@@ -335,8 +344,9 @@ silently deny a member whose rule is conditioned on `userId`.
 
 ### Lifecycle
 
-`WorkspaceMembershipStatus` is `invited → active → suspended → left`, and the row
-is **never deleted**. `DELETE` ends a membership by moving it to `left`; a
+`WorkspaceMembershipStatus` is `active ⇄ suspended → left` (and `left → active`
+on re-join); there is no `invited` state — a pending invitation is a
+`workspace_invitations` row. The row is **never deleted**. `DELETE` ends a membership by moving it to `left`; a
 re-join moves that same row back to `active`. That is what lets the uniqueness
 constraint stay unconditional — soft deletion could not, because SQL treats
 `NULL != NULL`, so `@@unique([workspaceId, userId, deletedAt])` would accept two
@@ -499,8 +509,8 @@ which this can, because it sits after the cache. `continue` rather than `throw`:
 a mis-scoped grant is a data fault, and failing the build would turn one bad row
 into an outage for that account.
 
-The write path still validates (`loadPlatformRole`,
-`loadAssignableWorkspaceRole`), and `ability.factory.spec.ts` asserts both
+The write path still validates (`UserRolesService.loadPlatformRole`,
+`WorkspaceRoleAssignmentPolicy.loadAssignableRole`), and `ability.factory.spec.ts` asserts both
 directions.
 
 ## Deliberate non-goals

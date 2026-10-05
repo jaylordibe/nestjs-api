@@ -68,8 +68,8 @@ departs from this contract.
 ## 4. Service and list query
 
 `references/query-and-contract.md` — what each service method is responsible
-for, how `buildListArgs` composes one `where` for `findMany` and `count`, and
-how loaded relations are serialized.
+for, how `findPaginated` applies one scoped `where` to both `findMany` and
+`count`, and how loaded relations are serialized.
 
 ## 5. Completion gate
 

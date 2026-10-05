@@ -6,12 +6,9 @@
 > [`docs/deployment/README.md`](../deployment/README.md), which is where to
 > start for any container platform.
 >
-> Two things below differ from that contract: **one container runs both the API
-> and the queue worker here** (`QUEUE_WORKER_ENABLED` defaults to `true`,
-> correct only where nothing autoscales), and the **object-storage prose still
-> discusses static cloud access keys** — the application now accepts no
-> long-lived credential for any storage provider, and the `.env.example` in this
-> folder reflects that even where the surrounding text does not.
+> One thing below differs from that contract: **one container runs both the API
+> and the queue worker here** (`QUEUE_WORKER_ENABLED=true`), which is correct
+> only where nothing autoscales.
 
 Runs on a generic Linux VM behind Cloudflare + Caddy — the same shape as
 production. Two app services (`api` + `web`) plus
@@ -160,8 +157,8 @@ openssl rand -hex 48     # → JWT_SECRET
 openssl rand -base64 32  # → DB_PASSWORD
 openssl rand -base64 32  # → REDIS_PASSWORD
 
-nano .env                # paste secrets, fill hostnames, STORAGE_GCS_*,
-                         # SWAGGER_BASIC_AUTH_*, SEED_*
+nano .env                # paste secrets, fill hostnames, STORAGE_PROVIDER +
+                         # its STORAGE_* vars, SWAGGER_BASIC_AUTH_*, SEED_*
 chmod 600 .env
 ```
 
@@ -293,8 +290,9 @@ pointing at that SPA's hostname.
 
 CI handles them. On `git push origin staging`:
 
-1. `.github/workflows/test.yml` runs lint + tests + Trivy scan (the
-   staging workflow gates on it via `needs: test`).
+1. `.github/workflows/test.yml` (lint, tests, image Trivy scan) and
+   `.github/workflows/security.yml` (dependency audit, Trivy filesystem scan)
+   both run; the deploy job has `needs: [test, security]`.
 2. `.github/workflows/deploy-staging.yml` SSHes into the server,
    hard-resets `<service>-api` to `origin/staging`, syncs
    `docker-compose.yml`/`Caddyfile` from `docs/staging/`, runs
@@ -317,7 +315,7 @@ docker compose logs -f caddy
 docker compose --profile migrate run --rm --build migrate
 
 # Reset the database (staging only — destroys all data)
-docker compose exec api yarn prisma:reset
+docker compose --profile migrate run --rm migrate yarn prisma:reset
 docker compose --profile migrate run --rm migrate yarn prisma:seed
 
 # Open a Postgres shell

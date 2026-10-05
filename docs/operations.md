@@ -41,8 +41,8 @@ code — both are consequences of infrastructure you choose.
 What the shipped configuration implies, if you install the cron line and change
 nothing else:
 
-- **RPO ≈ 24 hours.** One dump per day, overwritten in place. Everything since
-  the last dump is lost.
+- **RPO ≈ 24 hours.** One dump per day, 14 days kept on the same disk.
+  Everything since the last dump is lost.
 - **RTO = unbounded.** No restore has been rehearsed, and the only copy is on
   the host that failed.
 
@@ -58,7 +58,7 @@ path, and the dump script is a stopgap for a single-box deployment.
 |---|---|---|
 | Boot-time validation | ✅ Implemented | `src/config/env.validation.ts` — Joi refuses to start on a missing or malformed value |
 | Template-default rejection | ✅ Implemented | The template's placeholder `JWT_SECRET` is explicitly `.invalid()`, so a checkout cannot silently deploy with it |
-| Production-only strictness | ✅ Implemented | `TRUST_PROXY` refuses `"true"`/`"false"` and `CORS_ORIGIN` refuses `*` when `NODE_ENV=production` |
+| Production-only strictness | ✅ Implemented | `TRUST_PROXY` refuses `"true"`/`"false"`, `CORS_ORIGIN` refuses `*`, and `EMAIL_PROVIDER`/`SMS_PROVIDER` refuse `stub` when `NODE_ENV=production` |
 | Secrets **at rest** | ❌ Operator-owned | Deploys read a plaintext `.env` on the server. A secret manager is on the production checklist and is not wired up. |
 | **Rotation** | ❌ Operator-owned | No rotation mechanism, schedule, or dual-key window exists. Rotating `JWT_SECRET` invalidates every outstanding access token immediately — which is correct behaviour, but it is a hard cutover, not a rolling one. |
 
@@ -87,7 +87,7 @@ cannot, without work.
 | Control | Status | Where |
 |---|---|---|
 | Migration-vs-data safety gate | ❌ Not implemented | CI applies migrations to an empty database only (e2e). Whether a migration applies to populated data, and whether the released build can serve on the new schema during the swap window, is a review-time check — see `docs/prod/README.md` → "When a release is NOT backwards-compatible". |
-| Connection-pool sizing | ❌ Operator-owned | Prisma's default pool is `num_cpus * 2 + 1`. With an API and a worker on one box, both hold pools against the same Postgres — size `max_connections` accordingly or expect saturation under load rather than a clear error. |
+| Connection-pool sizing | ✅ Implemented (sizing operator-owned) | Explicit pg pool: `DATABASE_POOL_MAX` (default 10) with a bounded acquire timeout (`DATABASE_CONNECTION_TIMEOUT_MS`). Every API and worker process holds its own pool — keep (instances × `DATABASE_POOL_MAX`) under `max_connections`; see `docs/deployment/README.md` §3. |
 
 ### Expand/contract policy
 
@@ -96,9 +96,8 @@ against the new schema for the length of the build-and-swap. A migration must
 therefore be backwards-compatible with the code currently running.
 
 In practice: add columns nullable, backfill separately, and only tighten or drop
-in a **later** release once no running build reads them. The CI job above is what
-enforces this rather than the honour system — it will fail a `DROP COLUMN` that
-the released build still selects.
+in a **later** release once no running build reads them. Nothing in CI enforces
+this — it is a review-time check (see the migration-safety row above).
 
 ---
 
@@ -107,7 +106,7 @@ the released build still selects.
 | Control | Status | Where |
 |---|---|---|
 | Worker liveness | ✅ Implemented | `GET /api/health/workers`, deliberately **off** readiness so a stopped worker cannot pull the API out of rotation — which also means nothing else will tell you it died. **Monitor this endpoint.** |
-| Retry policy | ✅ Implemented | Per-job in `job-registry.ts`; bounded attempts with backoff |
+| Retry policy | ✅ Implemented | Per-queue default in `queue-registry.ts` (5 attempts, exponential backoff); per-job override via `retryPolicy` in `job-registry.ts` |
 | Duplicate delivery | ✅ Implemented | Handlers must tolerate it; deterministic job ids collapse duplicate schedules |
 | Correlation | ✅ Implemented | `correlationId` flows request → job → worker log lines |
 | Operator recovery | ✅ Implemented | `/api/queues` — inspect, retry, cancel. Payloads gated behind `readPayload QueueJob`. |

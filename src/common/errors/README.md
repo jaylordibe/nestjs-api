@@ -39,6 +39,7 @@ on HTTP 401:
     case 'TOKEN_INVALID':
     case 'TOKEN_EXPIRED':
     case 'TOKEN_REVOKED':
+    case 'REFRESH_TOKEN_INVALID':
     case 'SESSION_INVALIDATED':
     case 'USER_INACTIVE':
       // Session is dead. Clear token, redirect to login.
@@ -53,7 +54,7 @@ on HTTP 401:
   }
 ```
 
-The `TOKEN_*` / `SESSION_INVALIDATED` / `USER_INACTIVE` cluster is the only set that should clear local credentials. Everything else is either a login-form error or a re-auth-protected operation — the user is still validly signed in.
+The `TOKEN_*` / `REFRESH_TOKEN_INVALID` / `SESSION_INVALIDATED` / `USER_INACTIVE` cluster is the only set that should clear local credentials. Everything else is either a login-form error or a re-auth-protected operation — the user is still validly signed in.
 
 ## ErrorCode catalog
 
@@ -70,6 +71,7 @@ The `TOKEN_*` / `SESSION_INVALIDATED` / `USER_INACTIVE` cluster is the only set 
 | `INVALID_CREDENTIALS` | `/auth/login` wrong identifier/password or inactive account. | ❌ |
 | `EMAIL_NOT_VERIFIED` | Login blocked: `emailVerifiedAt` is null. | ❌ |
 | `CURRENT_PASSWORD_INCORRECT` | Re-auth in `/me/password`, `/me/email`, `/me/gdpr-erase`, `/me/request-phone-verification`. Token still valid. | ❌ |
+| `REFRESH_TOKEN_INVALID` | `/auth/refresh`: the refresh token is unknown, expired, already exchanged, or revoked — one code for all four, so a caller cannot learn whether a token it holds is genuine. | ✅ |
 
 ### Authorization (HTTP 403)
 
@@ -82,17 +84,17 @@ The `TOKEN_*` / `SESSION_INVALIDATED` / `USER_INACTIVE` cluster is the only set 
 
 | Code | Trigger | `details` shape |
 |---|---|---|
-| `VALIDATION_FAILED` | class-validator failure on a DTO (the default ValidationPipe folds the per-field messages into the envelope `message`). | `null` |
+| `VALIDATION_FAILED` | class-validator failure on a DTO; also `Errors.badRequest()` for malformed input class-validator cannot express. | `Array<{ field: string; constraints: string[] }>` (paths like `address.street`, `passengers[0].firstName`); `null` from `Errors.badRequest()` |
 | `INVALID_OTP` | Bad or expired phone-verification code. | `null` |
 | `INVALID_LINK` | Bad, expired or already-used link token (verify-email, password reset). | `null` |
 | `EMAIL_DOMAIN_DISALLOWED` | Sign-up with a disposable / temporary email provider. | `{ domain: string }` |
-| `FK_REFERENCE_INVALID` | Prisma P2003 — foreign key references a record that doesn't exist. | `{ field: string }` |
+| `FK_REFERENCE_INVALID` | Prisma P2003 — foreign key references a record that doesn't exist. | `{ field: string }`, or `null` when the column cannot be determined |
 
 ### Resource state (HTTP 404, 409)
 
 | Code | Trigger | `details` shape |
 |---|---|---|
-| `RESOURCE_NOT_FOUND` | Generic 404 (also Prisma P2025). | `{ resource: string }` |
+| `RESOURCE_NOT_FOUND` | Generic 404 (also Prisma P2025). | `{ resource: string }` from `Errors.resourceNotFound()`; `null` for Prisma P2025 and framework 404s |
 | `UNIQUE_CONSTRAINT_VIOLATION` | Value already taken: Prisma P2002, or sign-up with a registered email. | `{ field: string }` |
 | `RESOURCE_CONFLICT` | Generic 409 for application-level conflicts. | `null` |
 
@@ -102,7 +104,7 @@ The `TOKEN_*` / `SESSION_INVALIDATED` / `USER_INACTIVE` cluster is the only set 
 |---|---|---|---|
 | `LAST_OWNER_PROTECTED` | 409 | The operation would leave a live workspace with no owner who can act: removing, demoting, or suspending the last one — or **taking the account of somebody who solely owns a workspace out of service**, which means `DELETE /users/me`, `DELETE /users/:id`, and `PATCH /users/:id` with `{ "isActive": false }`. Deactivation counts because an inactive account cannot authenticate, so the workspace is just as unadministrable as if the owner had been deleted. Fires for **every** caller, platform admins included: it is a data-integrity invariant, not an authorization rule. | `{ workspaces: { id, name }[] }` on the account paths, so the caller can act; `null` on the membership paths, where they already named the workspace. |
 | `MEMBERSHIP_NOT_ACTIVE` | 409 | The membership exists but is not in a state that permits this operation. | `{ status: string }` |
-| `ROLE_NOT_ASSIGNABLE` | 403 | The role is out of scope, above the caller's rank ceiling, or privileged while the caller holds no `assignRole WorkspaceMembership`. **One code for all three**, so a caller probing for escalation cannot learn which wall they hit; the remedy is the same either way. | `null` |
+| `ROLE_NOT_ASSIGNABLE` | 403 | The role is out of scope, above the caller's rank ceiling, or privileged while the caller holds no `assignRole WorkspaceMembership` — or the caller has no ACTIVE membership in the workspace. **One code for all four**, so a caller probing for escalation cannot learn which wall they hit; the remedy is the same either way. | `null` |
 | `INVITATION_INVALID` | 400 | Unknown, consumed, revoked, rotated by a resend, addressed to a different account, or presented by a caller who has not verified control of the invited address. **Deliberately indistinguishable**, so a token cannot be probed. | `null` |
 | `INVITATION_EXPIRED` | 400 | Distinguishable on purpose: the holder already proved possession of a real token, so this discloses nothing new, and their remedy differs — ask for a resend. | `null` |
 
@@ -143,8 +145,8 @@ soft-deletes the solely-owned workspaces instead. That asymmetry with
 | `INSUFFICIENT_ROLE` | 403 | — | Legacy generic 403; still emitted when a bare `ForbiddenException` reaches the global filter. Prefer `PERMISSION_DENIED`, which names what was refused. |
 
 **Neither new code triggers client auto-logout.** The token is perfectly valid;
-the caller simply lacks authority. Only the `TOKEN_*` / `SESSION_INVALIDATED` /
-`USER_INACTIVE` cluster clears credentials.
+the caller simply lacks authority. Only the `TOKEN_*` / `REFRESH_TOKEN_INVALID` /
+`SESSION_INVALIDATED` / `USER_INACTIVE` cluster clears credentials.
 
 ### Why a cross-tenant read is 404, not 403
 

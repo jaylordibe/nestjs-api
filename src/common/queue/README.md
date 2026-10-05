@@ -3,7 +3,7 @@
 Persistent, Redis-backed background jobs: immediate, delayed and recurring, with
 retries, cancellation, rescheduling, bounded retention and structured lifecycle
 logging. Shared infrastructure — it contains no domain logic and depends on no
-workspace module.
+feature module.
 
 ---
 
@@ -109,7 +109,7 @@ Two queues:
 | Queue | Jobs |
 |---|---|
 | `maintenance` | `maintenance.queue-heartbeat.v1` (every 5 minutes) writes the Redis key behind `GET /api/health/workers`. `auth.refresh-token-retention.v1` (`0 0 * * *` UTC) deletes refresh tokens past their expiry. |
-| `notifications` | `user.email-verification.v1`, `user.password-reset.v1`, `user.password-changed-notice.v1` (enqueued by `UsersService`; payload is the user id only, the worker reloads the user) and `workspace.invitation-email.v1` (enqueued by `WorkspaceInvitationsService`; payload carries the invitation id and the token, since only its hash is stored). Queued so the request never waits on the mail provider. |
+| `notifications` | `user.email-verification.v1`, `user.password-reset.v1`, `user.password-changed-notice.v1` (enqueued by `UsersService`; payload is the user id — plus `occurredAt` for the password-changed notice — and the worker reloads the user) and `workspace.invitation-email.v1` (enqueued by `WorkspaceInvitationsService`; payload carries the invitation id and the token, since only its hash is stored). Queued so the request never waits on the mail provider. |
 
 Only queues with a real producer are registered: `QueueJobHandlerRegistry`
 fails the boot for a queue with no processor, so an aspirational lane cannot sit
@@ -341,7 +341,7 @@ version — throw `PermanentJobFailureError`. The job goes straight to `failed`.
 ## Idempotency
 
 BullMQ is **at-least-once**. Any job doing something external, financial,
-user-visible or irreversible must implement its own workspace-level idempotence.
+user-visible or irreversible must implement its own domain-level idempotence.
 
 A deterministic job ID prevents duplicate **scheduling**. It does not prove the
 **operation** has not already run — the job may have completed and been evicted
