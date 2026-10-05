@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import type { Request } from 'express';
 import { ClsModule } from 'nestjs-cls';
@@ -36,6 +36,7 @@ import { AppVersionsModule } from './modules/app-versions/app-versions.module';
 import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
+import { UserAwareThrottlerGuard } from './modules/auth/guards/user-aware-throttler.guard';
 import { AuthorizationModule } from './modules/authorization/authorization.module';
 import { WorkspacesModule } from './modules/workspaces/workspaces.module';
 import { DeviceTokensModule } from './modules/device-tokens/device-tokens.module';
@@ -77,8 +78,12 @@ import { UsersModule } from './modules/users/users.module';
     //     browser/os/device via `ua-parser-js`), `Accept-Language`, `method`,
     //     `path`. Pure local parsing; works in dev and behind any proxy.
     //   - Tier 2 (behind Cloudflare, and ONLY when TRUST_CLOUDFLARE_HEADERS is
-    //     enabled): `CF-Connecting-IP` overrides `request.ip`; `CF-IPCountry`
-    //     gives a 2-letter ISO country; `CF-Ray` is the cross-system trace id.
+    //     enabled): `CF-IPCountry` gives a 2-letter ISO country; `CF-Ray` is
+    //     the cross-system trace id. The client IP is never read from
+    //     `CF-Connecting-IP` here: the edge turns that header into
+    //     X-Forwarded-For, and `request.ip` resolves it through the trusted-hop
+    //     list (TRUST_PROXY), so the audit trail, refresh-token provenance and
+    //     rate limits share one client address that only a listed hop can set.
     // Every field is optional and AuditService skips empties, so a sparse
     // envelope (local dev, non-browser UAs) is never noisy.
     ClsModule.forRootAsync({
@@ -146,21 +151,13 @@ import { UsersModule } from './modules/users/users.module';
                 cls.set('acceptLanguage', acceptLanguage);
               }
 
+              cls.set('ip', request.ip);
+
               // Tier 2: Cloudflare-injected headers, read ONLY when the operator
               // has asserted that the origin is unreachable except through
-              // Cloudflare. With the flag off, `ip` is whatever Express resolved
-              // from `trust proxy`, and `country` / `cfRay` are simply absent —
-              // a missing field is honest, a forged one is not.
+              // Cloudflare. With the flag off, `country` / `cfRay` are simply
+              // absent — a missing field is honest, a forged one is not.
               if (trustCloudflareHeaders) {
-                const cfConnectingIp = request.headers['cf-connecting-ip'];
-                cls.set(
-                  'ip',
-                  typeof cfConnectingIp === 'string' &&
-                    cfConnectingIp.length > 0
-                    ? cfConnectingIp
-                    : request.ip,
-                );
-
                 const cfCountry = request.headers['cf-ipcountry'];
                 if (typeof cfCountry === 'string' && cfCountry.length > 0) {
                   cls.set('country', cfCountry);
@@ -170,8 +167,6 @@ import { UsersModule } from './modules/users/users.module';
                 if (typeof cfRay === 'string' && cfRay.length > 0) {
                   cls.set('cfRay', cfRay);
                 }
-              } else {
-                cls.set('ip', request.ip);
               }
 
               cls.set('method', request.method);
@@ -194,7 +189,7 @@ import { UsersModule } from './modules/users/users.module';
     // for trace correlation. Auth headers are redacted from logs.
     // (See providers below: APP_PIPE = ValidationPipe, APP_INTERCEPTOR =
     // ClassSerializerInterceptor, APP_FILTER = GlobalExceptionFilter,
-    // APP_GUARD = ThrottlerGuard.)
+    // APP_GUARD = UserAwareThrottlerGuard.)
     LoggerModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
@@ -212,7 +207,7 @@ import { UsersModule } from './modules/users/users.module';
       }),
     }),
     // Redis-backed throttler storage — each pod sees the same counter, so
-    // a user hitting N pods in parallel still respects the per-IP limit.
+    // a caller hitting N pods in parallel still respects its limit.
     ThrottlerModule.forRootAsync({
       inject: [ConfigService, RedisService],
       useFactory: (
@@ -275,7 +270,9 @@ import { UsersModule } from './modules/users/users.module';
     // Guard order is the execution order. Throttle before authenticating (an
     // unauthenticated flood must not reach the database), authenticate before
     // authorizing (PermissionsGuard needs `request.user`).
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Keys a verified access token on its user and everything else on the
+    // client IP — see UserAwareThrottlerGuard.
+    { provide: APP_GUARD, useClass: UserAwareThrottlerGuard },
     // Authentication is now GLOBAL. Every handler requires a valid JWT unless
     // it carries `@Public()`. Controllers no longer apply JwtAuthGuard
     // themselves.

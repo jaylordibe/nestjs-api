@@ -56,9 +56,7 @@ export const SWAGGER_YAML_PATH = `${SWAGGER_UI_PATH}/yaml`;
 export function configureHttpApp(app: NestExpressApplication): void {
   const configService = app.get(ConfigService);
   const corsOrigin = configService.get<string>('cors.origin') ?? '*';
-  const trustProxy = configService.getOrThrow<boolean | number | string>(
-    'trustProxy',
-  );
+  const trustProxy = configService.getOrThrow<false | string>('trustProxy');
 
   app.set('trust proxy', trustProxy);
   app.use(helmet());

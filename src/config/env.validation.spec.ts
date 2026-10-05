@@ -361,4 +361,61 @@ describe('env.validation cross-field rules', () => {
       expect(value.QUEUE_WORKER_ENABLED).toBe(false);
     });
   });
+
+  describe('TRUST_PROXY', () => {
+    // The value decides who may choose `request.ip` — the key for rate limits,
+    // refresh-token provenance and the audit trail. Only named hops qualify.
+    const errorTypesFor = (overrides: Record<string, unknown>) =>
+      (validate(overrides).error?.details ?? [])
+        .filter((detail) => detail.path[0] === 'TRUST_PROXY')
+        .map((detail) => detail.type);
+
+    it('defaults to no proxy outside production', () => {
+      const { value } = validate({}) as { value: Record<string, unknown> };
+
+      expect(value.TRUST_PROXY).toBe('false');
+    });
+
+    it.each(['172.30.0.10', '172.30.0.10, 172.30.0.20', '2001:db8::/64'])(
+      'accepts the trusted-hop list %s in production',
+      (trustProxy) => {
+        expect(
+          errorTypesFor({ NODE_ENV: 'production', TRUST_PROXY: trustProxy }),
+        ).toEqual([]);
+      },
+    );
+
+    it.each([
+      [undefined, 'any.required'],
+      ['false', 'any.invalid'],
+    ])(
+      'refuses %s in production — the proxy would become every caller',
+      (trustProxy, errorType) => {
+        expect(
+          errorTypesFor({ NODE_ENV: 'production', TRUST_PROXY: trustProxy }),
+        ).toEqual([errorType]);
+      },
+    );
+
+    // Each trusts a peer nobody named, so it is refused in every environment —
+    // staging runs NODE_ENV=staging and must not fall back to a hop count.
+    it.each([
+      '2',
+      'true',
+      'uniquelocal',
+      'loopback,172.30.0.10',
+      'caddy',
+      '0.0.0.0/0',
+      '::ffff:0.0.0.0/96',
+    ])('refuses %s in every environment', (trustProxy) => {
+      for (const nodeEnvironment of VALIDATED_ENVIRONMENTS) {
+        expect(
+          errorTypesFor({
+            NODE_ENV: nodeEnvironment,
+            TRUST_PROXY: trustProxy,
+          }),
+        ).toEqual(['trustProxy.format']);
+      }
+    });
+  });
 });

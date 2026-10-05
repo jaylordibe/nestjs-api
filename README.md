@@ -67,7 +67,7 @@ TypeScript  →  ESLint  →  config validation  →  boot-time checks  →  e2e
 |---|---|---|
 | **Compiler** | Code that assumes data exists, or an override that silently stops overriding | `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride` — [`tsconfig.json`](tsconfig.json) |
 | **Lint** | Architectural shortcuts | `@casl/prisma` imported outside the authorization module; `src/common` importing `src/modules`; a raw `HttpException` instead of the `Errors.*` factory; a bare `user: true` include that skips soft-delete filtering — [`eslint.config.mjs`](eslint.config.mjs) |
-| **Config validation** | Unsafe configuration, before a request is served | In production: a wildcard `CORS_ORIGIN`, an unset `TRUST_PROXY`, a stub email or SMS provider (stubs log one-time codes). Everywhere: a blank, short or template `JWT_SECRET`, and `REDIS_TLS_ENABLED` disagreeing with the `redis://` / `rediss://` scheme — [`env.validation.ts`](src/config/env.validation.ts) |
+| **Config validation** | Unsafe configuration, before a request is served | In production: a wildcard `CORS_ORIGIN`, a `TRUST_PROXY` that names no proxy hop, a stub email or SMS provider (stubs log one-time codes). Everywhere: a blank, short or template `JWT_SECRET`, and `REDIS_TLS_ENABLED` disagreeing with the `redis://` / `rediss://` scheme — [`env.validation.ts`](src/config/env.validation.ts) |
 | **Boot checks** | An application whose wiring is inconsistent | A route handler with no authorization decision; a permission catalog that differs from the database; a role assigned outside its scope; a job with no handler, or a queue with no processor |
 | **e2e tests** | Behaviour that breaks under real conditions | Run against real PostgreSQL, Redis and S3-compatible storage — no mocks. Concurrent refresh-token replay revokes the whole family; concurrent demotion never leaves a workspace with zero owners; an invitation redeemed twice at once yields one membership; tenant isolation holds under a forged path parameter |
 | **CI** | Regressions and known-vulnerable artifacts | Lint, build, unit tests and four sharded e2e jobs; the RBAC catalog projected onto a fresh database and checked; the container image built and scanned with Trivy; a dependency audit gate and Trivy filesystem scan; a weekly authenticated OWASP ZAP API scan — [`.github/workflows/`](.github/workflows) |
@@ -421,7 +421,7 @@ worker with `QUEUE_WORKER_ENABLED=true`.
 
 - [ ] `JWT_SECRET` regenerated per environment (`openssl rand -hex 48`). Validation refuses a blank, short or template value at boot.
 - [ ] `CORS_ORIGIN` set to an explicit origin list (`*` is refused in `NODE_ENV=production`).
-- [ ] `TRUST_PROXY` set to `"1"` or a CIDR list behind a load balancer (`"false"` and `"true"` are refused in production).
+- [ ] `TRUST_PROXY` lists the addresses of the proxy hops in front of the API, and only those — see "Client topologies" in [`docs/deployment/README.md`](docs/deployment/README.md).
 - [ ] `TRUST_CLOUDFLARE_HEADERS` left at `false` **unless** the origin is provably unreachable except through Cloudflare (see the `cloudflare_only` snippet in `docs/prod/Caddyfile`). These headers are forgeable by anyone who can reach the origin directly, and they are written into `audit_logs`, the table an incident responder trusts.
 - [ ] `EMAIL_PROVIDER=resend` with `RESEND_API_KEY` and `EMAIL_FROM`, on a verified domain with DKIM/SPF/DMARC in DNS.
 - [ ] `OTEL_EXPORTER_OTLP_ENDPOINT` pointed at an OpenTelemetry Collector (traces and metrics), with an error tracker wired behind it or into pino.

@@ -13,7 +13,7 @@ import {
   SWAGGER_YAML_PATH,
 } from '../src/configure-http-app';
 import { truncateAll } from './setup/db';
-import { seedRbacCatalog } from './setup/rbac';
+import { createRegularUser, seedRbacCatalog } from './setup/rbac';
 import { RedisService } from '../src/common/redis/redis.service';
 import { createTestApp } from './setup/test-app';
 
@@ -195,7 +195,9 @@ const PRODUCTION_ENV = {
   NODE_ENV: 'production',
   SWAGGER_ENABLED: 'true',
   CORS_ORIGIN: 'https://www.example.test',
-  TRUST_PROXY: '2',
+  // supertest connects over loopback, so the test client is the listed hop —
+  // the role Caddy plays in docs/prod/docker-compose.yml.
+  TRUST_PROXY: '127.0.0.1',
   EMAIL_PROVIDER: 'resend',
   EMAIL_FROM: 'no-reply@example.test',
   RESEND_API_KEY: 're_exposure_spec_inert_key',
@@ -308,6 +310,27 @@ describe('External exposure (e2e)', () => {
       expect((await resendVerification('203.0.113.8')).status).toBe(200);
     });
 
+    // The real AppModule's global guard, not a rig: two signed-in users behind
+    // one address must not share a budget. The route allows 5 per minute; an
+    // empty body fails validation, which runs AFTER the throttler, so every
+    // request counts and nothing is written.
+    it('gives each signed-in user their own budget behind one address', async () => {
+      const verifyPhone = (token: string) =>
+        request(app.getHttpServer())
+          .patch('/api/users/me/verify-phone')
+          .set('X-Forwarded-For', '203.0.113.20')
+          .set('Authorization', `Bearer ${token}`)
+          .send({});
+      const first = await createRegularUser(app, 'first@example.test');
+      const second = await createRegularUser(app, 'second@example.test');
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        expect((await verifyPhone(first.token)).status).toBe(400);
+      }
+      expect((await verifyPhone(first.token)).status).toBe(429);
+      expect((await verifyPhone(second.token)).status).toBe(400);
+    });
+
     it('applies the production HTTP edge: Helmet headers and a closed CORS origin', async () => {
       const response = await rawGet(app, '/api/public/ping', {
         Origin: 'https://attacker.example',
@@ -378,10 +401,26 @@ describe('External exposure (e2e)', () => {
           `@docs path /${SWAGGER_UI_PATH} /${SWAGGER_UI_PATH}/*\n`,
         );
         // The client address per-IP limits and the audit trail key on — see
-        // 'keys per-IP rate limits on the forwarded client address'.
+        // 'keys per-IP rate limits on the forwarded client address'. Every
+        // site proxies through the one snippet that sets it: a bare
+        // `reverse_proxy` anywhere else would hand its upstream Cloudflare's
+        // address instead of the caller's.
         expect(contents).toContain(
           'header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}',
         );
+        expect(contents.match(/^[\t ]*reverse_proxy /gm)).toEqual([
+          '\treverse_proxy ',
+        ]);
+        expect(contents).toContain(
+          '\treverse_proxy {args[0]} {\n' +
+            '\t\theader_up X-Forwarded-For {http.request.header.CF-Connecting-IP}\n',
+        );
+        expect(
+          contents.match(/^[\t ]*import proxy_with_client_ip \S+$/gm),
+        ).toEqual([
+          '\timport proxy_with_client_ip api:3000',
+          '\timport proxy_with_client_ip web:80',
+        ]);
         if (caddyfile.includes('staging')) {
           expect(contents).toMatch(/^\s*basic_auth @docs \{/m);
         }

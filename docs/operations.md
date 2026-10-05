@@ -58,7 +58,7 @@ path, and the dump script is a stopgap for a single-box deployment.
 |---|---|---|
 | Boot-time validation | ✅ Implemented | `src/config/env.validation.ts` — Joi refuses to start on a missing or malformed value |
 | Template-default rejection | ✅ Implemented | The template's placeholder `JWT_SECRET` is explicitly `.invalid()`, so a checkout cannot silently deploy with it |
-| Production-only strictness | ✅ Implemented | `TRUST_PROXY` refuses `"true"`/`"false"`, `CORS_ORIGIN` refuses `*`, and `EMAIL_PROVIDER`/`SMS_PROVIDER` refuse `stub` when `NODE_ENV=production` |
+| Production-only strictness | ✅ Implemented | `TRUST_PROXY` must list the proxy hops (`"false"` refused), `CORS_ORIGIN` refuses `*`, and `EMAIL_PROVIDER`/`SMS_PROVIDER` refuse `stub` when `NODE_ENV=production` |
 | Secrets **at rest** | ❌ Operator-owned | Deploys read a plaintext `.env` on the server. A secret manager is on the production checklist and is not wired up. |
 | **Rotation** | ❌ Operator-owned | No rotation mechanism, schedule, or dual-key window exists. Rotating `JWT_SECRET` invalidates every outstanding access token immediately — which is correct behaviour, but it is a hard cutover, not a rolling one. |
 

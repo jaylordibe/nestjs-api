@@ -4,6 +4,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { AuthenticatedUser } from '../../../common/decorators/current-user.decorator';
 import { Errors } from '../../../common/errors/errors';
+import { isAccessTokenPayload } from '../../../common/util/access-token.util';
 import { RedisService } from '../../../common/redis/redis.service';
 import { UsersService } from '../../users/users.service';
 
@@ -14,9 +15,7 @@ export interface JwtPayload {
   iss?: string;
   aud?: string;
   jti?: string;
-  // Access tokens don't carry a purpose claim. Tokens signed for other
-  // flows (email verification, future one-shot actions) do, and this
-  // strategy rejects them so they can't be used as auth tokens.
+  // Set only on non-access tokens — see isAccessTokenPayload.
   purpose?: string;
 }
 
@@ -43,8 +42,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
   async validate(payload: JwtPayload): Promise<AuthenticatedUser> {
     // Reject tokens that were signed for a non-auth purpose (e.g.
-    // email-verification JWTs). Access tokens never set `purpose`.
-    if (payload.purpose !== undefined) {
+    // email-verification JWTs).
+    if (!isAccessTokenPayload(payload)) {
       throw Errors.tokenInvalid();
     }
 

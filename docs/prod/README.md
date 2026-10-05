@@ -429,8 +429,10 @@ Not needed at low volume. When job throughput justifies it this is a deployment
 change only, no code change — `src/worker.ts` already bootstraps the same
 `AppModule` without an HTTP server:
 
-1. Add a `worker` service to `docker-compose.yml`: same `build.context` and
-   `image` as `api`, plus `command: ["node", "dist/worker.js"]`.
+1. Add a `worker` service to `docker-compose.yml`: same `build.context`,
+   `image`, `env_file` and `environment:` block as `api` (including
+   `TRUST_PROXY` — production refuses to boot without it), plus
+   `command: ["node", "dist/worker.js"]`.
 2. Healthcheck it against the queue heartbeat key rather than an HTTP endpoint
    — a process with no HTTP server has no other way to answer one.
 3. Set `QUEUE_WORKER_ENABLED=false` on the `api` service. It keeps enqueuing
@@ -457,7 +459,7 @@ change only, no code change — `src/worker.ts` already bootstraps the same
 | `/api/health/workers` 503, readiness green | Nothing is consuming the queues — worker crashed, or `QUEUE_WORKER_ENABLED` is false with no worker container running | `docker compose logs api \| grep QueueProcessor`, check `QUEUE_WORKER_ENABLED` in `.env` |
 | Jobs fail immediately without retrying | Permanent failure by design — unknown job name, or a payload version this release doesn't accept (usually a half-finished rolling deploy) | `docker compose logs api \| grep 'event=failed'` — the `reason=` field names it |
 | A recurring job fires that no code declares | Orphaned BullMQ scheduler left in Redis | Boot reconciliation removes it; look for `Removing orphaned recurring schedule` in the api logs |
-| Per-IP rate limiting acts globally / all clients same IP | `TRUST_PROXY` wrong, or the Caddyfile's `header_up X-Forwarded-For` line missing | `TRUST_PROXY` should be `2` (Cloudflare + Caddy); Caddy must forward `CF-Connecting-IP` as `X-Forwarded-For` |
+| Per-IP rate limiting acts globally / sessions all record one IP | Caddy no longer holds the address the API trusts, or a site proxies without `import proxy_with_client_ip` | `docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ${SERVICE_NAME}-caddy` must equal the api's `TRUST_PROXY` (`docker compose exec api printenv TRUST_PROXY`); every Caddyfile site must proxy through the snippet. Behind a server-rendered web client, see "Client topologies" in `docs/deployment/README.md` |
 | GCS uploads fail with 403 | Runtime identity lacks `roles/storage.objectAdmin` on the bucket, or ADC resolved a different project | Check the binding on the bucket and that `STORAGE_GCS_PROJECT_ID` names the project that owns it |
 | Disk filling up | Docker logs / dangling images | `docker image prune -f`, `docker system df` |
 

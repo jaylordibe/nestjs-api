@@ -60,6 +60,25 @@
 	}
 }
 
+# Reverse proxy to an internal service, carrying the client's address. Every
+# site proxies through this, never through a bare `reverse_proxy`.
+#
+# Without the header_up line Caddy REPLACES X-Forwarded-For with its own
+# peer — always a Cloudflare edge IP here — so per-IP rate limiting and the
+# audit trail would key on Cloudflare instead of the caller, and a
+# server-rendered web client would forward that edge IP onward. Taking it from
+# CF-Connecting-IP is safe because every site imports cloudflare_only and
+# origin_tls first: those guarantee the peer is a Cloudflare edge (any
+# Cloudflare account — the origin-pull CA is shared), and Cloudflare sets that
+# header itself, overwriting any value the caller sent. The API believes the
+# result only because it arrives from Caddy's fixed address (TRUST_PROXY in
+# docker-compose.yml).
+(proxy_with_client_ip) {
+	reverse_proxy {args[0]} {
+		header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}
+	}
+}
+
 # Common headers for SPA + API responses.
 (common_headers) {
 	header {
@@ -98,17 +117,7 @@
 	@docs path /api/docs /api/docs/*
 	header @docs Cache-Control "no-store"
 
-	# The client address. Without this, Caddy REPLACES X-Forwarded-For with its
-	# own peer — always a Cloudflare edge IP here — so per-IP rate limiting
-	# and the audit trail key on Cloudflare instead of the caller. Taking it
-	# from CF-Connecting-IP is safe on this site only: cloudflare_only and the
-	# origin_tls client-certificate check above guarantee the peer is a
-	# Cloudflare edge (any Cloudflare account — the origin-pull CA is shared),
-	# and Cloudflare sets that header itself, overwriting any value the
-	# caller sent.
-	reverse_proxy api:3000 {
-		header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}
-	}
+	import proxy_with_client_ip api:3000
 }
 
 # ─── Customer-facing web SPA ───────────────────────────────────────────────
@@ -130,5 +139,5 @@ www.{$WEB_HOSTNAME} {
 	import origin_tls
 	import common_headers
 	encode zstd gzip
-	reverse_proxy web:80
+	import proxy_with_client_ip web:80
 }

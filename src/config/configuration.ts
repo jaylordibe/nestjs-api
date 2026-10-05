@@ -80,7 +80,9 @@ export interface AppConfig {
     grantsCacheTtlSeconds: number;
   };
   cloudflare: {
-    // Whether `CF-Connecting-IP`, `CF-IPCountry`, and `CF-Ray` may be believed.
+    // Whether `CF-IPCountry` and `CF-Ray` may be believed. (The client IP is
+    // never taken from `CF-Connecting-IP`; it is `request.ip`, which only a
+    // TRUST_PROXY hop can set.)
     //
     // They are ordinary request headers: anyone who can reach the origin
     // directly can set them to anything, and they are recorded into
@@ -177,7 +179,9 @@ export interface AppConfig {
     ttlMs: number;
     limit: number;
   };
-  trustProxy: boolean | number | string;
+  // `false`, or the comma-separated trusted-hop list Express compiles itself
+  // (see TRUST_PROXY in env.validation.ts).
+  trustProxy: false | string;
   // Public web URL the API redirects to after a GET /auth/verify-email
   // click. The web app reads `?status=success|error&reason=…` and
   // renders the matching state. Optional in dev (defaults to a stub
@@ -189,12 +193,8 @@ export interface AppConfig {
   passwordResetUrl: string;
 }
 
-const parseTrustProxy = (raw: string): boolean | number | string => {
-  if (raw === 'true') return true;
-  if (raw === 'false') return false;
-  if (/^\d+$/.test(raw)) return parseInt(raw, 10);
-  return raw;
-};
+const parseTrustProxy = (raw: string): false | string =>
+  raw.trim() === 'false' ? false : raw.trim();
 
 export default (): AppConfig => ({
   nodeEnv: (process.env.NODE_ENV as AppConfig['nodeEnv']) ?? 'development',

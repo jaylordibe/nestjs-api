@@ -375,7 +375,7 @@ minutes.
 | `JWT_SECRET` | secret — 48+ random bytes, unique per environment |
 | `API_BASE_URL`, `WEB_BASE_URL` | public hostnames |
 | `CORS_ORIGIN` | explicit list; `*` is refused in production |
-| `TRUST_PROXY` | `1` behind one proxy hop; `false`/`true` refused in production |
+| `TRUST_PROXY` | the addresses of the trusted proxy hops — see [Client topologies](#client-topologies); `false` refused in production |
 | `EMAIL_PROVIDER`, `SMS_PROVIDER` | **required in production** — they default to `stub`, and `stub` is refused there. Their own settings are in the adapter table below |
 
 `EMAIL_PROVIDER` and `SMS_PROVIDER` are listed here rather than only under the
@@ -423,6 +423,88 @@ codes and the verify-email link, so shipping them would put credentials on
 stdout through a default nobody chose.
 
 Selecting one provider never requires another's configuration to exist.
+
+### Client topologies
+
+The API serves any client — a browser single-page app (Angular, React, Vue,
+Svelte), a mobile app, or a server-rendered web app (Next.js, Nuxt, Angular
+SSR, SvelteKit) — through standard HTTP alone. Nothing here is specific to a
+framework; what matters is which hop talks to the API.
+
+**`TRUST_PROXY` is the one setting this turns on.** It is `false` when nothing
+sits in front of the API (local development), and otherwise a comma-separated
+list of the IP addresses or CIDR ranges of the hops whose `X-Forwarded-For` the
+API believes. Express walks that header right to left from the connecting peer
+and stops at the first address not on the list, so a client can prepend
+anything without effect. Hop counts, `true`, keywords such as `uniquelocal`, and
+hostnames are refused at boot: each one trusts a peer nobody named, and a
+trusted peer can choose its own client address.
+
+That resolved address (`request.ip`) is the only client address the API uses:
+
+- **rate limits** — an anonymous caller, and any caller on a `@Public()` route,
+  is limited per address (IPv6 per /64); a caller with a valid access token is
+  limited per user, so people sharing one address do not share one quota —
+  and one user's quota is shared by all of their devices and clients;
+- **sessions** — every refresh token records it, with the `User-Agent`;
+- **the audit trail** — every audit row's request envelope records it.
+
+Every hop in front of the API must therefore hand on the real client address —
+a single `X-Forwarded-For` value, or its own appended to what it received.
+
+#### Browser-direct — the default
+
+```
+browser / mobile app → (CDN) → edge proxy → API
+```
+
+Every call, from every client, goes to the public API URL (`API_BASE_URL`).
+Browser origins are listed in `CORS_ORIGIN`; mobile apps are not subject to
+CORS. `TRUST_PROXY` lists the edge proxy only. On the single-VM deployment that
+is Caddy's fixed address, which `docker-compose.yml` sets for you.
+
+#### Server-rendered — opt-in
+
+```
+browser → (CDN) → edge proxy → web server → API      (server-side calls)
+browser → (CDN) → edge proxy → API                   (in-browser calls)
+```
+
+The web server renders pages and calls the API itself. Those server-side calls
+go to the API's internal address (`http://api:3000/api` on the single-VM
+deployment) and carry two headers from the browser's request:
+
+- `X-Forwarded-For` — the browser's address, as the edge proxy handed it to the
+  web server;
+- `User-Agent` — the browser's user agent.
+
+Calls the page makes from the browser after it loads go to the public API URL,
+exactly as in browser-direct, and need `CORS_ORIGIN` the same way.
+
+Then add the web server's fixed address to `TRUST_PROXY`. **This makes the web
+server as trusted as the edge proxy**: it can name any client address, so it
+must take that address only from the edge proxy's header and never from
+anything the browser sent. Without the headers or the trust, every visitor of
+the server-rendered app shares the web server's single rate-limit bucket, and
+every session records the web server's address instead of the visitor's.
+
+On the single-VM deployment: give the `web` service a fixed `ipv4_address` from
+the stack subnet (for example `172.30.0.11`, outside the dynamic `ip_range`),
+and replace the api service's `TRUST_PROXY: *caddy-address` with both
+addresses, `172.30.0.10,172.30.0.11`.
+
+#### Any other platform
+
+List the load balancer or ingress addresses, or the private range they connect
+from. Never list a range that other workloads able to reach the API also sit
+in: each of them could then choose its own client address.
+
+A CDN in front of that load balancer is a hop too. Either the load balancer
+replaces `X-Forwarded-For` with the CDN's own client-address header — what the
+single-VM Caddyfile's `proxy_with_client_ip` snippet does with Cloudflare's
+`CF-Connecting-IP` — or `TRUST_PROXY` also lists the CDN's published ranges.
+Otherwise the API stops at the CDN's edge address, and everyone routed through
+one edge shares one rate-limit bucket.
 
 ---
 

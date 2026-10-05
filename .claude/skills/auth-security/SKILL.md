@@ -91,6 +91,15 @@ password oracle) or hashes one for an admin (`POST /users`,
 `PATCH /users/:id/password`, 20/min). E2e runs skip throttling, so a new
 limit is pinned in a controller spec (`users-controller-throttle.spec.ts`).
 
+Whose budget a request spends is `UserAwareThrottlerGuard`'s decision: a valid
+access token spends its user's, everything else the client IP's. Every
+`@Public()` route spends the IP's **even when a token is sent** — otherwise one
+address holding N accounts would multiply each public limit above by N. The
+authenticated limits above (`currentPassword` routes, phone OTP) are per user,
+so N accounts on one address do get N budgets there. The IP is
+`request.ip`, so it is only as honest as `TRUST_PROXY` (see "Client
+topologies" in `docs/deployment/README.md`).
+
 ## Required tests when relevant
 
 Use the `e2e-testing` skill for the harness.

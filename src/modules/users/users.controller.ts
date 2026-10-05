@@ -138,7 +138,8 @@ export class UsersController {
   @Post('me/gdpr-erase')
   @RequirePermission('delete', 'User')
   // Checks currentPassword: with a stolen access token this is a password
-  // oracle, so it gets the same per-IP ceiling as reset-password.
+  // oracle, so it gets the same 5/60s ceiling as reset-password — per user,
+  // which is what binds a stolen token (UserAwareThrottlerGuard).
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.NO_CONTENT)
   async gdprErase(
@@ -181,7 +182,8 @@ export class UsersController {
   @Patch('me/email')
   @RequirePermission('update', 'User')
   // Checks currentPassword: with a stolen access token this is a password
-  // oracle, so it gets the same per-IP ceiling as reset-password.
+  // oracle, so it gets the same 5/60s ceiling as reset-password — per user,
+  // which is what binds a stolen token (UserAwareThrottlerGuard).
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @ApiOkResponse({ type: LoginResponseDto })
   async updateAuthUserEmail(
@@ -202,7 +204,8 @@ export class UsersController {
   @Patch('me/password')
   @RequirePermission('update', 'User')
   // Checks currentPassword: with a stolen access token this is a password
-  // oracle, so it gets the same per-IP ceiling as reset-password.
+  // oracle, so it gets the same 5/60s ceiling as reset-password — per user,
+  // which is what binds a stolen token (UserAwareThrottlerGuard).
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @ApiOkResponse({ type: LoginResponseDto })
   async updateAuthUserPassword(
@@ -234,9 +237,9 @@ export class UsersController {
   }
 
   // Step 1 of the verified-phone flow — re-auth with the current password,
-  // then send a one-time code via SMS to the new number. Throttled per-IP
-  // (matches the password-reset request) to limit abuse of the SMS
-  // provider's send budget.
+  // then send a one-time code via SMS to the new number. Throttled at 5/60s
+  // per user (UserAwareThrottlerGuard keys a signed-in caller on its user) to
+  // limit abuse of the SMS provider's send budget.
   @Post('me/request-phone-verification')
   @RequirePermission('update', 'User')
   @HttpCode(HttpStatus.OK)
@@ -256,7 +259,7 @@ export class UsersController {
 
   // Step 2 of the verified-phone flow — verify the OTP and apply the new
   // number. Stamps `phoneNumberVerifiedAt = now` on success. Throttled at
-  // 5/60s/IP — a 6-digit OTP with a 15-min expiry needs the rate limit to
+  // 5/60s per user — a 6-digit OTP with a 15-min expiry needs the rate limit to
   // bound brute-force on the verify endpoint.
   @Patch('me/verify-phone')
   @RequirePermission('update', 'User')

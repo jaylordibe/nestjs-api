@@ -41,6 +41,14 @@
 #   docker compose up -d --build api web
 #   docker compose up -d caddy
 
+# Caddy's fixed address on the stack network (`networks:` at the bottom). The
+# API trusts X-Forwarded-For from exactly this address — Express can trust an
+# address but never a service name — so it is stated once, here, and the api
+# service's TRUST_PROXY is this same anchor. A server-rendered web client that
+# calls the API directly is the one other hop you may add: see "Client
+# topologies" in docs/deployment/README.md.
+x-caddy-address: &caddy-address 172.30.0.10
+
 # Cap log size on every long-running service so docker's default unbounded
 # json-file driver doesn't fill /var/lib/docker over time. ~30MB per service
 # (3 files × 10MB) is plenty for incident triage; older lines roll off.
@@ -108,6 +116,9 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_URL: redis://default:${REDIS_PASSWORD}@redis:6379
+      # The only hop whose X-Forwarded-For is believed. Set here rather than in
+      # .env so it cannot drift from Caddy's address.
+      TRUST_PROXY: *caddy-address
     expose:
       - '3000'
     # Compose `--wait` blocks until this passes, which is the deploy
@@ -196,9 +207,22 @@ services:
       - ./certs:/etc/caddy/certs:ro
       - caddy-data:/data
       - caddy-config:/config
+    networks:
+      default:
+        ipv4_address: *caddy-address
     environment:
       API_HOSTNAME: ${API_HOSTNAME}
       WEB_HOSTNAME: ${WEB_HOSTNAME}
+
+# A declared subnet so Caddy can hold a fixed address. Docker hands out dynamic
+# addresses only from `ip_range` (the upper half), so a container started
+# before Caddy can never take Caddy's address.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+          ip_range: 172.30.0.128/25
 
 volumes:
   postgres-data:

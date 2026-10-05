@@ -1,4 +1,5 @@
 import * as Joi from 'joi';
+import { isTrustedProxyList } from '../common/util/trusted-proxy.util';
 
 export const envValidationSchema = Joi.object({
   NODE_ENV: Joi.string()
@@ -202,8 +203,8 @@ export const envValidationSchema = Joi.object({
   // Defaults to `false`, and that default is the point: these headers are
   // forgeable by anyone who can reach the origin directly, and they are
   // persisted into `audit_logs`. A fork that deploys without restricting the
-  // origin to Cloudflare's ranges records the IP Express actually saw rather
-  // than one the caller chose. Turn it on only alongside the `cloudflare_only`
+  // origin to Cloudflare's ranges records no country or ray id rather than
+  // ones the caller chose. Turn it on only alongside the `cloudflare_only`
   // snippet in docs/prod/Caddyfile.
   TRUST_CLOUDFLARE_HEADERS: Joi.string()
     .valid('true', 'false')
@@ -427,23 +428,26 @@ export const envValidationSchema = Joi.object({
   THROTTLE_TTL_MS: Joi.number().integer().min(1000).default(60_000),
   THROTTLE_LIMIT: Joi.number().integer().min(1).default(100),
 
-  // In production, require an explicit trust-proxy setting. "false" behind a
-  // real load balancer collapses per-IP throttling into one global bucket;
-  // "true" lets clients spoof X-Forwarded-For. Force the operator to decide.
+  // The hops whose X-Forwarded-For Express believes: "false" (no proxy — the
+  // local default) or a list isTrustedProxyList accepts. Production must name
+  // its hops: "false" behind a proxy puts every caller in the proxy's one
+  // rate-limit bucket. What to list: docs/deployment/README.md.
   TRUST_PROXY: Joi.string()
+    .trim()
     .default('false')
+    .custom((value: string, helpers) =>
+      value === 'false' || isTrustedProxyList(value)
+        ? value
+        : helpers.error('trustProxy.format'),
+    )
     .when('NODE_ENV', {
       is: 'production',
-      then: Joi.string().invalid('false', 'true').required().messages({
-        'any.invalid':
-          'TRUST_PROXY must be set explicitly in production (e.g. "1" for a single proxy hop, or a CIDR list). "false" and "true" are both unsafe behind a load balancer.',
-      }),
+      then: Joi.string().invalid('false').required(),
     })
-    .description(
-      'Express trust proxy setting. "false" = direct exposure (default), ' +
-        '"true" = trust all (unsafe — allows X-Forwarded-For spoofing), ' +
-        'a number = trust N hops, or a comma-separated list of IPs/CIDRs/' +
-        'keywords (e.g. "loopback,10.0.0.0/8"). Set to "1" when running ' +
-        'behind a single nginx/ALB hop.',
-    ),
+    .messages({
+      'trustProxy.format':
+        'TRUST_PROXY must be "false" or a comma-separated list of IP addresses and CIDR ranges of the trusted proxy hops (e.g. "172.30.0.10"). Hop counts, "true", keywords and hostnames are not accepted.',
+      'any.invalid':
+        'TRUST_PROXY must list the trusted proxy hops in production (e.g. "172.30.0.10"); "false" puts every caller behind the proxy in one rate-limit bucket.',
+    }),
 });

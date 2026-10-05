@@ -225,7 +225,7 @@ export const Errors = {
   // needs to exist. Without it, every caller wanting a 429 reaches for
   // `new HttpException(...)` themselves and silently leaves the envelope behind.
   //
-  // The global `ThrottlerGuard` does NOT come through here: it throws its own
+  // The global throttler guard does NOT come through here: it throws its own
   // `ThrottlerException`, which the filter maps to this same `RATE_LIMITED` code
   // by status. Sharing the code is deliberate — the remedy ("slow down and
   // retry") is identical, so splitting it would give clients a distinction they

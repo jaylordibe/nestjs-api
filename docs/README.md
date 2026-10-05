@@ -134,8 +134,11 @@ worked example (substitute your own `<name>`):
    hostname.
 2. **Caddyfile.** Append a routing block mirroring the existing `web`
    one — `{$<NAME>_HOSTNAME}` site directive, `import cloudflare_only` +
-   `import origin_tls` + `import common_headers`, `reverse_proxy <name>:80`
-   (e.g. `reverse_proxy admin:80`).
+   `import origin_tls` + `import common_headers`,
+   `import proxy_with_client_ip <name>:80` (e.g.
+   `import proxy_with_client_ip admin:80`) — never a bare `reverse_proxy`,
+   which would hand the service Cloudflare's address instead of the
+   client's.
 3. **docker-compose.yml.** Append a service block under `services:`
    mirroring `web` (build context `./${SERVICE_NAME}-<name>`, a
    `VITE_API_BASE_URL` arg, `expose: ['80']`, `restart`, `logging`). Add
