@@ -338,7 +338,7 @@ describe('Account deletion cannot orphan a workspace (e2e)', () => {
       const admin = await createPlatformAdmin(app);
       const prisma = app.get(PrismaService);
       const memberRole = await prisma.role.findUniqueOrThrow({
-        where: { name: SeededRoleName.WORKSPACE_MEMBER },
+        where: { name: SeededRoleName.WORKSPACE_STAFF },
       });
 
       await Promise.all([

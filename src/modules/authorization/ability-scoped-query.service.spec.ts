@@ -41,7 +41,7 @@ const WORKSPACE_MEMBER_GRANTS: AuthorizationGrants = {
       membershipId: '00000000-0000-4000-8000-0000000000aa',
       workspaceId: WORKSPACE_ID,
       roleId: '00000000-0000-4000-8000-0000000000bb',
-      roleName: SeededRoleName.WORKSPACE_MEMBER,
+      roleName: SeededRoleName.WORKSPACE_STAFF,
       status: WorkspaceMembershipStatus.ACTIVE,
       permissions: [
         {

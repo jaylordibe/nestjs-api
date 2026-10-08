@@ -375,7 +375,7 @@ describe('Destination send limit (e2e)', () => {
     it('caps one inbox invited from many workspaces', async () => {
       const owner = await registerVerifiedUser(app, 'owner@example.com');
       await deliverQueuedEmails(app);
-      const roleId = await roleIdFor(app, SeededRoleName.WORKSPACE_MEMBER);
+      const roleId = await roleIdFor(app, SeededRoleName.WORKSPACE_STAFF);
       const { limit } = SEND_LIMITS[SendPurpose.WORKSPACE_INVITATION];
       const emails = captureEmails(app);
       try {
@@ -416,7 +416,7 @@ describe('Destination send limit (e2e)', () => {
     it('leaves the current link alone when a resend would be refused', async () => {
       const owner = await registerVerifiedUser(app, 'resender@example.com');
       await deliverQueuedEmails(app);
-      const roleId = await roleIdFor(app, SeededRoleName.WORKSPACE_MEMBER);
+      const roleId = await roleIdFor(app, SeededRoleName.WORKSPACE_STAFF);
       const { limit } = SEND_LIMITS[SendPurpose.WORKSPACE_INVITATION];
       const workspaceIds: string[] = [];
       for (let workspace = 0; workspace < limit; workspace++) {

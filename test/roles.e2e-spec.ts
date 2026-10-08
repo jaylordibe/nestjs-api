@@ -161,7 +161,7 @@ describe('Roles (e2e)', () => {
       const body = response.body as PageBody<RoleBody>;
       const names = body.data.map((role) => role.name);
       expect(names).toContain(SeededRoleName.WORKSPACE_ADMIN);
-      expect(names).toContain(SeededRoleName.WORKSPACE_MEMBER);
+      expect(names).toContain(SeededRoleName.WORKSPACE_STAFF);
       // The one that matters: an admin must never be offered OWNER, because it
       // must never be able to mint one.
       expect(names).not.toContain(SeededRoleName.WORKSPACE_OWNER);

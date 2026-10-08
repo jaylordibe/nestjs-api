@@ -230,7 +230,7 @@ describe('Ownership promotion races (e2e)', () => {
         app,
         workspace.id,
         member.id,
-        SeededRoleName.WORKSPACE_MEMBER,
+        SeededRoleName.WORKSPACE_STAFF,
       );
       const memberMembershipId = await membershipIdOf(workspace.id, member.id);
       const ownerRoleId = await roleIdFor(app, SeededRoleName.WORKSPACE_OWNER);

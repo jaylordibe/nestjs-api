@@ -156,7 +156,7 @@ describe('Authorization data integrity (e2e)', () => {
     await prisma.userRole.create({
       data: {
         userId: user.id,
-        roleId: await roleIdOf(SeededRoleName.WORKSPACE_MEMBER),
+        roleId: await roleIdOf(SeededRoleName.WORKSPACE_STAFF),
       },
     });
     await prisma.workspaceMembership.updateMany({

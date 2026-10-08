@@ -243,7 +243,7 @@ On top of the permission, `rank` bounds it:
 
 A second bound applies first: a caller without `assignRole WorkspaceMembership`
 (e.g. `WORKSPACE_MANAGER`, who holds `create WorkspaceMembership`) may hand out
-only `WORKSPACE_MEMBER` — otherwise at-or-below would let a manager appoint peer
+only `WORKSPACE_STAFF` — otherwise at-or-below would let a manager appoint peer
 managers without the permission that governs roles. Both bounds live in
 `WorkspaceRoleAssignmentPolicy` and apply to memberships and invitations alike.
 
@@ -254,7 +254,7 @@ make the last-owner invariant's advice ("promote another member first")
 unreachable.
 
 `rank` orders roles **for this check only**. It does *not* imply inherited
-permissions. `WORKSPACE_ADMIN` does not contain `WORKSPACE_MEMBER`, and
+permissions. `WORKSPACE_ADMIN` does not contain `WORKSPACE_STAFF`, and
 `PLATFORM_ENGINEER` (rank 90) holds no governance despite outranking both
 support roles — it is deliberately never granted `assignRole User`, so the
 highest *technical* authority on the platform cannot promote itself into the

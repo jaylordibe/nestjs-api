@@ -66,7 +66,7 @@ describe('Workspace invitations (e2e)', () => {
    */
   const inviteAndCaptureToken = async (
     email: string,
-    roleName: SeededRoleName = SeededRoleName.WORKSPACE_MEMBER,
+    roleName: SeededRoleName = SeededRoleName.WORKSPACE_STAFF,
     actorId: string = owner.id,
   ): Promise<{ token: string; invitationId: string }> => {
     const service = app.get(WorkspaceInvitationsService);
@@ -101,7 +101,7 @@ describe('Workspace invitations (e2e)', () => {
         .set('Authorization', `Bearer ${owner.token}`)
         .send({
           email: 'nobody@example.com',
-          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_MEMBER),
+          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_STAFF),
         })
         .expect(201);
 
@@ -123,7 +123,7 @@ describe('Workspace invitations (e2e)', () => {
           .set('Authorization', `Bearer ${owner.token}`)
           .send({
             email: 'invitee@example.com',
-            roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_MEMBER),
+            roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_STAFF),
           })
           .expect(201);
         expect(emails.sent).toHaveLength(0);
@@ -170,7 +170,7 @@ describe('Workspace invitations (e2e)', () => {
         .set('Authorization', `Bearer ${owner.token}`)
         .send({
           email: 'nobody@example.com',
-          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_MEMBER),
+          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_STAFF),
         })
         .expect(201);
 
@@ -241,7 +241,7 @@ describe('Workspace invitations (e2e)', () => {
         app,
         workspace.id,
         member.id,
-        SeededRoleName.WORKSPACE_MEMBER,
+        SeededRoleName.WORKSPACE_STAFF,
       );
 
       await request(app.getHttpServer())
@@ -249,7 +249,7 @@ describe('Workspace invitations (e2e)', () => {
         .set('Authorization', `Bearer ${owner.token}`)
         .send({
           email: member.email,
-          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_MEMBER),
+          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_STAFF),
         })
         .expect(409);
     });
@@ -263,7 +263,7 @@ describe('Workspace invitations (e2e)', () => {
         .set('Authorization', `Bearer ${owner.token}`)
         .send({
           email: 'invitee@example.com',
-          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_MEMBER),
+          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_STAFF),
         })
         .expect(409);
 
@@ -305,7 +305,7 @@ describe('Workspace invitations (e2e)', () => {
         .set('Authorization', `Bearer ${owner.token}`)
         .send({
           email: 'invitee@example.com',
-          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_MEMBER),
+          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_STAFF),
         })
         .expect(201);
 
@@ -356,7 +356,7 @@ describe('Workspace invitations (e2e)', () => {
         .set('Authorization', `Bearer ${otherOwner.token}`)
         .send({
           email: 'shared@example.com',
-          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_MEMBER),
+          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_STAFF),
         })
         .expect(201);
 
@@ -373,7 +373,7 @@ describe('Workspace invitations (e2e)', () => {
         .set('Authorization', `Bearer ${owner.token}`)
         .send({
           email: 'shared@example.com',
-          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_MEMBER),
+          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_STAFF),
         })
         .expect(201);
 
@@ -480,7 +480,7 @@ describe('Workspace invitations (e2e)', () => {
         app,
         workspace.id,
         member.id,
-        SeededRoleName.WORKSPACE_MEMBER,
+        SeededRoleName.WORKSPACE_STAFF,
       );
 
       await request(app.getHttpServer())
@@ -488,7 +488,7 @@ describe('Workspace invitations (e2e)', () => {
         .set('Authorization', `Bearer ${member.token}`)
         .send({
           email: 'invitee@example.com',
-          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_MEMBER),
+          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_STAFF),
         })
         .expect(403);
     });
@@ -616,7 +616,7 @@ describe('Workspace invitations (e2e)', () => {
         .set('Authorization', `Bearer ${owner.token}`)
         .send({
           email: invitee.email,
-          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_MEMBER),
+          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_STAFF),
         })
         .expect(201);
 
@@ -715,7 +715,7 @@ describe('Workspace invitations (e2e)', () => {
         app,
         workspace.id,
         invitee.id,
-        SeededRoleName.WORKSPACE_MEMBER,
+        SeededRoleName.WORKSPACE_STAFF,
         WorkspaceMembershipStatus.LEFT,
       );
 

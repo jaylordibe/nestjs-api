@@ -71,7 +71,7 @@ describe('Workspace memberships (e2e)', () => {
         app,
         second.id,
         person.id,
-        SeededRoleName.WORKSPACE_MEMBER,
+        SeededRoleName.WORKSPACE_STAFF,
       );
       await addMembership(
         app,
@@ -95,7 +95,7 @@ describe('Workspace memberships (e2e)', () => {
       ).toEqual(
         [
           [workspace.id, SeededRoleName.WORKSPACE_ADMIN],
-          [second.id, SeededRoleName.WORKSPACE_MEMBER],
+          [second.id, SeededRoleName.WORKSPACE_STAFF],
           [third.id, SeededRoleName.WORKSPACE_MANAGER],
         ].sort(),
       );
@@ -107,7 +107,7 @@ describe('Workspace memberships (e2e)', () => {
         app,
         workspace.id,
         person.id,
-        SeededRoleName.WORKSPACE_MEMBER,
+        SeededRoleName.WORKSPACE_STAFF,
       );
 
       const response = await request(app.getHttpServer())
@@ -131,7 +131,7 @@ describe('Workspace memberships (e2e)', () => {
         app,
         workspace.id,
         person.id,
-        SeededRoleName.WORKSPACE_MEMBER,
+        SeededRoleName.WORKSPACE_STAFF,
         WorkspaceMembershipStatus.LEFT,
       );
 
@@ -140,7 +140,7 @@ describe('Workspace memberships (e2e)', () => {
         .set('Authorization', `Bearer ${owner.token}`)
         .send({
           email: person.email,
-          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_MEMBER),
+          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_STAFF),
         })
         .expect(201);
 
@@ -622,7 +622,7 @@ describe('Workspace memberships (e2e)', () => {
         app,
         workspace.id,
         successor.id,
-        SeededRoleName.WORKSPACE_MEMBER,
+        SeededRoleName.WORKSPACE_STAFF,
       );
 
       await request(app.getHttpServer())
@@ -648,7 +648,7 @@ describe('Workspace memberships (e2e)', () => {
         app,
         workspace.id,
         successor.id,
-        SeededRoleName.WORKSPACE_MEMBER,
+        SeededRoleName.WORKSPACE_STAFF,
         WorkspaceMembershipStatus.SUSPENDED,
       );
 
@@ -675,7 +675,7 @@ describe('Workspace memberships (e2e)', () => {
         app,
         workspace.id,
         formerMember.id,
-        SeededRoleName.WORKSPACE_MEMBER,
+        SeededRoleName.WORKSPACE_STAFF,
         WorkspaceMembershipStatus.LEFT,
       );
       const prisma = app.get(PrismaService);
@@ -709,7 +709,7 @@ describe('Workspace memberships (e2e)', () => {
         app,
         workspace.id,
         person.id,
-        SeededRoleName.WORKSPACE_MEMBER,
+        SeededRoleName.WORKSPACE_STAFF,
       );
 
       await request(app.getHttpServer())
@@ -725,7 +725,7 @@ describe('Workspace memberships (e2e)', () => {
         app,
         workspace.id,
         person.id,
-        SeededRoleName.WORKSPACE_MEMBER,
+        SeededRoleName.WORKSPACE_STAFF,
       );
 
       const response = await request(app.getHttpServer())
@@ -755,7 +755,7 @@ describe('Workspace memberships (e2e)', () => {
         app,
         workspace.id,
         returner.id,
-        SeededRoleName.WORKSPACE_MEMBER,
+        SeededRoleName.WORKSPACE_STAFF,
       );
       const firstTenure = await prisma.workspaceMembership.findUniqueOrThrow({
         where: { id: membershipId },
@@ -821,7 +821,7 @@ describe('Workspace memberships (e2e)', () => {
         WorkspaceMembershipStatus.LEFT,
       );
       expect(metadata.previousTenure?.roleName).toBe(
-        SeededRoleName.WORKSPACE_MEMBER,
+        SeededRoleName.WORKSPACE_STAFF,
       );
       expect(metadata.previousTenure?.endedAt).not.toBeNull();
 
@@ -845,7 +845,7 @@ describe('Workspace memberships (e2e)', () => {
         .set('Authorization', `Bearer ${owner.token}`)
         .send({
           email: newcomer.email,
-          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_MEMBER),
+          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_STAFF),
         })
         .expect(201);
 

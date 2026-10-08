@@ -313,14 +313,14 @@ describe('Authorization (e2e)', () => {
       .expect(403);
   });
 
-  it('WORKSPACE_MEMBER reads the workspace but cannot edit it', async () => {
+  it('WORKSPACE_STAFF reads the workspace but cannot edit it', async () => {
     const owner = await createRegularUser(app, 'owner@example.com');
     const member = await createRegularUser(app, 'member@example.com');
     const workspaceId = await createWorkspace(owner, 'acme');
 
     const prisma = app.get(PrismaService);
     const memberRole = await prisma.role.findUniqueOrThrow({
-      where: { name: SeededRoleName.WORKSPACE_MEMBER },
+      where: { name: SeededRoleName.WORKSPACE_STAFF },
     });
     await request(app.getHttpServer())
       .post(`/api/workspaces/${workspaceId}/memberships`)

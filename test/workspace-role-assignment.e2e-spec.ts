@@ -68,7 +68,7 @@ describe('Workspace role assignment authority (e2e)', () => {
     SeededRoleName.WORKSPACE_ADMIN,
     SeededRoleName.WORKSPACE_OWNER,
   ];
-  const NON_PRIVILEGED_ROLES = [SeededRoleName.WORKSPACE_MEMBER];
+  const NON_PRIVILEGED_ROLES = [SeededRoleName.WORKSPACE_STAFF];
 
   describe('adding to the roster', () => {
     it.each(PRIVILEGED_ROLES)('a manager cannot add a %s', async (roleName) => {

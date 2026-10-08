@@ -625,7 +625,7 @@ export const ROLE_DEFINITION_CATALOG: Readonly<
       CREATE_WORKSPACE_INVITATION,
     ],
   },
-  [SeededRoleName.WORKSPACE_MEMBER]: {
+  [SeededRoleName.WORKSPACE_STAFF]: {
     scope: RoleScope.WORKSPACE,
     rank: 20,
     description: 'Works here. Reads the workspace and its roster',

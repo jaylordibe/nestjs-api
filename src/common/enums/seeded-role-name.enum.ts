@@ -36,5 +36,5 @@ export enum SeededRoleName {
   WORKSPACE_OWNER = 'workspace_owner',
   WORKSPACE_ADMIN = 'workspace_admin',
   WORKSPACE_MANAGER = 'workspace_manager',
-  WORKSPACE_MEMBER = 'workspace_member',
+  WORKSPACE_STAFF = 'workspace_staff',
 }

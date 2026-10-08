@@ -36,12 +36,12 @@ export type AssignmentCeiling = number | typeof UNBOUNDED_RANK;
  * admit it.
  *
  * This is the role that confers no authority over other people —
- * `WORKSPACE_MEMBER` reads the workspace and its roster. Everything above it can
+ * `WORKSPACE_STAFF` reads the workspace and its roster. Everything above it can
  * grow, suspend, or re-rank the roster, which is exactly the authority
  * `assignRole` gates.
  */
 const NON_PRIVILEGED_WORKSPACE_ROLES: readonly SeededRoleName[] = [
-  SeededRoleName.WORKSPACE_MEMBER,
+  SeededRoleName.WORKSPACE_STAFF,
 ];
 
 /**
