@@ -42,7 +42,8 @@ process does both.
 | Unit tests | `yarn test` | |
 | Integration / e2e tests | `yarn test:e2e` | Starts the test stack itself |
 | Single e2e spec | `yarn test:e2e <pattern>` | The cadence during implementation |
-| Migration status | `yarn prisma migrate status` | Read-only; applying is human-owned |
+| Migration status | `yarn prisma migrate status` | Read-only |
+| Apply migrations (local) | `yarn prisma:deploy` | Committed migrations only; never mid-work |
 | RBAC catalog check | `yarn rbac:check` | Read-only; `rbac:sync` writes |
 | Security scan | `yarn audit --level moderate` | CI gate adds `.github/scripts/audit-gate.mjs` |
 | Run locally | `yarn start:dev` | Stacks: `yarn stack:up` / `yarn stack:down` |
