@@ -29,7 +29,7 @@ import { RedisService } from './common/redis/redis.service';
 import { TelemetryShutdownService } from './common/telemetry/telemetry-shutdown.service';
 import { SmsModule } from './common/sms/sms.module';
 import { FileStorageModule } from './common/storage/file-storage.module';
-import configuration from './config/configuration';
+import configuration, { isEnvFileIgnored } from './config/configuration';
 import { envValidationSchema } from './config/env.validation';
 import { PrismaModule } from './prisma/prisma.module';
 import { PermissionsGuard } from './modules/authorization/guards/permissions.guard';
@@ -53,6 +53,7 @@ import { UsersModule } from './modules/users/users.module';
     ConfigModule.forRoot({
       isGlobal: true,
       cache: true,
+      ignoreEnvFile: isEnvFileIgnored(),
       expandVariables: true,
       load: [configuration],
       validationSchema: envValidationSchema,

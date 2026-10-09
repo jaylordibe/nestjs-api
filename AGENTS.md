@@ -158,8 +158,10 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
 
 - **Two local stacks:** dev (5433/6378, `.env`) and test (5434/6380,
   `.env.test`). e2e runs a real `DROP DATABASE`; never point it at dev.
-- **`.env.test` is the only test config.** Never add a value to a workflow
-  that it already declares.
+- **`.env.test` is the only test config.** Under `NODE_ENV=test` the app
+  never reads `.env`, and env validation refuses a real outside provider:
+  tests never call a billed or outbound service. Never add a value to a
+  workflow that `.env.test` already declares.
 - **e2e runs in parallel** with per-worker databases and Redis logical DBs;
   a spec never assumes exclusive access outside its own database.
 - **Only `QueueWorkerRegistrar` registers BullMQ workers**, gated on

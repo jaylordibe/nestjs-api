@@ -312,6 +312,40 @@ describe('env.validation cross-field rules', () => {
     });
   });
 
+  describe('test environment', () => {
+    // The suite never calls a real provider, even if `.env.test` or the shell
+    // names one.
+    it.each([
+      ['EMAIL_PROVIDER', 'resend', { RESEND_API_KEY: 'a-key' }],
+      ['EMAIL_PROVIDER', 'mailgun', {}],
+      ['SMS_PROVIDER', 'twilio', {}],
+      ['STORAGE_PROVIDER', 's3', {}],
+      ['STORAGE_PROVIDER', 'gcs', {}],
+      ['STORAGE_PROVIDER', 'azure', {}],
+    ])('refuses %s=%s', (name, provider, extra) => {
+      const messages = (
+        validate({ NODE_ENV: 'test', [name]: provider, ...extra }).error
+          ?.details ?? []
+      ).map((detail) => detail.message);
+      expect(messages).toContainEqual(
+        expect.stringContaining(
+          `"${name}" cannot be a real provider under NODE_ENV=test`,
+        ),
+      );
+    });
+
+    it('accepts the stubs', () => {
+      expect(
+        validate({
+          NODE_ENV: 'test',
+          EMAIL_PROVIDER: 'stub',
+          SMS_PROVIDER: 'stub',
+          STORAGE_PROVIDER: 'stub',
+        }).error,
+      ).toBeUndefined();
+    });
+  });
+
   describe('email', () => {
     function messages(overrides: Record<string, unknown>): string[] {
       return (validate(overrides).error?.details ?? []).map(

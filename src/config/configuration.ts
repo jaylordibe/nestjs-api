@@ -200,6 +200,14 @@ export interface AppConfig {
   passwordResetUrl: string;
 }
 
+/**
+ * Whether ConfigModule skips `.env`. Under test it does: the suite runs on
+ * `.env.test` alone, which test/setup loads before the app is built, so a
+ * developer's `.env` can never fill a value `.env.test` leaves unset — a real
+ * text or email provider among them. Read when AppModule is imported.
+ */
+export const isEnvFileIgnored = (): boolean => process.env.NODE_ENV === 'test';
+
 const parseTrustProxy = (raw: string): false | string =>
   raw.trim() === 'false' ? false : raw.trim();
 

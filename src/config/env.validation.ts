@@ -2,6 +2,22 @@ import * as Joi from 'joi';
 import { PHONE_OTP_LENGTH } from '../common/constants/phone-otp.constants';
 import { isTrustedProxyList } from '../common/util/trusted-proxy.util';
 
+// The test suite never reaches a real provider: a text is billed, and an
+// email reaches a real person. Tests never read `.env` (`isEnvFileIgnored`),
+// so the stub defaults hold; this refuses the boot if `.env.test` or the
+// shell names a real one anyway.
+function refusedInTest(...realProviders: string[]): Joi.WhenOptions {
+  return {
+    is: 'test',
+    then: Joi.string()
+      .invalid(...realProviders)
+      .messages({
+        'any.invalid':
+          '{{#label}} cannot be a real provider under NODE_ENV=test — the test suite must never call one.',
+      }),
+  };
+}
+
 export const envValidationSchema = Joi.object({
   NODE_ENV: Joi.string()
     .valid('development', 'test', 'staging', 'production')
@@ -241,7 +257,8 @@ export const envValidationSchema = Joi.object({
         'any.invalid':
           'EMAIL_PROVIDER cannot be "stub" in production — the stub adapter writes the full message body, including one-time codes and verification links, to stdout. Configure a real provider.',
       }),
-    }),
+    })
+    .when('NODE_ENV', refusedInTest('resend', 'mailgun')),
   // EMAIL_FROM and each provider's keys tolerate empty strings when their
   // provider is not selected, so a committed `.env` template can ship with
   // `RESEND_API_KEY=""` placeholders without breaking boot on the stub
@@ -291,7 +308,8 @@ export const envValidationSchema = Joi.object({
         'any.invalid':
           'SMS_PROVIDER cannot be "stub" in production — the stub adapter writes the message body, which is the one-time code, to stdout. Configure a real provider.',
       }),
-    }),
+    })
+    .when('NODE_ENV', refusedInTest('twilio')),
   // Every texted code is this value instead of a random one, so a tester can
   // finish phone verification without the text — for local and staging while
   // no SMS sender is approved. Unset (the default) or empty means random
@@ -353,7 +371,8 @@ export const envValidationSchema = Joi.object({
   // choosing one never forces the others' configuration to exist.
   STORAGE_PROVIDER: Joi.string()
     .valid('stub', 's3', 'gcs', 'azure')
-    .default('stub'),
+    .default('stub')
+    .when('NODE_ENV', refusedInTest('s3', 'gcs', 'azure')),
 
   // Applies to EVERY provider. Leave unset unless the bucket/container really
   // is world-readable or CDN-fronted: unset means `resolvePublicUrl` returns
