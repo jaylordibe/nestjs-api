@@ -87,7 +87,10 @@ git clone <web-repo-url>   <service>-web
 Create a staging-only bucket so test uploads can't touch prod data,
 grant the identity chosen in the prod README's decision point write
 access, and make object reads public if you serve images straight from
-the bucket. Then set `STORAGE_PROVIDER` to `s3`, `gcs` or `azure` and that
+the bucket. If the api signs read URLs on a Google Cloud VM, also follow
+"Google Cloud VM" in [`docs/prod/README.md`](../prod/README.md): the IAM
+Service Account Credentials API and the Token Creator grant are both needed.
+Then set `STORAGE_PROVIDER` to `s3`, `gcs` or `azure` and that
 provider's variables (there is no key variable for any of them — see the prod
 README's decision point) in
 `.env`. Consider a lifecycle rule that auto-deletes staging uploads

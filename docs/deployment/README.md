@@ -310,7 +310,7 @@ recovers most of that 80 MB.
 | Adapter | Coverage |
 |---|---|
 | `s3` | **Exercised against a real backend.** `test/storage-s3.e2e-spec.ts` runs against the test compose stack's S3 server (RustFS): upload verified with `HeadObject`, a signed URL that really fetches, an unsigned read that is refused, delete, and non-collision of two identical uploads. This also covers AWS S3, R2, Spaces and Ceph, which speak the same API. |
-| `gcs`, `azure` | **Construction only.** The selection switch and the client options are covered; `save`, `delete` and `createSignedReadUrl` have never executed against Google or Azure. Verify against a real bucket before relying on either — particularly `createSignedReadUrl`, which needs `roles/iam.serviceAccountTokenCreator` on GCS and `Storage Blob Data Contributor` on Azure. |
+| `gcs`, `azure` | **Construction only.** The selection switch and the client options are covered; `save`, `delete` and `createSignedReadUrl` have never executed against Google or Azure. Verify against a real bucket before relying on either — particularly `createSignedReadUrl`, which needs `roles/iam.serviceAccountTokenCreator` and the IAM Service Account Credentials API on GCS (`docs/prod/README.md`, "Google Cloud VM") and `Storage Blob Data Contributor` on Azure. |
 | `stub` | Fully covered; persists nothing. |
 
 Every provider's calls are bounded by `STORAGE_REQUEST_TIMEOUT_MS` (default 15s).
@@ -415,12 +415,18 @@ solely through Cloudflare), `EMAIL_VERIFIED_REDIRECT_URL`, `PASSWORD_RESET_URL`,
 | `STORAGE_PROVIDER=gcs` | `STORAGE_GCS_BUCKET` | `STORAGE_GCS_PROJECT_ID` |
 | `STORAGE_PROVIDER=azure` | `STORAGE_AZURE_ACCOUNT_NAME`, `STORAGE_AZURE_CONTAINER` | — |
 | `EMAIL_PROVIDER=resend` | `RESEND_API_KEY` (secret), `EMAIL_FROM` | — |
+| `EMAIL_PROVIDER=mailgun` | `MAILGUN_API_KEY` (secret; a domain sending key), `MAILGUN_DOMAIN`, `EMAIL_FROM` on that domain | `MAILGUN_REGION` (`us` default, `eu`). Mailgun takes no idempotency key, so a retry after a timed-out delivery can send twice |
 | `SMS_PROVIDER=twilio` | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` (secret), `TWILIO_FROM` | — |
 
 `EMAIL_PROVIDER` and `SMS_PROVIDER` **cannot be `stub` in production** — boot
 fails. The stub adapters log the rendered message body, which carries one-time
 codes and the verify-email link, so shipping them would put credentials on
 stdout through a default nobody chose.
+
+`PHONE_CODE_FIXED` (six digits, unset by default) makes every texted code that
+value, for local and staging testing before an SMS sender is approved. It is
+accepted only with `SMS_PROVIDER=stub`, so production can never have it, and
+boot fails if it is left set after switching to a real provider.
 
 Selecting one provider never requires another's configuration to exist.
 

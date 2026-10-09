@@ -423,7 +423,7 @@ worker with `QUEUE_WORKER_ENABLED=true`.
 - [ ] `CORS_ORIGIN` set to an explicit origin list (`*` is refused in `NODE_ENV=production`).
 - [ ] `TRUST_PROXY` lists the addresses of the proxy hops in front of the API, and only those — see "Client topologies" in [`docs/deployment/README.md`](docs/deployment/README.md).
 - [ ] `TRUST_CLOUDFLARE_HEADERS` left at `false` **unless** the origin is provably unreachable except through Cloudflare (see the `cloudflare_only` snippet in `docs/prod/Caddyfile`). These headers are forgeable by anyone who can reach the origin directly, and they are written into `audit_logs`, the table an incident responder trusts.
-- [ ] `EMAIL_PROVIDER=resend` with `RESEND_API_KEY` and `EMAIL_FROM`, on a verified domain with DKIM/SPF/DMARC in DNS.
+- [ ] `EMAIL_PROVIDER=resend` (with `RESEND_API_KEY`) or `mailgun` (with `MAILGUN_API_KEY` and `MAILGUN_DOMAIN`), and `EMAIL_FROM` on a domain verified with that provider, with DKIM/SPF/DMARC in DNS.
 - [ ] `OTEL_EXPORTER_OTLP_ENDPOINT` pointed at an OpenTelemetry Collector (traces and metrics), with an error tracker wired behind it or into pino.
 - [ ] Managed PostgreSQL point-in-time recovery (PITR) enabled.
 - [ ] Secrets served from a secret manager (GCP Secret Manager / Vault / Kubernetes secrets) rather than a plaintext env file.
@@ -464,7 +464,7 @@ worker with `QUEUE_WORKER_ENABLED=true`.
 | Validation | class-validator + class-transformer for requests; Joi for configuration |
 | Rate limiting | `@nestjs/throttler` with shared Redis storage |
 | Observability | pino via `nestjs-pino`, OpenTelemetry SDK with OTLP exporters, `nestjs-cls` request context |
-| Integrations | Resend (email), Twilio (SMS), S3 / GCS / Azure Blob, each behind an adapter with a `stub` for development |
+| Integrations | Resend or Mailgun (email), Twilio (SMS), S3 / GCS / Azure Blob, each behind an adapter with a `stub` for development |
 | API docs | `@nestjs/swagger`, generated from DTOs by the compiler plugin |
 | Testing | Jest + supertest; e2e against real infrastructure |
 

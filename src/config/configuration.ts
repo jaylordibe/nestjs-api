@@ -98,15 +98,22 @@ export interface AppConfig {
     expiresInDays: number;
   };
   email: {
-    provider: 'stub' | 'resend';
+    provider: 'stub' | 'resend' | 'mailgun';
     from: string | undefined;
     resendApiKey: string | undefined;
+    mailgunApiKey: string | undefined;
+    mailgunDomain: string | undefined;
+    mailgunRegion: 'us' | 'eu';
   };
   sms: {
     provider: 'stub' | 'twilio';
     twilioAccountSid: string | undefined;
     twilioAuthToken: string | undefined;
     twilioFrom: string | undefined;
+  };
+  phoneCodes: {
+    // PHONE_CODE_FIXED: every texted code is this value (stub SMS only).
+    fixedCode: string | undefined;
   };
   storage: {
     // Which object-storage adapter is active. `stub` persists nothing and is
@@ -274,15 +281,22 @@ export default (): AppConfig => ({
     ),
   },
   email: {
-    provider: (process.env.EMAIL_PROVIDER as 'stub' | 'resend') ?? 'stub',
+    provider:
+      (process.env.EMAIL_PROVIDER as 'stub' | 'resend' | 'mailgun') ?? 'stub',
     from: process.env.EMAIL_FROM,
     resendApiKey: process.env.RESEND_API_KEY,
+    mailgunApiKey: process.env.MAILGUN_API_KEY || undefined,
+    mailgunDomain: process.env.MAILGUN_DOMAIN || undefined,
+    mailgunRegion: (process.env.MAILGUN_REGION as 'us' | 'eu') || 'us',
   },
   sms: {
     provider: (process.env.SMS_PROVIDER as 'stub' | 'twilio') ?? 'stub',
     twilioAccountSid: process.env.TWILIO_ACCOUNT_SID || undefined,
     twilioAuthToken: process.env.TWILIO_AUTH_TOKEN || undefined,
     twilioFrom: process.env.TWILIO_FROM || undefined,
+  },
+  phoneCodes: {
+    fixedCode: process.env.PHONE_CODE_FIXED || undefined,
   },
   storage: {
     provider:

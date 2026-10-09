@@ -18,6 +18,7 @@ import { SendPurpose } from '../../common/send-limit/send-limit.config';
 import { formatErrorMessage } from '../../common/util/error-message.util';
 import { canonicalEmailDestination } from '../../common/util/message-destination.util';
 import { WorkspaceMembershipStatus } from '../../common/enums/workspace-membership-status.enum';
+import { PHONE_OTP_LENGTH } from '../../common/constants/phone-otp.constants';
 import { OtpPurpose } from '../../common/enums/otp-purpose.enum';
 import { JobName } from '../../common/queue/job-registry';
 import { QueueProducerService } from '../../common/queue/queue-producer.service';
@@ -50,14 +51,18 @@ const OTP_EXPIRY_MS = 15 * 60 * 1000;
 const PASSWORD_RESET_EXPIRY_MINUTES = 60;
 
 function generateOtp(): string {
-  // 6 digits, zero-padded. Phone verification only; bounded by the 15-min
+  // Zero-padded digits. Phone verification only; bounded by the 15-min
   // expiry and the verify endpoint's throttle.
-  return randomInt(0, 1_000_000).toString().padStart(6, '0');
+  return randomInt(0, 10 ** PHONE_OTP_LENGTH)
+    .toString()
+    .padStart(PHONE_OTP_LENGTH, '0');
 }
 
 @Injectable()
 export class UsersService {
   private readonly logger = new Logger(UsersService.name);
+  // PHONE_CODE_FIXED, accepted only with the stub SMS provider (env schema).
+  private readonly fixedPhoneCode: string | undefined;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -78,7 +83,14 @@ export class UsersService {
     // is the other half of "a live workspace always has an active owner"; drop
     // it and a deleted owner leaves the workspace ownerless.
     private readonly workspaceOwnershipPolicy: WorkspaceOwnershipPolicy,
-  ) {}
+  ) {
+    this.fixedPhoneCode = configService.get<string>('phoneCodes.fixedCode');
+    if (this.fixedPhoneCode) {
+      this.logger.warn(
+        'PHONE_CODE_FIXED is set: every texted code is that fixed value. Never in production.',
+      );
+    }
+  }
 
   // ── Account emails ──────────────────────────────────────────────────
   // Queued so the request never waits on the mail provider. The payload
@@ -985,7 +997,7 @@ export class UsersService {
       return;
     }
     await this.destinationSendLimit.sendReserved(reservation, async () => {
-      const otp = generateOtp();
+      const otp = this.fixedPhoneCode ?? generateOtp();
       const otpHash = await bcrypt.hash(`${otp}:${phoneNumber}`, BCRYPT_ROUNDS);
       await this.prisma.user.update({
         where: { id: userId },

@@ -312,6 +312,92 @@ describe('env.validation cross-field rules', () => {
     });
   });
 
+  describe('email', () => {
+    function messages(overrides: Record<string, unknown>): string[] {
+      return (validate(overrides).error?.details ?? []).map(
+        (detail) => detail.message,
+      );
+    }
+
+    it('requires the key, the domain and a sender with the mailgun provider', () => {
+      const missing = messages({ EMAIL_PROVIDER: 'mailgun' });
+      for (const key of ['MAILGUN_API_KEY', 'MAILGUN_DOMAIN', 'EMAIL_FROM']) {
+        expect(missing).toContainEqual(expect.stringContaining(key));
+      }
+      const { value, error } = validate({
+        EMAIL_PROVIDER: 'mailgun',
+        MAILGUN_API_KEY: 'a-sending-key',
+        MAILGUN_DOMAIN: 'mg.lysta.test',
+        EMAIL_FROM: 'Lysta <noreply@mg.lysta.test>',
+      }) as { value: Record<string, unknown>; error?: unknown };
+      expect(error).toBeUndefined();
+      expect(value.MAILGUN_REGION).toBe('us');
+    });
+
+    it('takes only a US or EU region and a bare domain', () => {
+      const base = {
+        EMAIL_PROVIDER: 'mailgun',
+        MAILGUN_API_KEY: 'a-sending-key',
+        EMAIL_FROM: 'Lysta <noreply@mg.lysta.test>',
+      };
+      expect(
+        messages({
+          ...base,
+          MAILGUN_DOMAIN: 'mg.lysta.test',
+          MAILGUN_REGION: 'ap',
+        }),
+      ).toContainEqual(expect.stringContaining('MAILGUN_REGION'));
+      expect(
+        messages({ ...base, MAILGUN_DOMAIN: 'https://mg.lysta.test/' }),
+      ).toContainEqual(expect.stringContaining('MAILGUN_DOMAIN'));
+    });
+
+    it('lets the stub ship with empty Mailgun placeholders', () => {
+      expect(
+        validate({ MAILGUN_API_KEY: '', MAILGUN_DOMAIN: '' }).error,
+      ).toBeUndefined();
+    });
+
+    it('rejects a provider this release has no adapter for', () => {
+      expect(messages({ EMAIL_PROVIDER: 'sendgrid' })).toContainEqual(
+        expect.stringContaining('EMAIL_PROVIDER'),
+      );
+    });
+  });
+
+  describe('fixed phone code', () => {
+    function messages(overrides: Record<string, unknown>): string[] {
+      return (validate(overrides).error?.details ?? []).map(
+        (detail) => detail.message,
+      );
+    }
+
+    it('takes six digits with the stub SMS provider', () => {
+      expect(validate({ PHONE_CODE_FIXED: '123456' }).error).toBeUndefined();
+      expect(validate({ PHONE_CODE_FIXED: '' }).error).toBeUndefined();
+      for (const code of ['12345', '1234567', 'abcdef']) {
+        expect(messages({ PHONE_CODE_FIXED: code })).toContainEqual(
+          expect.stringContaining('PHONE_CODE_FIXED'),
+        );
+      }
+    });
+
+    it('is refused with a real SMS provider, so it never reaches a phone', () => {
+      const twilio = {
+        SMS_PROVIDER: 'twilio',
+        TWILIO_ACCOUNT_SID: `AC${'0'.repeat(32)}`,
+        TWILIO_AUTH_TOKEN: 'a-token',
+        TWILIO_FROM: '+15551234567',
+      };
+      expect(
+        messages({ ...twilio, PHONE_CODE_FIXED: '123456' }),
+      ).toContainEqual(expect.stringContaining('SMS_PROVIDER=stub'));
+      expect(
+        validate({ ...twilio, PHONE_CODE_FIXED: '' }).error,
+      ).toBeUndefined();
+    });
+  });
+
   describe('Postgres pool', () => {
     // Defaults exist so a fresh clone boots, but they must be REAL numbers the
     // capacity arithmetic can be done against rather than library defaults

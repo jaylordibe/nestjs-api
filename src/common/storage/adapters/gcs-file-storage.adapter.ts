@@ -23,8 +23,9 @@ import {
 //
 // SIGNED URLS: with ADC there is no private key in the process, so the SDK
 // signs through the IAM `signBlob` API. The runtime identity therefore needs
-// `roles/iam.serviceAccountTokenCreator` **on itself** for
-// `createSignedReadUrl` to work. Uploads and deletes need no such grant, so a
+// `roles/iam.serviceAccountTokenCreator` **on itself**, and the project needs
+// the IAM Service Account Credentials API enabled, for `createSignedReadUrl`
+// to work. Uploads and deletes need no such grant, so a
 // deployment that never signs can skip it.
 @Injectable()
 export class GcsFileStorageAdapter implements FileStorageAdapter {

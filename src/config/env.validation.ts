@@ -1,4 +1,5 @@
 import * as Joi from 'joi';
+import { PHONE_OTP_LENGTH } from '../common/constants/phone-otp.constants';
 import { isTrustedProxyList } from '../common/util/trusted-proxy.util';
 
 export const envValidationSchema = Joi.object({
@@ -232,7 +233,7 @@ export const envValidationSchema = Joi.object({
   // the credential-to-stdout class this template works hard to close, through
   // a default nobody chose. Same floor as CORS_ORIGIN and TRUST_PROXY.
   EMAIL_PROVIDER: Joi.string()
-    .valid('stub', 'resend')
+    .valid('stub', 'resend', 'mailgun')
     .default('stub')
     .when('NODE_ENV', {
       is: 'production',
@@ -241,13 +242,13 @@ export const envValidationSchema = Joi.object({
           'EMAIL_PROVIDER cannot be "stub" in production — the stub adapter writes the full message body, including one-time codes and verification links, to stdout. Configure a real provider.',
       }),
     }),
-  // EMAIL_FROM / RESEND_API_KEY tolerate empty strings when EMAIL_PROVIDER is
-  // not `resend`, so a committed `.env` template can ship with `RESEND_API_KEY=""`
-  // placeholders without breaking boot on the stub provider. The required check
-  // only kicks in when resend is actually selected. (Mirrors the SMS/Twilio
-  // fields below.)
+  // EMAIL_FROM and each provider's keys tolerate empty strings when their
+  // provider is not selected, so a committed `.env` template can ship with
+  // `RESEND_API_KEY=""` placeholders without breaking boot on the stub
+  // provider. The required check only kicks in when that provider is actually
+  // selected. (Mirrors the SMS/Twilio fields below.)
   EMAIL_FROM: Joi.string().when('EMAIL_PROVIDER', {
-    is: 'resend',
+    is: Joi.valid('resend', 'mailgun'),
     then: Joi.required(),
     otherwise: Joi.string().allow('').optional(),
   }),
@@ -256,6 +257,21 @@ export const envValidationSchema = Joi.object({
     then: Joi.required(),
     otherwise: Joi.string().allow('').optional(),
   }),
+  // A Mailgun domain sending key, and the domain verified in Mailgun that
+  // EMAIL_FROM is on. MAILGUN_REGION is where the Mailgun account lives.
+  MAILGUN_API_KEY: Joi.string().when('EMAIL_PROVIDER', {
+    is: 'mailgun',
+    then: Joi.required(),
+    otherwise: Joi.string().allow('').optional(),
+  }),
+  MAILGUN_DOMAIN: Joi.string()
+    .hostname()
+    .when('EMAIL_PROVIDER', {
+      is: 'mailgun',
+      then: Joi.required(),
+      otherwise: Joi.string().allow('').optional(),
+    }),
+  MAILGUN_REGION: Joi.string().valid('us', 'eu').default('us'),
 
   // SMS provider selection. `stub` (default) logs to stdout — OTPs are
   // visible in the app log so local flows can be completed manually.
@@ -274,6 +290,23 @@ export const envValidationSchema = Joi.object({
       then: Joi.string().invalid('stub').required().messages({
         'any.invalid':
           'SMS_PROVIDER cannot be "stub" in production — the stub adapter writes the message body, which is the one-time code, to stdout. Configure a real provider.',
+      }),
+    }),
+  // Every texted code is this value instead of a random one, so a tester can
+  // finish phone verification without the text — for local and staging while
+  // no SMS sender is approved. Unset (the default) or empty means random
+  // codes. Accepted only with SMS_PROVIDER=stub, which production already
+  // refuses: a known code is never texted to a real phone, and switching to a
+  // real provider fails boot until this is removed.
+  PHONE_CODE_FIXED: Joi.string()
+    .pattern(new RegExp(`^\\d{${PHONE_OTP_LENGTH}}$`))
+    .allow('')
+    .optional()
+    .when('SMS_PROVIDER', {
+      not: 'stub',
+      then: Joi.valid('').messages({
+        'any.only':
+          'PHONE_CODE_FIXED is accepted only with SMS_PROVIDER=stub — a real provider would text a code anyone can guess. Remove it.',
       }),
     }),
   // The Twilio fields tolerate empty strings when SMS_PROVIDER=stub so a

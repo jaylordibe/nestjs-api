@@ -51,6 +51,43 @@ identity chain, so the decision here is which identity the VM presents:
 Grant whichever identity you end up with write access to that one bucket, scoped
 to it alone.
 
+### Google Cloud VM
+
+The first case above, made concrete for a Compute Engine VM using `gcs`.
+Nothing goes in `.env` for credentials: Application Default Credentials read
+the attached service account from the VM's metadata server.
+
+1. **Create a dedicated service account** for this environment (one for prod,
+   one for staging) and attach it to the VM when creating it.
+2. **Set the VM's access scope to "Allow full access to all Cloud APIs"**
+   (`cloud-platform`). Scopes cap what the attached account may do regardless
+   of its roles. Changing a scope needs the VM stopped.
+3. **Enable the IAM Service Account Credentials API**
+   (`iamcredentials.googleapis.com`) in the VM's project, when anything calls
+   `createSignedReadUrl`:
+   `gcloud services enable iamcredentials.googleapis.com --project PROJECT_ID`.
+   With no key file the SDK signs through its `signBlob` call, and the API is
+   off in a new project; without it every signed URL fails with "IAM Service
+   Account Credentials API has not been used in project … or it is disabled".
+4. **Grant the service account:**
+   - `roles/storage.objectAdmin` on this environment's bucket only;
+   - `roles/iam.serviceAccountTokenCreator` on **itself**, when anything signs
+     URLs. Grant it on the service account (IAM & Admin → Service Accounts →
+     the account → Principals with access → Grant access, with the account's
+     own email as the principal), not on the project, which would let it sign
+     as every account there. The project `Editor` role does not include
+     `signBlob`, so the default Compute Engine account needs this too:
+     ```
+     gcloud iam service-accounts add-iam-policy-binding SA_EMAIL \
+       --member="serviceAccount:SA_EMAIL" \
+       --role="roles/iam.serviceAccountTokenCreator"
+     ```
+5. **In `.env`:** `STORAGE_PROVIDER="gcs"`, `STORAGE_GCS_BUCKET`, and leave
+   `STORAGE_GCS_PROJECT_ID` empty.
+
+IAM grants and a newly enabled API take a minute or two to apply; the api
+needs no restart, because it signs on every request.
+
 ## One-time setup
 
 ### 1. Server (Ubuntu)
@@ -181,7 +218,8 @@ openssl rand -base64 32  # → DB_PASSWORD
 openssl rand -base64 32  # → REDIS_PASSWORD
 
 nano .env                # paste secrets, fill hostnames, STORAGE_PROVIDER +
-                         # its STORAGE_* vars, RESEND_API_KEY, EMAIL_FROM,
+                         # its STORAGE_* vars, RESEND_API_KEY (or MAILGUN_*),
+                         # EMAIL_FROM,
                          # TWILIO_*, SEED_*
 chmod 600 .env
 ```
@@ -460,7 +498,9 @@ change only, no code change — `src/worker.ts` already bootstraps the same
 | Jobs fail immediately without retrying | Permanent failure by design — unknown job name, or a payload version this release doesn't accept (usually a half-finished rolling deploy) | `docker compose logs api \| grep 'event=failed'` — the `reason=` field names it |
 | A recurring job fires that no code declares | Orphaned BullMQ scheduler left in Redis | Boot reconciliation removes it; look for `Removing orphaned recurring schedule` in the api logs |
 | Per-IP rate limiting acts globally / sessions all record one IP | Caddy no longer holds the address the API trusts, or a site proxies without `import proxy_with_client_ip` | `docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ${SERVICE_NAME}-caddy` must equal the api's `TRUST_PROXY` (`docker compose exec api printenv TRUST_PROXY`); every Caddyfile site must proxy through the snippet. Behind a server-rendered web client, see "Client topologies" in `docs/deployment/README.md` |
-| GCS uploads fail with 403 | Runtime identity lacks `roles/storage.objectAdmin` on the bucket, or ADC resolved a different project | Check the binding on the bucket and that `STORAGE_GCS_PROJECT_ID` names the project that owns it |
+| GCS uploads fail with 403 | Runtime identity lacks `roles/storage.objectAdmin` on the bucket, the VM's access scope is not `cloud-platform`, or ADC resolved a different project | Check the binding on the bucket and that `STORAGE_GCS_PROJECT_ID` names the project that owns it |
+| Signed URLs fail; the api log says "IAM Service Account Credentials API has not been used in project … or it is disabled" | The API that signs URLs is off in the project | Enable it — see "Google Cloud VM" step 3 |
+| Signed URLs fail; the api log says "Permission 'iam.serviceAccounts.signBlob' denied" | The service account lacks `roles/iam.serviceAccountTokenCreator` on itself (`Editor` does not include it) | Grant it — see "Google Cloud VM" step 4 |
 | Disk filling up | Docker logs / dangling images | `docker image prune -f`, `docker system df` |
 
 ## Updating infra files
