@@ -1,5 +1,15 @@
 import { ApiProperty } from '@nestjs/swagger';
-import type { WorkspaceMembershipStatus } from '../../../common/enums/workspace-membership-status.enum';
+import { WorkspaceMembershipStatus } from '../../../common/enums/workspace-membership-status.enum';
+
+/** One workspace membership of the caller, in any status. */
+export class PermissionsWorkspaceMembershipDto {
+  membershipId!: string;
+  workspaceId!: string;
+  /** The role's name, e.g. `workspace_owner`. */
+  roleName!: string;
+  @ApiProperty({ enum: WorkspaceMembershipStatus })
+  status!: WorkspaceMembershipStatus;
+}
 
 /**
  * The caller's authorization, in a form the client can evaluate itself.
@@ -53,13 +63,11 @@ export class UserPermissionsResponseDto {
         status: 'active',
       },
     ],
+    // Without it the document typed each membership as a string, and
+    // clients that generate models from it could not read the response.
+    type: [PermissionsWorkspaceMembershipDto],
   })
-  workspaceMemberships!: Array<{
-    membershipId: string;
-    workspaceId: string;
-    roleName: string;
-    status: WorkspaceMembershipStatus;
-  }>;
+  workspaceMemberships!: PermissionsWorkspaceMembershipDto[];
 
   constructor(value: UserPermissionsResponseDto) {
     Object.assign(this, value);
