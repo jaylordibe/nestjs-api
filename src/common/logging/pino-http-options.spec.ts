@@ -41,7 +41,11 @@ describe('pino-http options', () => {
 
     // `isTest: false` deliberately — the test environment sets `level: 'silent'`,
     // which would emit nothing and make every assertion below vacuously true.
-    const options = buildPinoHttpOptions({ isProduction: true, isTest: false });
+    const options = buildPinoHttpOptions({
+      isProduction: true,
+      isTest: false,
+      isDevelopment: false,
+    });
     const logRequest = pinoHttp(options as never, sink);
 
     const server = createServer(
@@ -114,6 +118,31 @@ describe('pino-http options', () => {
   it('keeps the path and non-secret query parameters', () => {
     expect(logOutput).toContain('/api/auth/verify-email');
     expect(logOutput).toContain('page');
+  });
+
+  // `pino-pretty` is a devDependency, absent from every deployed image: a
+  // deployed environment that selected it crashed at boot (staging did).
+  describe('pretty printing', () => {
+    it.each([
+      { environment: 'production', isProduction: true, isTest: false },
+      { environment: 'staging', isProduction: false, isTest: false },
+      { environment: 'test', isProduction: false, isTest: true },
+    ])('is off in $environment', ({ isProduction, isTest }) => {
+      expect(
+        buildPinoHttpOptions({ isProduction, isTest, isDevelopment: false })
+          .transport,
+      ).toBeUndefined();
+    });
+
+    it('is on in local development', () => {
+      expect(
+        buildPinoHttpOptions({
+          isProduction: false,
+          isTest: false,
+          isDevelopment: true,
+        }).transport,
+      ).toEqual({ target: 'pino-pretty', options: { singleLine: true } });
+    });
   });
 
   describe('redact paths', () => {

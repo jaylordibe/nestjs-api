@@ -24,6 +24,9 @@ import { resolveRequestId } from '../util/request-id.util';
 export interface PinoHttpOptionsInput {
   readonly isProduction: boolean;
   readonly isTest: boolean;
+  // Local development only. `pino-pretty` is a devDependency: every deployed
+  // image (staging included) lacks it, and selecting it there crashes boot.
+  readonly isDevelopment: boolean;
 }
 
 // pino-http's request and response log fields. Their names are fixed by the
@@ -85,13 +88,13 @@ export function redactLoggedRequest(loggedRequest: {
 export function buildPinoHttpOptions({
   isProduction,
   isTest,
+  isDevelopment,
 }: PinoHttpOptionsInput): Record<string, unknown> {
   return {
     level: isTest ? 'silent' : isProduction ? 'info' : 'debug',
-    transport:
-      !isProduction && !isTest
-        ? { target: 'pino-pretty', options: { singleLine: true } }
-        : undefined,
+    transport: isDevelopment
+      ? { target: 'pino-pretty', options: { singleLine: true } }
+      : undefined,
     genReqId: (request: IncomingMessage, response: ServerResponse) => {
       // Shared with the CLS middleware in app.module.ts. Memoised per request,
       // so whichever of the two runs first decides the value and the other

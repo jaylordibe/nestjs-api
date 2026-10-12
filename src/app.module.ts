@@ -205,6 +205,7 @@ import { UsersModule } from './modules/users/users.module';
         pinoHttp: buildPinoHttpOptions({
           isProduction: configService.get<string>('nodeEnv') === 'production',
           isTest: configService.get<string>('nodeEnv') === 'test',
+          isDevelopment: configService.get<string>('nodeEnv') === 'development',
         }),
       }),
     }),
