@@ -24,6 +24,7 @@ import { AuthenticatedOnly } from '../../common/decorators/authenticated-only.de
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
+import { RequireTurnstile } from '../../common/decorators/require-turnstile.decorator';
 import { OperationAcknowledgementDto } from '../../common/dto/operation-acknowledgement.dto';
 import { ErrorCode } from '../../common/errors/error-code.enum';
 import { loginThrottleTracker } from '../../common/util/login-throttle.util';
@@ -51,6 +52,7 @@ export class AuthController {
 
   @Post('register')
   @Public()
+  @RequireTurnstile()
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @ApiCreatedResponse({ type: RegisterResponseDto })
   register(@Body() dto: RegisterDto): Promise<RegisterResponseDto> {
@@ -60,6 +62,7 @@ export class AuthController {
   // Keyed by identifier + IP rather than IP alone; see loginThrottleTracker.
   @Post('login')
   @Public()
+  @RequireTurnstile()
   @Throttle({
     default: { limit: 5, ttl: 60_000, getTracker: loginThrottleTracker },
   })
@@ -148,6 +151,7 @@ export class AuthController {
   // whether the email exists or is already verified — always 200.
   @Post('resend-verification')
   @Public()
+  @RequireTurnstile()
   @Throttle({ default: { limit: 3, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOkResponse({ type: OperationAcknowledgementDto })

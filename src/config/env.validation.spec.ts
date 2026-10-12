@@ -218,6 +218,104 @@ describe('env.validation cross-field rules', () => {
     });
   });
 
+  describe('turnstile', () => {
+    const BOTH_SECRETS = {
+      TURNSTILE_WEB_SECRET: 'web-widget-secret',
+      TURNSTILE_MOBILE_SECRET: 'mobile-widget-secret',
+    };
+
+    function turnstileMessages(overrides: Record<string, unknown>): string[] {
+      return (validate(overrides).error?.details ?? [])
+        .map((detail) => detail.message)
+        .filter((message) => message.includes('TURNSTILE_'));
+    }
+
+    // Off locally and in tests: no keys, or keys left empty in a copied
+    // .env.example, both boot.
+    it.each(['development', 'test'])('needs no secret in %s', (nodeEnv) => {
+      expect(turnstileMessages({ NODE_ENV: nodeEnv })).toEqual([]);
+      expect(
+        turnstileMessages({
+          NODE_ENV: nodeEnv,
+          TURNSTILE_WEB_SECRET: '',
+          TURNSTILE_MOBILE_SECRET: '',
+        }),
+      ).toEqual([]);
+    });
+
+    it.each(['staging', 'production'])(
+      'requires both secrets in %s, naming each missing one',
+      (nodeEnv) => {
+        const missing = turnstileMessages({ NODE_ENV: nodeEnv });
+        expect(missing).toContainEqual(
+          expect.stringContaining('TURNSTILE_WEB_SECRET'),
+        );
+        expect(missing).toContainEqual(
+          expect.stringContaining('TURNSTILE_MOBILE_SECRET'),
+        );
+        expect(
+          turnstileMessages({ NODE_ENV: nodeEnv, ...BOTH_SECRETS }),
+        ).toEqual([]);
+      },
+    );
+
+    it.each(['staging', 'production'])(
+      'treats an empty or blank secret as missing in %s',
+      (nodeEnv) => {
+        expect(
+          turnstileMessages({
+            NODE_ENV: nodeEnv,
+            ...BOTH_SECRETS,
+            TURNSTILE_WEB_SECRET: '   ',
+          }),
+        ).toContainEqual(expect.stringContaining('TURNSTILE_WEB_SECRET'));
+        expect(
+          turnstileMessages({
+            NODE_ENV: nodeEnv,
+            ...BOTH_SECRETS,
+            TURNSTILE_MOBILE_SECRET: '',
+          }),
+        ).toContainEqual(expect.stringContaining('TURNSTILE_MOBILE_SECRET'));
+      },
+    );
+
+    it.each([
+      ['staging', '1x0000000000000000000000000000000AA'],
+      ['production', '1x0000000000000000000000000000000AA'],
+      ['production', '2x0000000000000000000000000000000AA'],
+      ['production', '3x0000000000000000000000000000000AA'],
+      ['production', '1x0000000000000000000000000000000aa'],
+      ['staging', ' 1x0000000000000000000000000000000AA '],
+    ])("refuses Cloudflare's test secret in %s (%s)", (nodeEnv, testSecret) => {
+      expect(
+        turnstileMessages({
+          NODE_ENV: nodeEnv,
+          ...BOTH_SECRETS,
+          TURNSTILE_WEB_SECRET: testSecret,
+        }),
+      ).toContainEqual(expect.stringContaining('test secret'));
+    });
+
+    it.each(VALIDATED_ENVIRONMENTS)(
+      'refuses exactly one secret in %s',
+      (nodeEnv) => {
+        expect(
+          turnstileMessages({
+            NODE_ENV: nodeEnv,
+            TURNSTILE_WEB_SECRET: 'web-widget-secret',
+          }),
+        ).not.toEqual([]);
+        expect(
+          turnstileMessages({
+            NODE_ENV: nodeEnv,
+            TURNSTILE_WEB_SECRET: '',
+            TURNSTILE_MOBILE_SECRET: 'mobile-widget-secret',
+          }),
+        ).not.toEqual([]);
+      },
+    );
+  });
+
   // No provider is privileged, and selecting one must never force another's
   // configuration to exist. That is what keeps the same image deployable to a
   // different cloud with only environment changes.

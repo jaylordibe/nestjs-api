@@ -96,6 +96,8 @@ Raised before any handler runs, by Express's body parser; mapped to the envelope
 | `VALIDATION_FAILED` | class-validator failure on a DTO; also `Errors.badRequest()` for malformed input class-validator cannot express. | `Array<{ field: string; constraints: string[] }>` (paths like `address.street`, `passengers[0].firstName`); `null` from `Errors.badRequest()` |
 | `INVALID_OTP` | Bad or expired phone-verification code. | `null` |
 | `INVALID_LINK` | Bad, expired or already-used link token (verify-email, password reset). | `null` |
+| `TURNSTILE_TOKEN_MISSING` | A route behind the Turnstile bot check was called without an `X-Turnstile-Token` header. Nothing was sent, created or checked. Send a token from the widget. | `null` |
+| `TURNSTILE_TOKEN_INVALID` | Cloudflare refused the token: bad, expired, already used, or from the other widget. Get a new token and retry. Cloudflare spends a token on every request that reaches it, whatever the request's own outcome, so fetch a fresh token for every submission. | `null` |
 | `EMAIL_DOMAIN_DISALLOWED` | Sign-up with a disposable / temporary email provider. | `{ domain: string }` |
 | `FK_REFERENCE_INVALID` | Prisma P2003 — foreign key references a record that doesn't exist. | `{ field: string }`, or `null` when the column cannot be determined |
 
@@ -127,7 +129,7 @@ soft-deletes the solely-owned workspaces instead. That asymmetry with
 | Code | Trigger |
 |---|---|
 | `RATE_LIMITED` | Too many requests. Emitted by the global `@nestjs/throttler` guard, and by application code via `Errors.rateLimited()`. A client cannot tell the two apart, and does not need to — the remedy is the same. Note only the throttler sets `Retry-After`; a factory-thrown 429 carries no such header, so a client must have its own backoff and not depend on one being present. |
-| `EXTERNAL_SERVICE_UNAVAILABLE` | Third-party integration unavailable (SMS / email / storage providers, etc.). |
+| `EXTERNAL_SERVICE_UNAVAILABLE` | Third-party integration unavailable (SMS / email / storage providers, the Turnstile check, etc.). On a Turnstile-checked route, get a new token before retrying: the old one's state is unknown. |
 | `INTERNAL_ERROR` | Catch-all 500 for unexpected runtime errors. Real exception logged server-side; response never leaks internals. |
 
 ## Adding a new error scenario

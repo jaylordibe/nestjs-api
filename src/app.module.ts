@@ -12,6 +12,7 @@ import { ClsModule } from 'nestjs-cls';
 import { LoggerModule } from 'nestjs-pino';
 import { UAParser } from 'ua-parser-js';
 import { AuditModule } from './common/audit/audit.module';
+import { TurnstileModule } from './common/turnstile/turnstile.module';
 import { Errors } from './common/errors/errors';
 import { flattenValidationErrors } from './common/errors/flatten-validation-errors';
 import { buildPinoHttpOptions } from './common/logging/pino-http-options';
@@ -253,6 +254,7 @@ import { UsersModule } from './modules/users/users.module';
     SmsModule,
     SendLimitModule,
     AuditModule,
+    TurnstileModule,
     FileStorageModule,
     AuthorizationModule,
     AuthModule,

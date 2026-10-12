@@ -77,6 +77,13 @@ export enum ErrorCode {
   /** Bad, expired or already-used link token (verify-email,
    *  password reset). */
   INVALID_LINK = 'INVALID_LINK',
+  /** A route behind the Turnstile bot check was called without an
+   *  `X-Turnstile-Token` header. Nothing was sent, created or checked. */
+  TURNSTILE_TOKEN_MISSING = 'TURNSTILE_TOKEN_MISSING',
+  /** Cloudflare refused the `X-Turnstile-Token` — bad, expired, already used,
+   *  or minted by the other widget. One code for all of them: the remedy is
+   *  always a fresh token. */
+  TURNSTILE_TOKEN_INVALID = 'TURNSTILE_TOKEN_INVALID',
   /** 400 — sign-up with a disposable / temporary email provider. `details`
    *  is `{ domain: string }`. */
   EMAIL_DOMAIN_DISALLOWED = 'EMAIL_DOMAIN_DISALLOWED',
@@ -133,7 +140,7 @@ export enum ErrorCode {
    *  client must own its backoff rather than rely on the header. */
   RATE_LIMITED = 'RATE_LIMITED',
   /** Third-party integration is unavailable or returned an error
-   *  (SMS / email / storage providers, etc.). */
+   *  (SMS / email / storage providers, the Turnstile check, etc.). */
   EXTERNAL_SERVICE_UNAVAILABLE = 'EXTERNAL_SERVICE_UNAVAILABLE',
   /** Catch-all 500 for unexpected runtime errors. The real exception is
    *  logged server-side; the response never leaks internals. */

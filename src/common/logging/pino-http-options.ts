@@ -50,6 +50,9 @@ export function buildRedactPaths(): string[] {
     `${PINO_REQUEST_KEY}.headers.cookie`,
     `${PINO_REQUEST_KEY}.headers["x-api-key"]`,
     `${PINO_REQUEST_KEY}.headers["proxy-authorization"]`,
+    // Single-use, but replayable until Cloudflare redeems it — and a request
+    // the throttler refuses never reaches Cloudflare at all.
+    `${PINO_REQUEST_KEY}.headers["x-turnstile-token"]`,
     `${PINO_RESPONSE_KEY}.headers["set-cookie"]`,
   ];
 }

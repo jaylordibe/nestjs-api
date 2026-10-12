@@ -132,6 +132,10 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
 - **Swagger:** paginated handlers use `@ApiPaginatedResponse(T)`; others need
   an explicit `@ApiOkResponse`/`@ApiCreatedResponse({ type })`. Mapped types
   import from `@nestjs/swagger`.
+- **Bot check:** every `@Public()` endpoint that sends a text or email,
+  creates an account or checks a password carries `@RequireTurnstile()`; a
+  step that only redeems a code or link one of those issued does not.
+  `TurnstileGuard` says why `Origin` only selects the widget.
 - **Rate limiting:** every `@Public()` or OTP/SMS/email endpoint gets its own
   `@Throttle`. Every email or SMS send also goes through
   `DestinationSendLimitService`, reserving the destination's budget before

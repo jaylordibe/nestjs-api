@@ -2,6 +2,30 @@ import * as Joi from 'joi';
 import { PHONE_OTP_LENGTH } from '../common/constants/phone-otp.constants';
 import { isTrustedProxyList } from '../common/util/trusted-proxy.util';
 
+// Cloudflare's published Turnstile test secrets (`1x…AA`, `2x…AA`, `3x…AA`).
+// The first answers success for ANY token, so one left in a deployed
+// environment switches the bot check off while every boot check still sees a
+// secret present. Matched as a pattern, so case and stray spaces don't slip by.
+const TURNSTILE_TEST_SECRET_KEY_PATTERN = /^\s*\dx0{31}AA\s*$/i;
+
+// Required in staging as well as production: staging is reachable from the
+// internet, and its emails reach real inboxes.
+const turnstileSecretKey = Joi.string()
+  .trim()
+  .empty('')
+  .when('NODE_ENV', {
+    is: Joi.valid('staging', 'production'),
+    then: Joi.string()
+      .pattern(TURNSTILE_TEST_SECRET_KEY_PATTERN, { invert: true })
+      .required()
+      .messages({
+        'any.required':
+          '{{#label}} is required in staging and production — the Turnstile bot check guards emails, sign-ups and password sign-in there.',
+        'string.pattern.invert.base':
+          '{{#label}} is a Cloudflare test secret, which passes any token. Use the secret of a real widget for this environment.',
+      }),
+  });
+
 // The test suite never reaches a real provider: a text is billed, and an
 // email reaches a real person. Tests never read `.env` (`isEnvFileIgnored`),
 // so the stub defaults hold; this refuses the boot if `.env.test` or the
@@ -227,6 +251,12 @@ export const envValidationSchema = Joi.object({
     .valid('true', 'false')
     .allow('')
     .default('false'),
+
+  // Cloudflare Turnstile secret keys, one per widget. Both or neither (the
+  // `.and` below): with one set, a caller could pick the unconfigured widget
+  // and skip the check.
+  TURNSTILE_WEB_SECRET: turnstileSecretKey,
+  TURNSTILE_MOBILE_SECRET: turnstileSecretKey,
 
   // How long a workspace invitation stays redeemable. The token is a bearer
   // credential living in somebody's inbox, so this is bounded on purpose: a
@@ -502,4 +532,9 @@ export const envValidationSchema = Joi.object({
       'any.invalid':
         'TRUST_PROXY must list the trusted proxy hops in production (e.g. "172.30.0.10"); "false" puts every caller behind the proxy in one rate-limit bucket.',
     }),
-});
+})
+  .and('TURNSTILE_WEB_SECRET', 'TURNSTILE_MOBILE_SECRET')
+  .messages({
+    'object.and':
+      'Set both TURNSTILE_WEB_SECRET and TURNSTILE_MOBILE_SECRET, or neither — with only one, the bot check can be skipped by choosing the other widget.',
+  });

@@ -30,6 +30,7 @@ import { OperationAcknowledgementDto } from '../../common/dto/operation-acknowle
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { Public } from '../../common/decorators/public.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { RequireTurnstile } from '../../common/decorators/require-turnstile.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
 import { GdprEraseDto } from './dto/gdpr-erase.dto';
 import { RequestPasswordResetDto } from './dto/request-password-reset.dto';
@@ -59,6 +60,7 @@ export class UsersController {
 
   @Post('request-password-reset')
   @Public()
+  @RequireTurnstile()
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @ApiOkResponse({ type: OperationAcknowledgementDto })

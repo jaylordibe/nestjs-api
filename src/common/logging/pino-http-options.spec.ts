@@ -28,6 +28,7 @@ describe('pino-http options', () => {
   const PROXY_AUTHORIZATION_SECRET = 'Basic dddd-proxy-authorization-secret';
   const RESPONSE_COOKIE_SECRET = 'session=eeee-response-cookie-secret';
   const QUERY_TOKEN_SECRET = 'ffff-query-token-secret';
+  const TURNSTILE_TOKEN_SECRET = 'gggg-turnstile-token-secret';
 
   // Boots a throwaway HTTP server wired to the real options, issues one request
   // carrying every credential shape the API can receive, and returns the raw
@@ -73,6 +74,7 @@ describe('pino-http options', () => {
             cookie: REQUEST_COOKIE_SECRET,
             'x-api-key': API_KEY_SECRET,
             'proxy-authorization': PROXY_AUTHORIZATION_SECRET,
+            'x-turnstile-token': TURNSTILE_TOKEN_SECRET,
           },
         },
         (response) => {
@@ -106,6 +108,7 @@ describe('pino-http options', () => {
     ['Proxy-Authorization header', PROXY_AUTHORIZATION_SECRET],
     ['response Set-Cookie header', RESPONSE_COOKIE_SECRET],
     ['query-string token', QUERY_TOKEN_SECRET],
+    ['X-Turnstile-Token header', TURNSTILE_TOKEN_SECRET],
   ])('never writes the %s to the log', (_label, secret) => {
     expect(logOutput).not.toContain(secret);
   });

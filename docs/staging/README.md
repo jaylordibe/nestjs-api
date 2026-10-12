@@ -161,7 +161,8 @@ openssl rand -base64 32  # → DB_PASSWORD
 openssl rand -base64 32  # → REDIS_PASSWORD
 
 nano .env                # paste secrets, fill hostnames, STORAGE_PROVIDER +
-                         # its STORAGE_* vars, SWAGGER_BASIC_AUTH_*, SEED_*
+                         # its STORAGE_* vars, TURNSTILE_*,
+                         # SWAGGER_BASIC_AUTH_*, SEED_*
 chmod 600 .env
 ```
 
@@ -354,6 +355,7 @@ docker compose logs api | grep 'event=failed'
 
 | Symptom | Likely cause | Check |
 |---|---|---|
+| api won't boot: `TURNSTILE_WEB_SECRET` / `TURNSTILE_MOBILE_SECRET` is required, or is a Cloudflare test secret | A Turnstile secret missing from `.env`, or a test secret left in | Set both widgets' secret keys for this environment (`.env.example`, bot check section) |
 | `502 Bad Gateway` from Caddy | Upstream container down / unhealthy | `docker compose ps`, `docker compose logs api` |
 | `/api/health/readiness` 503 with `queue: down` | API cannot reach Redis to enqueue work | `docker compose ps redis`, then `docker compose logs api \| grep 'Queue health check failed'` for the real cause (it is logged, never returned) |
 | `/api/health/workers` 503, readiness green | Nothing is consuming the queues | `docker compose logs api \| grep QueueProcessor`, check `QUEUE_WORKER_ENABLED` in `.env` |

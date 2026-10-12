@@ -27,3 +27,17 @@ describe('Errors.rateLimited', () => {
     expect(response.message.length).toBeGreaterThan(0);
   });
 });
+
+// The two Turnstile refusals are 400s a client branches on by code alone; the
+// rejected one deliberately carries no `details`, so Cloudflare's own error
+// codes never become part of this contract.
+describe('Errors.turnstileToken*', () => {
+  it.each([
+    [Errors.turnstileTokenMissing(), ErrorCode.TURNSTILE_TOKEN_MISSING],
+    [Errors.turnstileTokenInvalid(), ErrorCode.TURNSTILE_TOKEN_INVALID],
+  ])('carries 400, its code and no details', (exception, errorCode) => {
+    expect(exception.getStatus()).toBe(HttpStatus.BAD_REQUEST);
+    expect(exception.getResponse()).toMatchObject({ errorCode });
+    expect(exception.getResponse()).not.toHaveProperty('details');
+  });
+});

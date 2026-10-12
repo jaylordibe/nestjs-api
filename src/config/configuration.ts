@@ -91,6 +91,14 @@ export interface AppConfig {
     // `cloudflare_only` snippet in docs/prod/Caddyfile).
     trustHeaders: boolean;
   };
+  turnstile: {
+    // Cloudflare Turnstile secret keys, one per widget: `web` for the website,
+    // `mobile` for the app. Both unset turns the bot check off (local
+    // development, the test suite); staging and production refuse to boot
+    // without both, and no environment accepts exactly one.
+    webSecretKey: string | undefined;
+    mobileSecretKey: string | undefined;
+  };
   workspaceInvitation: {
     // How long an invitation token stays redeemable. Bounded because the token
     // is a bearer credential sitting in somebody's inbox: the longer it lives,
@@ -281,6 +289,10 @@ export default (): AppConfig => ({
   },
   cloudflare: {
     trustHeaders: process.env.TRUST_CLOUDFLARE_HEADERS === 'true',
+  },
+  turnstile: {
+    webSecretKey: process.env.TURNSTILE_WEB_SECRET?.trim() || undefined,
+    mobileSecretKey: process.env.TURNSTILE_MOBILE_SECRET?.trim() || undefined,
   },
   workspaceInvitation: {
     expiresInDays: parseInt(

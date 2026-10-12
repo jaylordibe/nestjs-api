@@ -172,6 +172,18 @@ export const Errors = {
       errorCode: ErrorCode.INVALID_LINK,
       message: 'This link is invalid or has expired',
     }),
+  turnstileTokenMissing: (): BadRequestException =>
+    new BadRequestException({
+      errorCode: ErrorCode.TURNSTILE_TOKEN_MISSING,
+      message: 'A bot-check token is required.',
+    }),
+  // No `details`: Cloudflare's own error codes stay in the server log. Every
+  // one a client could cause has the same remedy — get a new token.
+  turnstileTokenInvalid: (): BadRequestException =>
+    new BadRequestException({
+      errorCode: ErrorCode.TURNSTILE_TOKEN_INVALID,
+      message: 'The bot check failed or expired. Please try again.',
+    }),
   // Sign-up with a disposable / temporary email provider.
   emailDomainDisallowed: (domain: string): BadRequestException =>
     new BadRequestException({

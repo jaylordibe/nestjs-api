@@ -220,7 +220,7 @@ openssl rand -base64 32  # → REDIS_PASSWORD
 nano .env                # paste secrets, fill hostnames, STORAGE_PROVIDER +
                          # its STORAGE_* vars, RESEND_API_KEY (or MAILGUN_*),
                          # EMAIL_FROM,
-                         # TWILIO_*, SEED_*
+                         # TWILIO_*, TURNSTILE_*, SEED_*
 chmod 600 .env
 ```
 
@@ -485,6 +485,7 @@ change only, no code change — `src/worker.ts` already bootstraps the same
 
 | Symptom | Likely cause | Check |
 |---|---|---|
+| api won't boot: `TURNSTILE_WEB_SECRET` / `TURNSTILE_MOBILE_SECRET` is required, or is a Cloudflare test secret | A Turnstile secret missing from `.env`, or a test secret left in | Set both widgets' secret keys for this environment (`.env.example`, bot check section) |
 | `502 Bad Gateway` from Caddy | Upstream container down / unhealthy | `docker compose ps`, `docker compose logs api` |
 | `525 SSL handshake failed` from Cloudflare | Origin cert missing or wrong | `ls -la /srv/<service>/certs/`, `docker compose logs caddy` |
 | `526 Invalid SSL certificate` after enabling AOP | `cf-origin-pull-ca.pem` missing, wrong path, or AOP not toggled ON | Re-curl the CA cert, check the dashboard toggle, `docker compose logs caddy` |
