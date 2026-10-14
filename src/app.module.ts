@@ -98,9 +98,9 @@ import { UsersModule } from './modules/users/users.module';
         // These headers are trivially forgeable by anyone who can reach the
         // origin directly, and they land in `audit_logs` — the table whose
         // whole purpose is to be trustworthy after an incident. Defaulting to
-        // OFF means a fork that deploys without the `cloudflare_only` Caddy
-        // snippet records the IP Express actually saw, rather than one the
-        // caller chose for it.
+        // OFF means a fork that deploys without an edge restricted to
+        // Cloudflare's ranges records the IP Express actually saw, rather
+        // than one the caller chose for it.
         const trustCloudflareHeaders = configService.getOrThrow<boolean>(
           'cloudflare.trustHeaders',
         );

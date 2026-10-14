@@ -551,8 +551,8 @@ browser / mobile app → (CDN) → edge proxy → API
 
 Every call, from every client, goes to the public API URL (`API_BASE_URL`).
 Browser origins are listed in `CORS_ORIGIN`; mobile apps are not subject to
-CORS. `TRUST_PROXY` lists the edge proxy only. On the single-VM deployment that
-is Caddy's fixed address, which `docker-compose.yml` sets for you.
+CORS. `TRUST_PROXY` lists the edge proxy only. On a single server, give the
+edge proxy a fixed address on the internal network and list exactly that.
 
 #### Server-rendered — opt-in
 
@@ -562,8 +562,8 @@ browser → (CDN) → edge proxy → API                   (in-browser calls)
 ```
 
 The web server renders pages and calls the API itself. Those server-side calls
-go to the API's internal address (`http://api:3000/api` on the single-VM
-deployment) and carry three headers from the browser's request:
+go to the API's internal address (for example `http://api:3000/api` on a
+private container network) and carry three headers from the browser's request:
 
 - `X-Forwarded-For` — the browser's address, as the edge proxy handed it to the
   web server;
@@ -582,10 +582,10 @@ anything the browser sent. Without the headers or the trust, every visitor of
 the server-rendered app shares the web server's single rate-limit bucket, and
 every session records the web server's address instead of the visitor's.
 
-On the single-VM deployment: give the `web` service a fixed `ipv4_address` from
-the stack subnet (for example `172.30.0.11`, outside the dynamic `ip_range`),
-and replace the api service's `TRUST_PROXY: *caddy-address` with both
-addresses, `172.30.0.10,172.30.0.11`.
+On a single server with Docker Compose: give the web server a fixed
+`ipv4_address` outside the network's dynamic `ip_range`, and set `TRUST_PROXY`
+to both fixed addresses, the edge proxy's and the web server's (for example
+`172.30.0.10,172.30.0.11`).
 
 #### Any other platform
 
@@ -594,9 +594,9 @@ from. Never list a range that other workloads able to reach the API also sit
 in: each of them could then choose its own client address.
 
 A CDN in front of that load balancer is a hop too. Either the load balancer
-replaces `X-Forwarded-For` with the CDN's own client-address header — what the
-single-VM Caddyfile's `proxy_with_client_ip` snippet does with Cloudflare's
-`CF-Connecting-IP` — or `TRUST_PROXY` also lists the CDN's published ranges.
+replaces `X-Forwarded-For` with the CDN's own client-address header (for
+Cloudflare, `CF-Connecting-IP`, accepted only from Cloudflare's published
+ranges) — or `TRUST_PROXY` also lists the CDN's published ranges.
 Otherwise the API stops at the CDN's edge address, and everyone routed through
 one edge shares one rate-limit bucket.
 

@@ -470,8 +470,8 @@ export const envValidationSchema = Joi.object({
   // `configuration.ts` regardless of this value, so setting it to `true` there
   // does nothing. It exists so a staging deployment with no reverse proxy in
   // front of it can hide the docs from the internet without a code change —
-  // the Basic Auth that used to do that job lives in a Caddyfile, and a managed
-  // container platform has no Caddyfile.
+  // Basic Auth at a reverse proxy can do that job, but a managed container
+  // platform may have no proxy to configure.
   SWAGGER_ENABLED: Joi.string()
     .valid('true', 'false')
     .allow('')

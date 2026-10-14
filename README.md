@@ -125,7 +125,7 @@ database is a projection of it (`yarn rbac:sync`) and no endpoint creates a
 role, so granting authority is a reviewable diff rather than an API call. Four
 platform roles separate governance (`PLATFORM_ADMIN`) from technical authority
 (`PLATFORM_ENGINEER`) and from two tiers of support; four workspace roles run
-from owner to member. Ordinary accounts hold no platform role at all. Clients
+from owner to staff. Ordinary accounts hold no platform role at all. Clients
 fetch `GET /users/me/permissions` and rebuild the same CASL ability the server
 uses, so UI checks cannot drift from the backend.
 
@@ -135,7 +135,7 @@ stdout logging and HTTP health checks, and nothing vendor-specific. Storage has
 four adapters (`stub`, `s3`, `gcs`, `azure`), each SDK loaded only when
 selected, and **none accepts a long-lived cloud credential**. The
 [deployment contract](docs/deployment/README.md) maps all of this onto AWS,
-Google Cloud, Azure, Kubernetes, Compose or a single VM.
+Google Cloud, Azure, Kubernetes, or Docker Compose on a single VM.
 
 ## What's included
 
@@ -185,7 +185,7 @@ Google Cloud, Azure, Kubernetes, Compose or a single VM.
 
 - Multi-stage Dockerfile: a non-root runtime under `tini` with npm stripped, plus a separate `migrate` target for the migration job.
 - Swagger UI at `/api/docs`, generated from DTOs. It is always off in production and can be turned off elsewhere.
-- A complete single-VM reference deployment (Docker Compose behind Cloudflare and Caddy), with deploy workflows for staging and production.
+- An image publishing workflow ([`publish-image.yml`](.github/workflows/publish-image.yml)) that, after the test and security gates pass on `main` or `staging`, builds the runtime and `migrate` images, scans the runtime by digest with Trivy, attests build provenance and pushes both to GHCR. It is opt-in (`PUBLISH_ENABLED=true`), holds no server credential and deploys nothing: a single server, a container service or an autoscaled cluster pulls the same images.
 - [`docs/operations.md`](docs/operations.md) separates the operational controls that are enforced from those that are only scaffolded: backups, RPO/RTO, secret rotation, retention, incident response, rollback.
 
 <details>
@@ -361,7 +361,7 @@ src/
     enums/                   # RoleScope, PermissionOwnership, SeededRoleName, Gender, AppPlatform, …
     filters/                 # GlobalExceptionFilter (single unified filter)
     errors/                  # AppException, ErrorCode catalog, Errors factory
-    email/                   # EmailService, adapters (stub/resend), typed Handlebars templates
+    email/                   # EmailService, adapters (stub/resend/mailgun), typed Handlebars templates
     sms/                     # SmsService, adapters (stub/twilio)
     storage/                 # FileStorageService, adapters (stub/s3/gcs/azure)
     logging/                 # pino-http options (redaction, request id)
@@ -414,14 +414,16 @@ needed to build, run or test the API.
 
 Start with the [deployment contract](docs/deployment/README.md): runtime
 commands, container, database, Redis, storage, secrets, health and environment.
-A deploy runs the migration job (`yarn prisma:deploy && yarn rbac:sync`) to
-completion, then rolls out the API with `QUEUE_WORKER_ENABLED=false` and the
+This repository publishes images and leaves deploying to your platform. Deploy
+**by digest**. Each deploy runs the `migrate` image (`yarn prisma:deploy && yarn rbac:sync`)
+to completion, then rolls out the API with `QUEUE_WORKER_ENABLED=false` and the
 worker with `QUEUE_WORKER_ENABLED=true`.
 
 <details>
 <summary><b>Production checklist</b>: confirm these before the first real deploy</summary>
 
 - [ ] `JWT_SECRET` regenerated per environment (`openssl rand -hex 48`). Validation refuses a blank, short or template value at boot.
+- [ ] `TURNSTILE_WEB_SECRET` and `TURNSTILE_MOBILE_SECRET` set to real widget secrets. Both are required in staging and production, and Cloudflare's test secrets are refused there.
 - [ ] `CORS_ORIGIN` set to an explicit origin list (`*` is refused in `NODE_ENV=production`).
 - [ ] `TRUST_PROXY` lists the addresses of the proxy hops in front of the API, and only those — see "Client topologies" in [`docs/deployment/README.md`](docs/deployment/README.md).
 - [ ] `TRUST_CLOUDFLARE_HEADERS` left at `false` **unless** the origin is provably unreachable except through Cloudflare (an edge or firewall that admits only Cloudflare's ranges). These headers are forgeable by anyone who can reach the origin directly, and they are written into `audit_logs`, the table an incident responder trusts.
