@@ -424,7 +424,7 @@ worker with `QUEUE_WORKER_ENABLED=true`.
 - [ ] `JWT_SECRET` regenerated per environment (`openssl rand -hex 48`). Validation refuses a blank, short or template value at boot.
 - [ ] `CORS_ORIGIN` set to an explicit origin list (`*` is refused in `NODE_ENV=production`).
 - [ ] `TRUST_PROXY` lists the addresses of the proxy hops in front of the API, and only those — see "Client topologies" in [`docs/deployment/README.md`](docs/deployment/README.md).
-- [ ] `TRUST_CLOUDFLARE_HEADERS` left at `false` **unless** the origin is provably unreachable except through Cloudflare (an edge that admits only Cloudflare's ranges, such as the [jaylordibe/cicd](https://github.com/jaylordibe/cicd) kit's `cloudflare` mode). These headers are forgeable by anyone who can reach the origin directly, and they are written into `audit_logs`, the table an incident responder trusts.
+- [ ] `TRUST_CLOUDFLARE_HEADERS` left at `false` **unless** the origin is provably unreachable except through Cloudflare (an edge or firewall that admits only Cloudflare's ranges). These headers are forgeable by anyone who can reach the origin directly, and they are written into `audit_logs`, the table an incident responder trusts.
 - [ ] `EMAIL_PROVIDER=resend` (with `RESEND_API_KEY`) or `mailgun` (with `MAILGUN_API_KEY` and `MAILGUN_DOMAIN`), and `EMAIL_FROM` on a domain verified with that provider, with DKIM/SPF/DMARC in DNS.
 - [ ] `OTEL_EXPORTER_OTLP_ENDPOINT` pointed at an OpenTelemetry Collector (traces and metrics), with an error tracker wired behind it or into pino.
 - [ ] Managed PostgreSQL point-in-time recovery (PITR) enabled.
@@ -451,7 +451,7 @@ worker with `QUEUE_WORKER_ENABLED=true`.
 | [Error contract](src/common/errors/README.md) | The error envelope and `ErrorCode` catalog |
 | [Resource pattern](docs/resource-pattern.md) | Skeletons for a new CRUD resource |
 | [Deployment contract](docs/deployment/README.md) | What the application needs from any platform |
-| [Deployment overview](docs/README.md) | Publishing images, and deploying them to one server with [jaylordibe/cicd](https://github.com/jaylordibe/cicd) |
+| [Deployment overview](docs/README.md) | Publishing images, and what any platform must provide |
 | [Operational readiness](docs/operations.md) | Which operational controls are enforced, and which are only scaffolded |
 
 ## Stack

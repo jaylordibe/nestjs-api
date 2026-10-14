@@ -246,7 +246,7 @@ export const envValidationSchema = Joi.object({
   // persisted into `audit_logs`. A fork that deploys without restricting the
   // origin to Cloudflare's ranges records no country or ray id rather than
   // ones the caller chose. Turn it on only behind an edge that admits nothing
-  // but Cloudflare's ranges (e.g. the jaylordibe/cicd kit's `cloudflare` mode).
+  // but Cloudflare's ranges.
   TRUST_CLOUDFLARE_HEADERS: Joi.string()
     .valid('true', 'false')
     .allow('')

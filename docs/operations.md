@@ -25,13 +25,13 @@ down. Where the answer is "you have to do this", it says so.
 
 | Control | Status | Where |
 |---|---|---|
-| Daily Postgres dump | ❌ Operator-owned | Not in this repository. The single-server deployer ([jaylordibe/cicd](https://github.com/jaylordibe/cicd)) dumps nightly and before every deploy, keeping 14 per component and refusing an empty dump. |
-| Backup **scheduling** | ❌ Operator-owned | That deployer installs a nightly timer. Elsewhere, until you schedule one, **there are no backups.** |
-| Off-site copy | ❌ Operator-owned | That deployer's dumps land on the same host as the database unless its rclone copy is configured. A host loss loses both. |
-| Backup **encryption** | ❌ Operator-owned | `gzip`, not `gpg`. The dump contains every user's PII and bcrypt hashes in plaintext-at-rest. |
-| Restore **verification** | ❌ Operator-owned | The restore command is documented; nothing exercises it. An unverified backup is a hypothesis, not a recovery plan. |
-| Managed PITR | ❌ Operator-owned | On the production checklist in the root `README.md`. Strongly preferred over the dump script — it is the only option here that gives a real RPO. |
-| Redis durability | ❌ Operator-owned | AOF is the deployer's setting (the jaylordibe/cicd `nestjs-api` template runs `--appendonly yes` on a volume). **Queued jobs are exactly as durable as the Redis they live in**, and there is deliberately no in-memory fallback. |
+| Daily Postgres dump | ❌ Operator-owned | Not in this repository. Your platform's managed backups, or a scheduled `pg_dump` you run. |
+| Backup **scheduling** | ❌ Operator-owned | Until you schedule one, **there are no backups.** |
+| Off-site copy | ❌ Operator-owned | A dump kept on the same host as the database is lost with that host. |
+| Backup **encryption** | ❌ Operator-owned | A plain dump contains every user's PII and bcrypt hashes in plaintext-at-rest. |
+| Restore **verification** | ❌ Operator-owned | Nothing in this repository exercises a restore. An unverified backup is a hypothesis, not a recovery plan. |
+| Managed PITR | ❌ Operator-owned | On the production checklist in the root `README.md`. Strongly preferred over plain dumps — it is the only option here that gives a real RPO. |
+| Redis durability | ❌ Operator-owned | Enable AOF (`appendonly yes` on persistent storage) or use a managed Redis with persistence. **Queued jobs are exactly as durable as the Redis they live in**, and there is deliberately no in-memory fallback. |
 
 ### RPO / RTO
 

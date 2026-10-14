@@ -363,10 +363,9 @@ describe('External exposure (e2e)', () => {
     });
   });
 
-  // Staging and development serve Swagger; the edge protects it by matching
-  // one subtree, /api/docs (the deployer's edge config — jaylordibe/cicd's
-  // nestjs-api site template, which that repository's tests assert). That only
-  // holds while Swagger registers nothing outside the subtree.
+  // Staging and development serve Swagger; an edge protects it by matching
+  // one subtree, /api/docs. That only holds while Swagger registers nothing
+  // outside the subtree.
   describe('Swagger-enabled runtime', () => {
     let app: INestApplication<App>;
 

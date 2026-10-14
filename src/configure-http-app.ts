@@ -42,7 +42,7 @@ export class SingleAppExpressAdapter extends ExpressAdapter {
 
 // Everything Swagger serves — the UI, its init script (which embeds the whole
 // document), and the raw JSON and YAML documents — lives under this ONE
-// subtree. The edge (the deployer's; jaylordibe/cicd's nestjs-api site) protects the subtree, not a list
+// subtree. An edge that protects it should match the subtree, not a list
 // of file names: Swagger's defaults put the raw documents at SIBLINGS
 // (`/api/docs-json`, `/api/docs-yaml`), which a subtree match cannot see and a
 // hand-kept list silently misses.

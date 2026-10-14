@@ -188,9 +188,6 @@ automated deploy will not give you one:
 2. Run the migration image against a database nothing is reading.
 3. Start the new revision.
 
-On the jaylordibe/cicd single-server kit that is `docker compose -p <project> stop
-<api>`, then `kit deploy` of the new release (its migrate step runs first).
-
 Review each migration for this before release: a dropped column the running build
 still selects (Prisma selects every scalar column) is enough. Rolling back a schema
 change means restoring a backup, not redeploying — so confirm you have a
@@ -622,7 +619,7 @@ changes is which values the platform injects and which identity it attaches.
 
 ---
 
-## Publishing, and who deploys
+## Publishing images
 
 This repository **publishes**; it never deploys. `.github/workflows/publish-image.yml`
 runs the tests and the security scan, then pushes both images (runtime and
@@ -632,11 +629,10 @@ only then moves the `main` / `staging` tag (migrate first). Enable it with the
 repository variable `PUBLISH_ENABLED=true`. Attestations need a public repository,
 or a plan that supports them on private ones (`ATTEST_PROVENANCE=true`).
 
-A deployer deploys **by digest**, only digests attested by that workflow, and runs
-the `migrate` image to completion before the new runtime serves (section 2). For
-one server, [jaylordibe/cicd](https://github.com/jaylordibe/cicd) does exactly that:
-its `nestjs-api` template, its Caddy edge (including a Cloudflare-only mode) and
-its backups replace the single-VM Compose files this repository used to carry.
+Deploying is left to your platform: a single server, a container service or an
+autoscaled cluster. Whichever it is, deploy **by digest** (ideally only digests
+attested by that workflow) and run the `migrate` image to completion before the
+new runtime serves (section 2).
 
 ## Other deployment material in this repository
 

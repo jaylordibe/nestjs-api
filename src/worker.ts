@@ -15,7 +15,7 @@ import { QueueWorkerRegistrar } from './common/queue/queue-worker.registrar';
 
 // How long a shutting-down worker waits for its active jobs before giving up
 // and logging an incomplete shutdown. Deliberately under the termination grace
-// period the deployer gives the container (above 25s: "Shutdown" in
+// period the platform gives the container (above 25s: "Shutdown" in
 // docs/deployment/README.md), so the process reports what it abandoned instead
 // of being SIGKILLed mid-sentence. Lives here rather than in the queue registry: it is a budget
 // for this PROCESS, not a property of any queue or job.

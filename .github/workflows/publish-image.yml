@@ -5,20 +5,20 @@ name: Publish image
 #   ghcr.io/<owner>/<repo>           the runtime (API: node dist/main.js; worker: node dist/worker.js)
 #   ghcr.io/<owner>/<repo>-migrate   the Dockerfile `migrate` target (prisma deploy + rbac:sync)
 #
-# It DEPLOYS NOTHING and holds no server credential. Deploying belongs to the
-# deployer (for a single server, jaylordibe/cicd), which runs only images this
-# workflow attested; docs/deployment/README.md is the contract it follows.
+# It DEPLOYS NOTHING and holds no server credential: whatever platform you deploy
+# with pulls the images from the registry. docs/deployment/README.md is the
+# contract a deployment follows.
 #
 # Publishing is OPT-IN through the repository variable PUBLISH_ENABLED=true, so a
 # fresh clone runs the gates and skips the push.
 #
 # Order matters: each image is pushed under its immutable `sha-<commit>` tag, and
 # the runtime is scanned by digest before either is attested or given the moving
-# branch tag. A runtime that fails the scan has no attestation, and the deployer
-# refuses it. (The migrate image's scan reports and does not block; see below.)
+# branch tag. A runtime that fails the scan has no attestation, so a deployment
+# that verifies attestations refuses it. (The migrate image's scan reports and does not block; see below.)
 #
 # Unlike this repository's other workflows, every action here is pinned by commit
-# SHA: this job holds packages: write and signs the provenance a deployer trusts,
+# SHA: this job holds packages: write and signs the provenance a deployment trusts,
 # so a moved tag would let someone else's code sign images as this workflow.
 
 on:
@@ -154,7 +154,7 @@ jobs:
       - name: Attest the runtime
         # Attestations need a public repository, or a GitHub plan that supports them for
         # private ones; set ATTEST_PROVENANCE=true on such a plan. Without one, the
-        # deployer's component must say provenance=none.
+        # image is published unattested.
         if: ${{ github.event.repository.visibility == 'public' || vars.ATTEST_PROVENANCE == 'true' }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -165,7 +165,7 @@ jobs:
       - name: Attest the migrate image
         # Attestations need a public repository, or a GitHub plan that supports them for
         # private ones; set ATTEST_PROVENANCE=true on such a plan. Without one, the
-        # deployer's component must say provenance=none.
+        # image is published unattested.
         if: ${{ github.event.repository.visibility == 'public' || vars.ATTEST_PROVENANCE == 'true' }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -179,7 +179,7 @@ jobs:
           RUNTIME_DIGEST: ${{ steps.runtime.outputs.digest }}
           MIGRATE: ${{ steps.name.outputs.migrate }}
           MIGRATE_DIGEST: ${{ steps.migrate.outputs.digest }}
-        # Migrate first: a deployer that reads the runtime tag then derives the migrate
+        # Migrate first: a deployment that reads the runtime tag then derives the migrate
         # image from the same tag, so the pair is never runtime-new, migrate-old.
         run: |
           docker buildx imagetools create --tag "$MIGRATE:$GITHUB_REF_NAME" "$MIGRATE@$MIGRATE_DIGEST"
@@ -195,24 +195,3 @@ jobs:
             echo "- runtime: \`$RUNTIME\`"
             echo "- migrate: \`$MIGRATE\`"
           } >> "$GITHUB_STEP_SUMMARY"
-
-      # Optional: ask the deployer for a STAGING deploy of what was just published.
-      # Production is always started by a person, in the deployer. Set the variables
-      # DEPLOY_DISPATCH_REPO (owner/repo), DEPLOY_DISPATCH_PROJECT and
-      # DEPLOY_DISPATCH_COMPONENT, and the secret DEPLOY_DISPATCH_TOKEN: a fine-grained
-      # token with ONLY Actions: write on that repository. It can start the
-      # deployer's Deploy workflow; it cannot change a file there.
-      - name: Ask for a staging deploy
-        if: ${{ github.ref == 'refs/heads/staging' && vars.DEPLOY_DISPATCH_REPO != '' }}
-        env:
-          GH_TOKEN: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}
-          REPO: ${{ vars.DEPLOY_DISPATCH_REPO }}
-          PROJECT: ${{ vars.DEPLOY_DISPATCH_PROJECT }}
-          COMPONENT: ${{ vars.DEPLOY_DISPATCH_COMPONENT }}
-          IMAGE: ${{ steps.name.outputs.runtime }}@${{ steps.runtime.outputs.digest }}
-          MIGRATE: ${{ steps.name.outputs.migrate }}@${{ steps.migrate.outputs.digest }}
-        run: |
-          gh workflow run deploy.yml --repo "$REPO" --ref main \
-            -f environment=staging -f project="$PROJECT" -f component="$COMPONENT" \
-            -f image="$IMAGE" \
-            -f migrate_image="$MIGRATE"

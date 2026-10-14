@@ -21,34 +21,25 @@ Three commands deploy it anywhere:
 > CRUD / resource scaffolding lives in [`resource-pattern.md`](./resource-pattern.md),
 > not here — this directory is deployment-only.
 
-## This repository publishes; a deployer deploys
+## This repository publishes; your platform deploys
 
 `.github/workflows/publish-image.yml` builds, scans and publishes the runtime and
 `migrate` images to GHCR on every push to `main` or `staging`, with a
 build-provenance attestation, once the repository variable `PUBLISH_ENABLED=true`
-is set. It holds no server credential and deploys nothing.
+is set. It holds no server credential and deploys nothing: a single server, a
+container service or an autoscaled cluster pulls the same images, and
+[`deployment/`](./deployment/README.md) is the contract each must satisfy.
 
-**One server, several projects:** [jaylordibe/cicd](https://github.com/jaylordibe/cicd)
-deploys these images to a single VM behind Caddy. Its `nestjs-api` template is the
-production shape this directory used to carry as Compose files:
-- the API with its in-process queue worker;
-- its own PostgreSQL and Redis (AOF) on a private network;
-- the `migrate` image run before every rollout;
-- Caddy as the edge, including a Cloudflare-only mode (Origin Certificate, Authenticated Origin Pulls, Cloudflare's ranges);
-- nightly and pre-deploy database dumps.
+If you run it on **one server with no autoscaler**:
 
-Its README covers the setup, adding an SPA next to the API, and the rest of the runbook.
-
-What that single-server shape assumes, wherever you run it:
-
-- **One process runs both API and worker** (`QUEUE_WORKER_ENABLED=true`). That is
-  correct on one box with no autoscaler, and wrong the moment the API scales
-  horizontally: every instance would then consume jobs and race to reconcile the
-  same recurring schedules. Split the worker out first (`deployment/README.md`).
+- **One process may run both API and worker** (`QUEUE_WORKER_ENABLED=true`). That
+  is wrong the moment the API scales horizontally: every instance would then
+  consume jobs and race to reconcile the same recurring schedules. Split the
+  worker out first (`deployment/README.md`).
 - **`TRUST_PROXY` is the edge's one fixed address.** Behind Cloudflare, the edge,
   not the application, turns `CF-Connecting-IP` into the client address.
-- **Swagger is protected by the edge** on staging (basic auth on the one
-  `/api/docs` subtree) and turned off by the application in production.
+- **Protect Swagger at the edge** on staging (for example basic auth on the one
+  `/api/docs` subtree); the application turns it off in production.
 
 **Before you run any of this against real data, read
 [`operations.md`](./operations.md).** It is an honest inventory of which operational
