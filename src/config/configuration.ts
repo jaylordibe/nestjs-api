@@ -87,8 +87,9 @@ export interface AppConfig {
     // They are ordinary request headers: anyone who can reach the origin
     // directly can set them to anything, and they are recorded into
     // `audit_logs` — the table an incident responder trusts. Enable ONLY when
-    // the origin is provably unreachable except through Cloudflare (see the
-    // `cloudflare_only` snippet in docs/prod/Caddyfile).
+    // the origin is provably unreachable except through Cloudflare (an edge that
+    // admits only Cloudflare's ranges, such as the `cloudflare` TLS mode of the
+    // jaylordibe/cicd single-server kit).
     trustHeaders: boolean;
   };
   turnstile: {

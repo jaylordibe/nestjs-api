@@ -207,5 +207,5 @@ consumer is updated or recorded as unaffected, with the deploy order stated.
 | Background work (immediate, delayed, recurring) | `src/common/queue/README.md` |
 | Error envelope and `ErrorCode` catalog | `src/common/errors/README.md` |
 | Deployment contract | `docs/deployment/README.md` |
-| Single-VM deployment | `docs/README.md`, `docs/prod/`, `docs/staging/` |
+| Publishing images; single-server deployment | `.github/workflows/publish-image.yml`, `docs/README.md` (deployed by jaylordibe/cicd) |
 | Which operational controls are enforced | `docs/operations.md` |

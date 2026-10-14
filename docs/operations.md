@@ -25,13 +25,13 @@ down. Where the answer is "you have to do this", it says so.
 
 | Control | Status | Where |
 |---|---|---|
-| Daily Postgres dump | ⚙️ Scaffolded | `docs/prod/backup.sh` — gzipped, 14-day retention, refuses to keep an empty file |
-| Backup **scheduling** | ❌ Operator-owned | The script documents a cron line. Nothing installs it. Until you do, **there are no backups.** |
-| Off-site copy | ❌ Operator-owned | Dumps land in `./backups/` on the same host and the same disk as the database. A host loss loses both. |
+| Daily Postgres dump | ❌ Operator-owned | Not in this repository. The single-server deployer ([jaylordibe/cicd](https://github.com/jaylordibe/cicd)) dumps nightly and before every deploy, keeping 14 per component and refusing an empty dump. |
+| Backup **scheduling** | ❌ Operator-owned | That deployer installs a nightly timer. Elsewhere, until you schedule one, **there are no backups.** |
+| Off-site copy | ❌ Operator-owned | That deployer's dumps land on the same host as the database unless its rclone copy is configured. A host loss loses both. |
 | Backup **encryption** | ❌ Operator-owned | `gzip`, not `gpg`. The dump contains every user's PII and bcrypt hashes in plaintext-at-rest. |
 | Restore **verification** | ❌ Operator-owned | The restore command is documented; nothing exercises it. An unverified backup is a hypothesis, not a recovery plan. |
 | Managed PITR | ❌ Operator-owned | On the production checklist in the root `README.md`. Strongly preferred over the dump script — it is the only option here that gives a real RPO. |
-| Redis durability | ✅ Implemented | AOF enabled in `docs/prod/docker-compose.yml`. **Queued jobs are exactly as durable as the Redis they live in**, and there is deliberately no in-memory fallback. |
+| Redis durability | ❌ Operator-owned | AOF is the deployer's setting (the jaylordibe/cicd `nestjs-api` template runs `--appendonly yes` on a volume). **Queued jobs are exactly as durable as the Redis they live in**, and there is deliberately no in-memory fallback. |
 
 ### RPO / RTO
 
@@ -86,7 +86,7 @@ cannot, without work.
 
 | Control | Status | Where |
 |---|---|---|
-| Migration-vs-data safety gate | ❌ Not implemented | CI applies migrations to an empty database only (e2e). Whether a migration applies to populated data, and whether the released build can serve on the new schema during the swap window, is a review-time check — see `docs/prod/README.md` → "When a release is NOT backwards-compatible". |
+| Migration-vs-data safety gate | ❌ Not implemented | CI applies migrations to an empty database only (e2e). Whether a migration applies to populated data, and whether the released build can serve on the new schema during the swap window, is a review-time check — see "A release that is not backwards-compatible" in `docs/deployment/README.md`. |
 | Connection-pool sizing | ✅ Implemented (sizing operator-owned) | Explicit pg pool: `DATABASE_POOL_MAX` (default 10) with a bounded acquire timeout (`DATABASE_CONNECTION_TIMEOUT_MS`). Every API and worker process holds its own pool — keep (instances × `DATABASE_POOL_MAX`) under `max_connections`; see `docs/deployment/README.md` §3. |
 
 ### Expand/contract policy

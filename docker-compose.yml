@@ -1,5 +1,5 @@
-# Local development and e2e only — production uses docs/prod/docker-compose.yml,
-# which publishes no data-service port at all. Ports bind to loopback so a
+# Local development and e2e only — production runs the published images under a
+# deployer (docs/deployment/README.md), which publishes no data-service port at all. Ports bind to loopback so a
 # laptop on a shared network does not offer its database, Redis or object
 # storage (whose credentials fall back to a fixed local default) to that network.
 services:

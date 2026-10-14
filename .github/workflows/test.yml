@@ -15,8 +15,8 @@ on:
       - develop
   # Makes this workflow callable from other workflows as
   # `jobs.<name>.uses: ./.github/workflows/test.yml`. Needed by the
-  # deploy-production / deploy-staging workflows that gate their deploys
-  # on a passing test run. No `inputs` or `secrets` are declared, and no
+  # publish-image workflow, which gates every published image on a passing
+  # test run. No `inputs` or `secrets` are declared, and no
   # `env:` either — all configuration comes from the committed `.env.test`
   # (see the note on the `ci` job).
   workflow_call:

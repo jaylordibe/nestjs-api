@@ -23,7 +23,7 @@
 // no-answer re-opens it for a further window.
 //
 // In memory, per process — correct while each environment runs one API process
-// (docs/prod/docker-compose.yml, docs/staging/docker-compose.yml). With several
+// (the single-server deployment: one `api` container per environment). With several
 // replicas each would trip and recover on its own; revisit when the API runs
 // more than one.
 

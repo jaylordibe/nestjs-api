@@ -1,0 +1,218 @@
+name: Publish image
+
+# Builds, scans and publishes the two production images to GHCR:
+#
+#   ghcr.io/<owner>/<repo>           the runtime (API: node dist/main.js; worker: node dist/worker.js)
+#   ghcr.io/<owner>/<repo>-migrate   the Dockerfile `migrate` target (prisma deploy + rbac:sync)
+#
+# It DEPLOYS NOTHING and holds no server credential. Deploying belongs to the
+# deployer (for a single server, jaylordibe/cicd), which runs only images this
+# workflow attested; docs/deployment/README.md is the contract it follows.
+#
+# Publishing is OPT-IN through the repository variable PUBLISH_ENABLED=true, so a
+# fresh clone runs the gates and skips the push.
+#
+# Order matters: each image is pushed under its immutable `sha-<commit>` tag, and
+# the runtime is scanned by digest before either is attested or given the moving
+# branch tag. A runtime that fails the scan has no attestation, and the deployer
+# refuses it. (The migrate image's scan reports and does not block; see below.)
+#
+# Unlike this repository's other workflows, every action here is pinned by commit
+# SHA: this job holds packages: write and signs the provenance a deployer trusts,
+# so a moved tag would let someone else's code sign images as this workflow.
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+  workflow_dispatch:
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # `workflow_dispatch` accepts any ref; only `main` and `staging` publish.
+  guard:
+    name: Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Refuse refs other than main and staging
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          case "$REF" in
+            refs/heads/main|refs/heads/staging) echo "publishing from $REF" ;;
+            *) echo "::error::refusing to publish from '${REF}'; only main and staging publish."; exit 1 ;;
+          esac
+
+  test:
+    name: Test
+    needs: guard
+    uses: ./.github/workflows/test.yml
+
+  # Dependency advisories and the Trivy filesystem scan, called here so they gate
+  # the publish and not only pull requests and the weekly cron.
+  security:
+    name: Security
+    needs: guard
+    uses: ./.github/workflows/security.yml
+
+  publish:
+    name: Build, scan and publish
+    needs: [test, security]
+    if: ${{ vars.PUBLISH_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Name the images
+        id: name
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "runtime=$image" >> "$GITHUB_OUTPUT"
+          echo "migrate=$image-migrate" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push the runtime (immutable tag only)
+        id: runtime
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          pull: true
+          build-args: GIT_SHA=${{ github.sha }}
+          tags: ${{ steps.name.outputs.runtime }}:sha-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push the migrate image (immutable tag only)
+        id: migrate
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: migrate
+          push: true
+          pull: true
+          build-args: GIT_SHA=${{ github.sha }}
+          tags: ${{ steps.name.outputs.migrate }}:sha-${{ github.sha }}
+          cache-from: type=gha
+
+      # The runtime serves traffic: HIGH or CRITICAL blocks the publish, as in
+      # test.yml's image scan. Same exact-version pin as there, for the same reason.
+      - name: Scan the runtime digest
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ github.token }}
+        with:
+          image-ref: ${{ steps.name.outputs.runtime }}@${{ steps.runtime.outputs.digest }}
+          format: table
+          exit-code: '1'
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+          trivyignores: '.trivyignore'
+
+      # The migrate image is the build stage: the full dev toolchain, run for
+      # seconds per deploy, serving nothing. Its findings are REPORTED, not
+      # blocking — a dev-only advisory must not stop a release. Read them.
+      - name: Scan the migrate digest (report only)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ github.token }}
+        with:
+          image-ref: ${{ steps.name.outputs.migrate }}@${{ steps.migrate.outputs.digest }}
+          format: table
+          exit-code: '0'
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+          trivyignores: '.trivyignore'
+
+      - name: Attest the runtime
+        # Attestations need a public repository, or a GitHub plan that supports them for
+        # private ones; set ATTEST_PROVENANCE=true on such a plan. Without one, the
+        # deployer's component must say provenance=none.
+        if: ${{ github.event.repository.visibility == 'public' || vars.ATTEST_PROVENANCE == 'true' }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.name.outputs.runtime }}
+          subject-digest: ${{ steps.runtime.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest the migrate image
+        # Attestations need a public repository, or a GitHub plan that supports them for
+        # private ones; set ATTEST_PROVENANCE=true on such a plan. Without one, the
+        # deployer's component must say provenance=none.
+        if: ${{ github.event.repository.visibility == 'public' || vars.ATTEST_PROVENANCE == 'true' }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.name.outputs.migrate }}
+          subject-digest: ${{ steps.migrate.outputs.digest }}
+          push-to-registry: true
+
+      - name: Tag the branch
+        env:
+          RUNTIME: ${{ steps.name.outputs.runtime }}
+          RUNTIME_DIGEST: ${{ steps.runtime.outputs.digest }}
+          MIGRATE: ${{ steps.name.outputs.migrate }}
+          MIGRATE_DIGEST: ${{ steps.migrate.outputs.digest }}
+        # Migrate first: a deployer that reads the runtime tag then derives the migrate
+        # image from the same tag, so the pair is never runtime-new, migrate-old.
+        run: |
+          docker buildx imagetools create --tag "$MIGRATE:$GITHUB_REF_NAME" "$MIGRATE@$MIGRATE_DIGEST"
+          docker buildx imagetools create --tag "$RUNTIME:$GITHUB_REF_NAME" "$RUNTIME@$RUNTIME_DIGEST"
+
+      - name: Summary
+        env:
+          RUNTIME: ${{ steps.name.outputs.runtime }}@${{ steps.runtime.outputs.digest }}
+          MIGRATE: ${{ steps.name.outputs.migrate }}@${{ steps.migrate.outputs.digest }}
+        run: |
+          {
+            echo "Published (\`:$GITHUB_REF_NAME\`):"
+            echo "- runtime: \`$RUNTIME\`"
+            echo "- migrate: \`$MIGRATE\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Optional: ask the deployer for a STAGING deploy of what was just published.
+      # Production is always started by a person, in the deployer. Set the variables
+      # DEPLOY_DISPATCH_REPO (owner/repo), DEPLOY_DISPATCH_PROJECT and
+      # DEPLOY_DISPATCH_COMPONENT, and the secret DEPLOY_DISPATCH_TOKEN: a fine-grained
+      # token with ONLY Actions: write on that repository. It can start the
+      # deployer's Deploy workflow; it cannot change a file there.
+      - name: Ask for a staging deploy
+        if: ${{ github.ref == 'refs/heads/staging' && vars.DEPLOY_DISPATCH_REPO != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}
+          REPO: ${{ vars.DEPLOY_DISPATCH_REPO }}
+          PROJECT: ${{ vars.DEPLOY_DISPATCH_PROJECT }}
+          COMPONENT: ${{ vars.DEPLOY_DISPATCH_COMPONENT }}
+          IMAGE: ${{ steps.name.outputs.runtime }}@${{ steps.runtime.outputs.digest }}
+          MIGRATE: ${{ steps.name.outputs.migrate }}@${{ steps.migrate.outputs.digest }}
+        run: |
+          gh workflow run deploy.yml --repo "$REPO" --ref main \
+            -f environment=staging -f project="$PROJECT" -f component="$COMPONENT" \
+            -f image="$IMAGE" \
+            -f migrate_image="$MIGRATE"

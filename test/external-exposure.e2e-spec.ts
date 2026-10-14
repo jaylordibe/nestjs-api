@@ -47,7 +47,6 @@ const SENSITIVE_FILES = [
   'src/main.ts',
   'dist/main.js',
   'dist/main.js.map',
-  'docs/prod/backup.sh',
 ];
 
 const PROBE_PATHS = [
@@ -74,7 +73,6 @@ const PROBE_PATHS = [
   '/dist/main.js.map',
   '/api/main.js.map',
   '/node_modules/.prisma/client/schema.prisma',
-  '/docs/prod/backup.sh',
   '/backups/',
   '/logs/',
   '/uploads/',
@@ -196,7 +194,7 @@ const PRODUCTION_ENV = {
   SWAGGER_ENABLED: 'true',
   CORS_ORIGIN: 'https://www.example.test',
   // supertest connects over loopback, so the test client is the listed hop —
-  // the role Caddy plays in docs/prod/docker-compose.yml.
+  // the role the edge proxy plays in a deployment (docs/deployment/README.md).
   TRUST_PROXY: '127.0.0.1',
   EMAIL_PROVIDER: 'resend',
   EMAIL_FROM: 'no-reply@example.test',
@@ -290,7 +288,7 @@ describe('External exposure (e2e)', () => {
       expect(response.body).not.toMatch(/rediss?:\/\//);
     });
 
-    // The edge (docs/prod/Caddyfile) hands the app ONE forwarded address — the
+    // The edge proxy hands the app ONE forwarded address — the
     // client's. With the production TRUST_PROXY, per-IP limits must key on that
     // address, not on the proxy in front: the defect this guards against put
     // every caller behind Cloudflare in one bucket. Runs on the Redis-backed
@@ -366,8 +364,9 @@ describe('External exposure (e2e)', () => {
   });
 
   // Staging and development serve Swagger; the edge protects it by matching
-  // one subtree (docs/staging/Caddyfile). That only holds while Swagger
-  // registers nothing outside the subtree.
+  // one subtree, /api/docs (the deployer's edge config — jaylordibe/cicd's
+  // nestjs-api site template, which that repository's tests assert). That only
+  // holds while Swagger registers nothing outside the subtree.
   describe('Swagger-enabled runtime', () => {
     let app: INestApplication<App>;
 
@@ -386,46 +385,6 @@ describe('External exposure (e2e)', () => {
     afterAll(async () => {
       await app.close();
     });
-
-    // The subtree is named twice — here and in the Caddy matcher — so tie
-    // them: moving SWAGGER_UI_PATH without the edge would leave staging's
-    // schema served from a path the basic-auth matcher no longer covers.
-    it.each(['docs/staging/Caddyfile', 'docs/prod/Caddyfile'])(
-      '%s matches exactly the Swagger subtree',
-      (caddyfile) => {
-        const contents = readFileSync(
-          resolve(REPOSITORY_ROOT, caddyfile),
-          'utf8',
-        );
-        expect(contents).toContain(
-          `@docs path /${SWAGGER_UI_PATH} /${SWAGGER_UI_PATH}/*\n`,
-        );
-        // The client address per-IP limits and the audit trail key on — see
-        // 'keys per-IP rate limits on the forwarded client address'. Every
-        // site proxies through the one snippet that sets it: a bare
-        // `reverse_proxy` anywhere else would hand its upstream Cloudflare's
-        // address instead of the caller's.
-        expect(contents).toContain(
-          'header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}',
-        );
-        expect(contents.match(/^[\t ]*reverse_proxy /gm)).toEqual([
-          '\treverse_proxy ',
-        ]);
-        expect(contents).toContain(
-          '\treverse_proxy {args[0]} {\n' +
-            '\t\theader_up X-Forwarded-For {http.request.header.CF-Connecting-IP}\n',
-        );
-        expect(
-          contents.match(/^[\t ]*import proxy_with_client_ip \S+$/gm),
-        ).toEqual([
-          '\timport proxy_with_client_ip api:3000',
-          '\timport proxy_with_client_ip web:80',
-        ]);
-        if (caddyfile.includes('staging')) {
-          expect(contents).toMatch(/^\s*basic_auth @docs \{/m);
-        }
-      },
-    );
 
     it('points the DAST scan at the served JSON document', () => {
       const workflow = readFileSync(

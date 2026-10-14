@@ -172,6 +172,30 @@ Rollback reverses the order, which is why schema changes should be
 migration that adds and removes in one step cannot be rolled back by redeploying
 the previous image.
 
+### A release that is not backwards-compatible
+
+Migrations run **before** the new revision serves, so the **old** build serves
+traffic against the **new** schema for the whole swap window. That is why
+migrations must normally be expand-only — add nullable, backfill separately,
+tighten in a later release.
+
+A release that cannot satisfy that (a dropped or renamed table, a tightened
+constraint the running code violates) needs a **maintenance window**, and an
+automated deploy will not give you one:
+
+1. Stop the API and the worker, so requests fail fast instead of hitting a schema
+   the running build cannot read.
+2. Run the migration image against a database nothing is reading.
+3. Start the new revision.
+
+On the jaylordibe/cicd single-server kit that is `docker compose -p <project> stop
+<api>`, then `kit deploy` of the new release (its migrate step runs first).
+
+Review each migration for this before release: a dropped column the running build
+still selects (Prisma selects every scalar column) is enough. Rolling back a schema
+change means restoring a backup, not redeploying — so confirm you have a
+**verified** one before starting (see [`../operations.md`](../operations.md)).
+
 ---
 
 ## 3. Database contract
@@ -285,6 +309,69 @@ Objects are **private by default**:
 - Store the **`storageKey`**, not a URL. A URL embeds the bucket, the provider
   and the access model; a key survives all three changing.
 
+### On a VM: which identity the application presents
+
+On a VM, the `api` service can persist uploads to **S3 (or any S3-compatible service),
+Google Cloud Storage, or Azure Blob Storage** — one adapter each, selected by
+`STORAGE_PROVIDER`. It can also run with `stub`, which persists nothing.
+
+**This template supplies no variable for a long-lived cloud credential, for any
+provider.** No access key, no service-account JSON, no account key, no
+connection string. Each adapter authenticates through its platform's keyless
+identity chain, so the decision here is which identity the VM presents:
+
+- **The VM already has a cloud identity** (an attached instance role or service
+  account). Nothing to configure — the SDK's default chain picks it up from the
+  instance metadata service.
+- **The VM has no cloud identity** — the usual case for a generic VPS. Use
+  workload identity federation: the host exchanges an OIDC token it already has
+  for short-lived cloud credentials. Write the federation config onto the host, bind-mount it read-only into the `api` container, and point
+  the provider's standard discovery variable at it. That file describes *how to
+  obtain* credentials and holds no secret material.
+- **Neither is available.** Run an S3-compatible object store you control
+  (for example RustFS) alongside the stack, with `STORAGE_PROVIDER=s3` and
+  `STORAGE_S3_ENDPOINT`, rather than downloading a static key.
+
+Grant whichever identity you end up with write access to that one bucket, scoped
+to it alone.
+
+#### Google Cloud VM
+
+The first case above, made concrete for a Compute Engine VM using `gcs`.
+Nothing goes in `.env` for credentials: Application Default Credentials read
+the attached service account from the VM's metadata server.
+
+1. **Create a dedicated service account** for this environment (one for prod,
+   one for staging) and attach it to the VM when creating it.
+2. **Set the VM's access scope to "Allow full access to all Cloud APIs"**
+   (`cloud-platform`). Scopes cap what the attached account may do regardless
+   of its roles. Changing a scope needs the VM stopped.
+3. **Enable the IAM Service Account Credentials API**
+   (`iamcredentials.googleapis.com`) in the VM's project, when anything calls
+   `createSignedReadUrl`:
+   `gcloud services enable iamcredentials.googleapis.com --project PROJECT_ID`.
+   With no key file the SDK signs through its `signBlob` call, and the API is
+   off in a new project; without it every signed URL fails with "IAM Service
+   Account Credentials API has not been used in project … or it is disabled".
+4. **Grant the service account:**
+   - `roles/storage.objectAdmin` on this environment's bucket only;
+   - `roles/iam.serviceAccountTokenCreator` on **itself**, when anything signs
+     URLs. Grant it on the service account (IAM & Admin → Service Accounts →
+     the account → Principals with access → Grant access, with the account's
+     own email as the principal), not on the project, which would let it sign
+     as every account there. The project `Editor` role does not include
+     `signBlob`, so the default Compute Engine account needs this too:
+     ```
+     gcloud iam service-accounts add-iam-policy-binding SA_EMAIL \
+       --member="serviceAccount:SA_EMAIL" \
+       --role="roles/iam.serviceAccountTokenCreator"
+     ```
+5. **In `.env`:** `STORAGE_PROVIDER="gcs"`, `STORAGE_GCS_BUCKET`, and leave
+   `STORAGE_GCS_PROJECT_ID` empty.
+
+IAM grants and a newly enabled API take a minute or two to apply; the api
+needs no restart, because it signs on every request.
+
 ### Cost of shipping four adapters
 
 Only the selected provider's SDK is **loaded**, but all four are **installed**,
@@ -310,7 +397,7 @@ recovers most of that 80 MB.
 | Adapter | Coverage |
 |---|---|
 | `s3` | **Exercised against a real backend.** `test/storage-s3.e2e-spec.ts` runs against the test compose stack's S3 server (RustFS): upload verified with `HeadObject`, a signed URL that really fetches, an unsigned read that is refused, delete, and non-collision of two identical uploads. This also covers AWS S3, R2, Spaces and Ceph, which speak the same API. |
-| `gcs`, `azure` | **Construction only.** The selection switch and the client options are covered; `save`, `delete` and `createSignedReadUrl` have never executed against Google or Azure. Verify against a real bucket before relying on either — particularly `createSignedReadUrl`, which needs `roles/iam.serviceAccountTokenCreator` and the IAM Service Account Credentials API on GCS (`docs/prod/README.md`, "Google Cloud VM") and `Storage Blob Data Contributor` on Azure. |
+| `gcs`, `azure` | **Construction only.** The selection switch and the client options are covered; `save`, `delete` and `createSignedReadUrl` have never executed against Google or Azure. Verify against a real bucket before relying on either — particularly `createSignedReadUrl`, which needs `roles/iam.serviceAccountTokenCreator` and the IAM Service Account Credentials API on GCS ("Google Cloud VM" in the object storage contract above) and `Storage Blob Data Contributor` on Azure. |
 | `stub` | Fully covered; persists nothing. |
 
 Every provider's calls are bounded by `STORAGE_REQUEST_TIMEOUT_MS` (default 15s).
@@ -535,12 +622,24 @@ changes is which values the platform injects and which identity it attaches.
 
 ---
 
+## Publishing, and who deploys
+
+This repository **publishes**; it never deploys. `.github/workflows/publish-image.yml`
+runs the tests and the security scan, then pushes both images (runtime and
+`migrate`) to GHCR under `sha-<commit>`, scans the runtime's digest (the migrate
+image's scan reports without blocking), attests the build provenance of both, and
+only then moves the `main` / `staging` tag (migrate first). Enable it with the
+repository variable `PUBLISH_ENABLED=true`. Attestations need a public repository,
+or a plan that supports them on private ones (`ATTEST_PROVENANCE=true`).
+
+A deployer deploys **by digest**, only digests attested by that workflow, and runs
+the `migrate` image to completion before the new runtime serves (section 2). For
+one server, [jaylordibe/cicd](https://github.com/jaylordibe/cicd) does exactly that:
+its `nestjs-api` template, its Caddy edge (including a Cloudflare-only mode) and
+its backups replace the single-VM Compose files this repository used to carry.
+
 ## Other deployment material in this repository
 
-- [`../prod/`](../prod/README.md), [`../staging/`](../staging/README.md) — a
-  complete **single-VM** Docker Compose deployment behind Caddy. Fully working;
-  it predates this contract and runs the API and worker in one container, which
-  is correct only where nothing autoscales. Labelled accordingly.
 - [`../operations.md`](../operations.md) — an honest inventory of which
   operational controls this template actually enforces versus which it only
   gives you somewhere to put.
