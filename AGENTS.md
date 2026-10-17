@@ -51,6 +51,11 @@ process does both.
 Every change: `yarn build` + `yarn lint` + the affected e2e specs. Full
 `yarn test:e2e` only when a module is complete or on request.
 
+`yarn build` type-checks `src/` only. After changing a shared DTO, fixture or
+seeder, run `npx tsc --noEmit -p tsconfig.json` and compare with the errors
+the branch already had. A feature without e2e coverage of its contract is not
+done; update stale assertions instead of adding duplicates.
+
 ## High-risk paths
 
 | Path pattern | Why |
@@ -93,6 +98,11 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
   `req`/`res`, no truncated morphemes (`Ack`, `Msg`, `Svc`). Allowed:
   `id`, `dto`, `url`, `db`, `ttl`, `jwt`, `otp`, `ip`, `to`, `_`, generic
   `T`/`K`/`V`.
+- **Booleans:** start with `is` everywhere — DB columns are `is_…`
+  (`is_active`, `is_force_update`), request/response fields and TS
+  properties `is…` (`isActive`, `isForceUpdate`), with no exception
+  for columns. Response-only fields `verified` and `ok` keep their names
+  until a deliberate breaking change renames them.
 - **Placement:** services hold behaviour. Static tables go to a co-located
   config module; pure helpers to `src/common/util/*.util.ts` with a spec.
   Delete what you replace; no parallel implementations.
@@ -107,7 +117,7 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
 - **Responses:** always `new <Resource>ResponseDto(row)`, never raw Prisma
   rows. Sensitive fields need both `@Exclude()` and `@ApiHideProperty()`.
 - **Schema:** no DB enums (`String` + TS enum in `src/common/enums/` +
-  `@IsEnum()`); booleans are `is*`; every column `@map`s to snake_case.
+  `@IsEnum()`); every column `@map`s to snake_case.
 - **Authorization:** `JwtAuthGuard` + `PermissionsGuard` are global. Every
   handler declares exactly one of `@Public()` / `@AuthenticatedOnly()` /
   `@RequirePermission()`, or boot fails. The permission catalog in
@@ -122,6 +132,9 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
 - **Soft delete:** `prisma.scoped.*` filters top-level reads only; nested
   includes need explicit filters (ESLint bans bare `user: true` /
   `workspace: true`). Never a security boundary.
+- **Prisma filters:** one `where` object holds one `OR`; a second (often
+  arriving through a spread) silently replaces the first. Combine conditions
+  that each carry an `OR` with `AND: [...]`.
 - **Partial-unique columns** (`users.email`, `users.username`,
   `workspaces.slug`): look up with `findFirst`, never `findUnique`.
 - **Lists:** five standard endpoints; read handlers are `findPaginated` /
@@ -129,9 +142,14 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
   `perPage` clamped to 100.
 - **Config:** `configService.getOrThrow()` only; no `process.env` outside
   `configuration.ts` (sole exception: `src/telemetry.ts`, which runs first).
+  A new env var goes in `configuration.ts`, `env.validation.ts`,
+  `.env.example`, `.env.test` (when tests need a value) and the runtime
+  contract in `docs/deployment/README.md`; unset defaults to safe.
 - **Swagger:** paginated handlers use `@ApiPaginatedResponse(T)`; others need
   an explicit `@ApiOkResponse`/`@ApiCreatedResponse({ type })`. Mapped types
-  import from `@nestjs/swagger`.
+  import from `@nestjs/swagger`. DTO JSDoc is the published API description
+  (`introspectComments`): a `//` comment directly above a JSDoc block drops
+  it silently.
 - **Bot check:** every `@Public()` endpoint that sends a text or email,
   creates an account or checks a password carries `@RequireTurnstile()`; a
   step that only redeems a code or link one of those issued does not.
@@ -152,7 +170,9 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
   SDK is imported only by its own adapter. Store `storageKey`, never a URL;
   authorize before issuing a signed URL.
 - **Redis:** build every client from `buildRedisConnectionOptions`.
-- **Background work:** BullMQ only. Never reintroduce `@nestjs/schedule`.
+- **Background work:** BullMQ only, and by default: work the response does
+  not need (every notification, side-effect call, unbounded loop) is
+  enqueued, never run inline. Never reintroduce `@nestjs/schedule`.
   Consumers tolerate duplicate delivery and keep `correlationId`.
 - **Cycles:** `forwardRef` in both the import and the `@Inject`.
 - **TypeScript:** decorated signatures need `import type`
@@ -194,6 +214,8 @@ A fork must replace these rows with its real consumers before its first
 contract change. A contract change (DTO field, `errorCode`, enum value,
 status, nullability, pagination, event payload) is done only when every
 consumer is updated or recorded as unaffected, with the deploy order stated.
+A consumer not updated in the same change gets a handoff naming its
+repository, the change and the owner.
 
 ## Deep references
 

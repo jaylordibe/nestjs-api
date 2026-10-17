@@ -742,16 +742,16 @@ describe('Workspace invitations (e2e)', () => {
   });
 
   describe('listing and revocation', () => {
-    it('a stranger to the workspace sees no invitations', async () => {
+    it('a stranger to the workspace gets a 404 on the list, not an empty page', async () => {
       await inviteAndCaptureToken('invitee@example.com');
       const stranger = await createRegularUser(app, 'stranger@example.com');
 
       const response = await request(app.getHttpServer())
         .get(invitationsUrl())
         .set('Authorization', `Bearer ${stranger.token}`)
-        .expect(200);
+        .expect(404);
 
-      expect((response.body as { data: unknown[] }).data).toEqual([]);
+      expect((response.body as ErrorBody).errorCode).toBe('RESOURCE_NOT_FOUND');
     });
 
     it('an accepted invitation cannot be revoked', async () => {

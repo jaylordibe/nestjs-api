@@ -181,7 +181,7 @@ CREATE TABLE "app_versions" (
     "device_os" TEXT,
     "release_date" TIMESTAMP(3) NOT NULL,
     "download_url" TEXT,
-    "force_update" BOOLEAN NOT NULL DEFAULT false,
+    "is_force_update" BOOLEAN NOT NULL DEFAULT false,
 
     CONSTRAINT "app_versions_pkey" PRIMARY KEY ("id")
 );

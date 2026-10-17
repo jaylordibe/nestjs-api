@@ -256,6 +256,13 @@ export class WorkspaceInvitationsService {
     query: MetaQueryDto,
     ability: AppAbility,
   ): Promise<{ data: WorkspaceInvitationRow[]; meta: PaginationMeta }> {
+    // An empty page would tell a stranger nothing, but the contract is 404.
+    this.abilityScopedQueryService.assertWorkspaceReachable(
+      ability,
+      'read',
+      'WorkspaceInvitation',
+      workspaceId,
+    );
     const { page, perPage } = query;
     const where = this.abilityScopedQueryService.buildWhereOrEmpty(
       ability,

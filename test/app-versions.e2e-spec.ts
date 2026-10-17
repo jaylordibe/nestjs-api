@@ -55,7 +55,7 @@ describe('AppVersions (e2e)', () => {
         deviceOs: 'android',
         releaseDate: '2026-04-20T00:00:00.000Z',
         downloadUrl: 'https://apps.example.com/1.2.3.apk',
-        forceUpdate: true,
+        isForceUpdate: true,
       })
       .expect(201);
     expect(res.body).toMatchObject({
@@ -64,7 +64,7 @@ describe('AppVersions (e2e)', () => {
       platform: 'mobile',
       deviceOs: 'android',
       downloadUrl: 'https://apps.example.com/1.2.3.apk',
-      forceUpdate: true,
+      isForceUpdate: true,
     });
     // createdBy is scrubbed from the API response; verify it was
     // populated at the DB level.
@@ -352,15 +352,15 @@ describe('AppVersions (e2e)', () => {
         platform: 'mobile',
         deviceOs: 'ios',
         releaseDate: '2026-04-20T00:00:00.000Z',
-        forceUpdate: false,
+        isForceUpdate: false,
       });
 
     const res = await request(app.getHttpServer())
       .patch(`/api/app-versions/${created.body.id}`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ forceUpdate: true, description: 'Critical security fix' })
+      .send({ isForceUpdate: true, description: 'Critical security fix' })
       .expect(200);
-    expect(res.body.forceUpdate).toBe(true);
+    expect(res.body.isForceUpdate).toBe(true);
     expect(res.body.description).toBe('Critical security fix');
   });
 
@@ -386,7 +386,7 @@ describe('AppVersions (e2e)', () => {
         platform: 'mobile',
         deviceOs: 'ios',
         releaseDate: '2026-04-01T00:00:00.000Z',
-        forceUpdate: true,
+        isForceUpdate: true,
       })
       .expect(201);
     // Different platform — should be ignored by the query
@@ -405,7 +405,7 @@ describe('AppVersions (e2e)', () => {
       .expect(200);
     expect(res.body.version).toBe('2.0.0');
     expect(res.body.platform).toBe('mobile');
-    expect(res.body.forceUpdate).toBe(true);
+    expect(res.body.isForceUpdate).toBe(true);
   });
 
   it('GET /api/app-versions/latest falls back to the next-newest after a bad release is deleted', async () => {

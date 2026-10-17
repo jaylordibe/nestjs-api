@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { AbilityFactory } from './ability.factory';
 import { AbilityScopedQueryService } from './ability-scoped-query.service';
 import { WorkspaceMembershipStatus } from '../../common/enums/workspace-membership-status.enum';
@@ -141,6 +141,74 @@ describe('AbilityScopedQueryService', () => {
           'AuditLog',
         ),
       ).toThrow(ForbiddenException);
+    });
+  });
+
+  describe('assertWorkspaceReachable', () => {
+    const OTHER_WORKSPACE_ID = '33333333-3333-3333-3333-333333333333';
+    const WORKSPACE_INVITATION_READER_GRANTS: AuthorizationGrants = {
+      platformPermissions: [],
+      workspaceMemberships: [
+        {
+          membershipId: '00000000-0000-4000-8000-0000000000cc',
+          workspaceId: WORKSPACE_ID,
+          roleId: '00000000-0000-4000-8000-0000000000dd',
+          roleName: SeededRoleName.WORKSPACE_ADMIN,
+          status: WorkspaceMembershipStatus.ACTIVE,
+          permissions: [
+            {
+              action: 'read',
+              subject: 'WorkspaceInvitation',
+              scope: RoleScope.WORKSPACE,
+              ownership: PermissionOwnership.ANY,
+            },
+          ],
+        },
+      ],
+    };
+
+    it('passes a caller whose grant reaches the workspace', () => {
+      expect(() =>
+        service.assertWorkspaceReachable(
+          abilityFor(WORKSPACE_INVITATION_READER_GRANTS),
+          'read',
+          'WorkspaceInvitation',
+          WORKSPACE_ID,
+        ),
+      ).not.toThrow();
+    });
+
+    it('answers 404, not 403, for a workspace the grant does not reach', () => {
+      expect(() =>
+        service.assertWorkspaceReachable(
+          abilityFor(WORKSPACE_INVITATION_READER_GRANTS),
+          'read',
+          'WorkspaceInvitation',
+          OTHER_WORKSPACE_ID,
+        ),
+      ).toThrow(NotFoundException);
+    });
+
+    it('answers 404 for a caller with no grant at all', () => {
+      expect(() =>
+        service.assertWorkspaceReachable(
+          abilityFor(NO_ROLE_ACCOUNT_GRANTS),
+          'read',
+          'WorkspaceInvitation',
+          WORKSPACE_ID,
+        ),
+      ).toThrow(NotFoundException);
+    });
+
+    it('passes a platform grant for any workspace', () => {
+      expect(() =>
+        service.assertWorkspaceReachable(
+          abilityFor(PLATFORM_ADMIN_GRANTS),
+          'create',
+          'WorkspaceInvitation',
+          OTHER_WORKSPACE_ID,
+        ),
+      ).not.toThrow();
     });
   });
 

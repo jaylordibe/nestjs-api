@@ -47,7 +47,7 @@ export class AppVersionsService {
         deviceOs,
         releaseDate: dto.releaseDate,
         downloadUrl: dto.downloadUrl,
-        forceUpdate: dto.forceUpdate,
+        isForceUpdate: dto.isForceUpdate,
         createdBy: actorId,
         updatedBy: actorId,
       },
@@ -184,7 +184,7 @@ export class AppVersionsService {
       deviceOs,
       releaseDate: dto.releaseDate,
       downloadUrl: dto.downloadUrl,
-      forceUpdate: dto.forceUpdate,
+      isForceUpdate: dto.isForceUpdate,
       updatedBy: actorId,
     };
     const updated = await this.prisma.appVersion.update({

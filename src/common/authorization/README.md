@@ -135,6 +135,12 @@ without it, a user **with** a workspace gets 404 on someone else's workspace (th
 query filters it out) while a user with **none** gets 403 from the guard — the
 same request answered two ways depending on state the caller cannot see.
 
+A list under `/workspaces/:workspaceId/…` goes further: its service calls
+`AbilityScopedQueryService.assertWorkspaceReachable` first, so a stranger to
+that workspace gets 404 rather than an empty page. An ownable subject
+(`WorkspaceMembership`) cannot use it: every caller holds an own-row rule, so
+its list stays an empty page for a stranger.
+
 ### 404 vs 403 — the rule
 
 ```

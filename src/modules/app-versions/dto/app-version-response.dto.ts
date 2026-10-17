@@ -20,7 +20,7 @@ export class AppVersionResponseDto {
   deviceOs!: DeviceOs | null;
   releaseDate!: Date;
   downloadUrl!: string | null;
-  forceUpdate!: boolean;
+  isForceUpdate!: boolean;
 
   constructor(row: AppVersion) {
     Object.assign(this, row);

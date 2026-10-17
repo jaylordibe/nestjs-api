@@ -1,8 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { accessibleBy } from '@casl/prisma';
 import type { Prisma } from '@prisma/client';
-import type { AppAbility } from '../../common/authorization/app-ability';
+import {
+  taggedSubject,
+  type AppAbility,
+} from '../../common/authorization/app-ability';
 import type { AuthorizationAction } from '../../common/authorization/permission-catalog';
+import {
+  resolveTenantKey,
+  type OwnableSubject,
+  type TenantScopedSubject,
+} from '../../common/authorization/subject-key';
 import { Errors } from '../../common/errors/errors';
 
 // Prisma `WhereInput` for each subject a query can be scoped by.
@@ -120,6 +128,29 @@ export class AbilityScopedQueryService {
       } as WhereInputBySubject[TSubject];
     }
     return this.buildWhere(ability, action, subject, callerWhere);
+  }
+
+  /**
+   * For a workspace-level collection reached by `:workspaceId` with no record
+   * to load first — a list, a create: 404 unless the ability's `action` on
+   * `subject` reaches that workspace. The guard, under `denyAsNotFound`, lets
+   * an outsider through to here precisely so the answer is "no such
+   * workspace" rather than a 403 that confirms it.
+   *
+   * Ownable subjects are excluded: the stub carries only the tenant key, so an
+   * intrinsic own-row rule (a member reading their own `WorkspaceMembership`)
+   * would fail against it and 404 a caller who may read their own row.
+   */
+  assertWorkspaceReachable(
+    ability: AppAbility,
+    action: AuthorizationAction,
+    subject: Exclude<TenantScopedSubject, OwnableSubject> & ScopableSubject,
+    workspaceId: string,
+  ): void {
+    const stub = { [resolveTenantKey(subject)]: workspaceId };
+    if (ability.cannot(action, taggedSubject(subject, stub))) {
+      throw Errors.resourceNotFound('Workspace');
+    }
   }
 
   // `buildWhereOrEmpty` narrowed to a single record.

@@ -66,5 +66,5 @@ export class CreateAppVersionDto {
 
   @IsOptional()
   @IsBoolean()
-  forceUpdate?: boolean;
+  isForceUpdate?: boolean;
 }
