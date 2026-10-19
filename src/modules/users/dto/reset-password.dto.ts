@@ -1,11 +1,5 @@
-import {
-  IsEmail,
-  IsNotEmpty,
-  IsString,
-  Matches,
-  MaxLength,
-  MinLength,
-} from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { IsAccountPassword } from '../../../common/decorators/is-account-password.decorator';
 
 export class ResetPasswordDto {
   @IsEmail()
@@ -17,12 +11,6 @@ export class ResetPasswordDto {
   @MaxLength(256)
   token!: string;
 
-  @IsString()
-  @MinLength(12)
-  @MaxLength(72)
-  @Matches(/^(?=.*[A-Za-z])(?=.*\d).+$/, {
-    message:
-      'newPassword must be at least 12 characters and contain a letter and a digit',
-  })
+  @IsAccountPassword()
   newPassword!: string;
 }

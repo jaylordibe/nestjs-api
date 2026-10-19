@@ -449,6 +449,22 @@ describe('Users (e2e)', () => {
         .expect(200);
     });
 
+    it('PATCH /api/users/me/password takes the sign-up rule: 8 characters, not 7', async () => {
+      const { token } = await registerVerifiedUser(app, 'pw-rule@example.com');
+      const refused = await request(app.getHttpServer())
+        .patch('/api/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: PASSWORD, newPassword: 'secret1' })
+        .expect(400);
+      expect(refused.body.errorCode).toBe('VALIDATION_FAILED');
+
+      await request(app.getHttpServer())
+        .patch('/api/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: PASSWORD, newPassword: 'secret12' })
+        .expect(200);
+    });
+
     it('PATCH /api/users/me/profile-image updates the URL', async () => {
       const { token } = await registerVerifiedUser(app);
       const res = await request(app.getHttpServer())
@@ -577,10 +593,14 @@ describe('Users (e2e)', () => {
         }
       }
 
-      function resetPassword(email: string, token: string) {
+      function resetPassword(
+        email: string,
+        token: string,
+        newPassword = 'brand-new-pw-1',
+      ) {
         return request(app.getHttpServer())
           .post('/api/users/reset-password')
-          .send({ email, token, newPassword: 'brand-new-pw-1' });
+          .send({ email, token, newPassword });
       }
 
       it('answers 200 for any address and emails only a registered one', async () => {
@@ -634,6 +654,26 @@ describe('Users (e2e)', () => {
           400,
         );
         expect(replay.body.errorCode).toBe('INVALID_LINK');
+      });
+
+      it('takes the sign-up rule: a 7-character password is refused and leaves the link usable, 8 is accepted', async () => {
+        await registerVerifiedUser(app, 'reset-rule@example.com');
+        const token = await requestResetToken('reset-rule@example.com');
+
+        const refused = await resetPassword(
+          'reset-rule@example.com',
+          token,
+          'secret1',
+        ).expect(400);
+        expect(refused.body.errorCode).toBe('VALIDATION_FAILED');
+
+        await resetPassword('reset-rule@example.com', token, 'secret12').expect(
+          200,
+        );
+        await request(app.getHttpServer())
+          .post('/api/auth/login')
+          .send({ identifier: 'reset-rule@example.com', password: 'secret12' })
+          .expect(200);
       });
 
       it("rejects a wrong token or another account's email with 400 INVALID_LINK", async () => {
@@ -1005,12 +1045,17 @@ describe('Users (e2e)', () => {
       await request(app.getHttpServer())
         .patch(`/api/users/${target.id}/password`)
         .set('Authorization', `Bearer ${adminToken}`)
-        .send({ newPassword: 'admin-reset-1' })
+        .send({ newPassword: 'secret1' })
+        .expect(400);
+      await request(app.getHttpServer())
+        .patch(`/api/users/${target.id}/password`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ newPassword: 'secret12' })
         .expect(200);
 
       await request(app.getHttpServer())
         .post('/api/auth/login')
-        .send({ identifier: 'target@example.com', password: 'admin-reset-1' })
+        .send({ identifier: 'target@example.com', password: 'secret12' })
         .expect(200);
     });
 

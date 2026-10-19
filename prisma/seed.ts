@@ -5,6 +5,10 @@ import * as bcrypt from 'bcrypt';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import { SeededRoleName } from '../src/common/enums/seeded-role-name.enum';
+import {
+  accountPasswordMessage,
+  isAccountPassword,
+} from '../src/common/util/account-password.util';
 import { assignPlatformRole, seedPermissions, seedRoles } from './rbac-seeder';
 
 // Load .env (with ${VAR} expansion) before touching process.env, matching
@@ -13,12 +17,6 @@ expand(dotenv.config({ override: false }));
 
 // Same cost factor as UsersService. Keep in sync if that constant changes.
 const BCRYPT_ROUNDS = 12;
-
-// Same complexity rule enforced by DTOs at runtime. Seeded passwords go
-// through this explicitly because the seed script bypasses the HTTP
-// validation pipeline — we don't want a deploy to quietly install a 4-char
-// admin password if someone typo'd the env var.
-const PASSWORD_PATTERN = /^(?=.*[A-Za-z])(?=.*\d).+$/;
 
 interface SeedUser {
   label: string;
@@ -50,15 +48,11 @@ function readSeedUser(
     );
   }
 
-  if (
-    password.length < 12 ||
-    password.length > 72 ||
-    !PASSWORD_PATTERN.test(password)
-  ) {
-    throw new Error(
-      `${passwordKey} must be 12–72 characters and contain at least one ` +
-        `letter and one digit — same rule the app enforces at sign-up.`,
-    );
+  // The rule every account password passes. Checked here because the seeder
+  // bypasses the validation pipe: a typo'd env var must not install a 4-char
+  // admin password.
+  if (!isAccountPassword(password)) {
+    throw new Error(accountPasswordMessage(passwordKey));
   }
 
   return {
