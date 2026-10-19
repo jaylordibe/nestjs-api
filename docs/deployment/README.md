@@ -120,7 +120,7 @@ defaults to `stub`, which persists nothing.
 | Filesystem | No persistence assumed. Uploads go to object storage; nothing is written to disk |
 | Secrets | Never baked into the image — injected at runtime |
 | Dependencies | Runtime image carries production dependencies only |
-| Build metadata | `GIT_SHA` build arg → `ENV`, surfaced at `GET /api/health/version` |
+| Build metadata | `GIT_SHA` build arg → `ENV`, surfaced at `GET /api/health/version`. Never set it at runtime: a runtime value, even an empty one, replaces the image's |
 
 ### Shutdown
 

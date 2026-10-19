@@ -18,12 +18,17 @@ RUN yarn install --frozen-lockfile
 # build cache key: every commit produces a unique instruction and forces a
 # fresh `yarn build`. Without it BuildKit can serve a stale `dist/` across
 # commits whose source COPY is content-equivalent (e.g. reverts/cherry-picks).
+#
+# The heap limit is stated because Node's default scales with the machine's
+# memory, and `nest build` runs out of heap at 2048 MB but not at 3072 MB: on a
+# small VM or CI runner the default is too low. Scoped to this one command, so
+# the `migrate` image below does not inherit it.
 FROM deps AS build
 ARG GIT_SHA=unknown
 COPY . .
 RUN : "git_sha=${GIT_SHA}" \
  && yarn prisma generate \
- && yarn build
+ && NODE_OPTIONS=--max-old-space-size=3072 yarn build
 
 # Migration image. Schema changes are applied by a SEPARATE, short-lived
 # container that runs to completion and exits — never on API startup and never
