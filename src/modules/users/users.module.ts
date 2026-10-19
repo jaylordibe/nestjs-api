@@ -3,6 +3,7 @@ import { AuthModule } from '../auth/auth.module';
 import { WorkspacesModule } from '../workspaces/workspaces.module';
 import {
   EmailChangedNoticeJobHandler,
+  SignUpAccountExistsJobHandler,
   EmailVerificationJobHandler,
   PasswordChangedNoticeJobHandler,
   PasswordResetJobHandler,
@@ -22,6 +23,7 @@ import { UsersService } from './users.service';
     PasswordResetJobHandler,
     PasswordChangedNoticeJobHandler,
     EmailChangedNoticeJobHandler,
+    SignUpAccountExistsJobHandler,
   ],
   exports: [UsersService],
 })

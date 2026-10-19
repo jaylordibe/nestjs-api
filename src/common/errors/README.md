@@ -106,7 +106,7 @@ Raised before any handler runs, by Express's body parser; mapped to the envelope
 | Code | Trigger | `details` shape |
 |---|---|---|
 | `RESOURCE_NOT_FOUND` | Generic 404 (also Prisma P2025). | `{ resource: string }` from `Errors.resourceNotFound()`; `null` for Prisma P2025 and framework 404s |
-| `UNIQUE_CONSTRAINT_VIOLATION` | Value already taken: Prisma P2002, or sign-up with a registered email. | `{ field: string }` |
+| `UNIQUE_CONSTRAINT_VIOLATION` | Value already taken: Prisma P2002 (registration does not answer it for a registered email). | `{ field: string }` |
 | `RESOURCE_CONFLICT` | Generic 409 for application-level conflicts. | `null` |
 
 ### Workspace memberships and invitations (HTTP 400, 403, 409)

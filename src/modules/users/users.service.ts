@@ -97,6 +97,18 @@ export class UsersService {
   // carries the user id only; the worker reloads the user and renders the
   // message, so no address or token sits in Redis.
 
+  /**
+   * Tells an account's address that someone tried to register it. Queued, as
+   * every account email is, so the registration answers as fast as a new
+   * address's would.
+   */
+  async queueSignUpAccountExistsNotice(userId: string): Promise<void> {
+    await this.queueProducer.enqueue(JobName.USER_SIGN_UP_ACCOUNT_EXISTS_V1, {
+      payloadVersion: 1,
+      userId,
+    });
+  }
+
   private async queueEmailVerification(userId: string): Promise<void> {
     await this.queueProducer.enqueue(JobName.USER_EMAIL_VERIFICATION_V1, {
       payloadVersion: 1,
@@ -186,6 +198,30 @@ export class UsersService {
           `${baseUrl}/auth/verify-email?token=${encodeURIComponent(token)}`,
         );
       },
+    );
+    return sent ? 'sent' : 'destination-limited';
+  }
+
+  /**
+   * Worker side of `USER_SIGN_UP_ACCOUNT_EXISTS_V1`: points the address at the
+   * app to sign in. Capped per address, since anyone can trigger it by
+   * registering someone else's email.
+   */
+  async deliverSignUpAccountExistsNotice(
+    userId: string,
+  ): Promise<DeliveryOutcome> {
+    const user = await this.findByIdOrNull(userId);
+    if (!user) {
+      return 'nothing-to-send';
+    }
+    const sent = await this.destinationSendLimit.sendWithinLimit(
+      SendPurpose.SIGN_UP_ACCOUNT_EXISTS,
+      canonicalEmailDestination(user.email),
+      () =>
+        this.emailService.sendSignUpAccountExists(
+          user.email,
+          this.configService.getOrThrow<string>('webBaseUrl'),
+        ),
     );
     return sent ? 'sent' : 'destination-limited';
   }

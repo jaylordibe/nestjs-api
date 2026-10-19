@@ -197,7 +197,7 @@ All routes are under `/api`. Swagger at `/api/docs` is the full specification.
 
 The routes that send an email, create an account or check a password require an `X-Turnstile-Token` header (`@RequireTurnstile()`; the Swagger document marks each one). Without it they answer 400 `TURNSTILE_TOKEN_MISSING`; a token Cloudflare refuses answers 400 `TURNSTILE_TOKEN_INVALID` — see `src/common/errors/README.md`.
 
-- `POST /auth/register` — creates an unverified user and emails a verification link. Returns `{ message }` only. A registered email → 409 `UNIQUE_CONSTRAINT_VIOLATION`; a disposable domain → 400 `EMAIL_DOMAIN_DISALLOWED`.
+- `POST /auth/register` — creates an unverified user and emails a verification link. Returns `{ message }` only, the same for every address: a registered email creates nothing, and its owner is emailed that someone tried. A disposable domain → 400 `EMAIL_DOMAIN_DISALLOWED`.
 - `POST /auth/login` / `POST /auth/refresh` — return `{ accessToken, refreshToken, expiresIn, user }`. Login rejects with `EMAIL_NOT_VERIFIED` if the email is unverified.
 - `GET|POST /auth/verify-email` — consumes a verification link.
 - `POST /auth/resend-verification` — resends the link (always 200, no enumeration).

@@ -50,9 +50,15 @@ Permissions, roles, scope, ownership and 403-versus-404 belong to the
   `INVALID_CREDENTIALS`. An unknown identifier still runs a dummy bcrypt
   compare, as Laravel and Django do. `EMAIL_NOT_VERIFIED` is returned only after
   the password matched.
-- Registration answers like any validation error: an already-registered email
-  is 409 `UNIQUE_CONSTRAINT_VIOLATION` (`details.field = 'email'`); a disposable
-  domain (`isDisposableEmail()`, `common/util/disposable-email.util.ts`) is 400
+- Registration answers the same 201 for every address, so it never says
+  whether an email has an account. An already-registered one creates nothing;
+  its password is hashed anyway (the same cost), the attempt is audited
+  (`user.registration_attempted_existing`), and its owner is emailed: an
+  unverified account its verification link again, a verified one that someone
+  tried (`USER_SIGN_UP_ACCOUNT_EXISTS_V1`, capped per address). Only
+  two registrations of a NEW address racing each other can still meet the
+  unique index (409 `UNIQUE_CONSTRAINT_VIOLATION`). A disposable domain
+  (`isDisposableEmail()`, `common/util/disposable-email.util.ts`) is 400
   `EMAIL_DOMAIN_DISALLOWED`. Login does not check the domain.
 - Forgot-password and resend-verification answer the same for every address.
 - No timing padding beyond login's dummy compare.

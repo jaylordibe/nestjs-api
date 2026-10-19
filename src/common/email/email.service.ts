@@ -67,6 +67,12 @@ export class EmailService {
     });
   }
 
+  // In place of a registration's answer, to an address that already has an
+  // account.
+  sendSignUpAccountExists(email: string, appUrl: string): Promise<void> {
+    return this.sendTemplate('sign-up-account-exists', email, { appUrl });
+  }
+
   // Sent after any password change (self, admin reset, reset link).
   sendPasswordChangedNotification(
     email: string,

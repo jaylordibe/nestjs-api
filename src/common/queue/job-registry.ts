@@ -27,6 +27,7 @@ export enum JobName {
   USER_PASSWORD_RESET_V1 = 'user.password-reset.v1',
   USER_PASSWORD_CHANGED_NOTICE_V1 = 'user.password-changed-notice.v1',
   USER_EMAIL_CHANGED_NOTICE_V1 = 'user.email-changed-notice.v1',
+  USER_SIGN_UP_ACCOUNT_EXISTS_V1 = 'user.sign-up-account-exists.v1',
   WORKSPACE_INVITATION_EMAIL_V1 = 'workspace.invitation-email.v1',
 }
 
@@ -81,6 +82,12 @@ export const JOB_REGISTRATIONS: Record<JobName, JobRegistration> = {
     payloadVersion: 1,
     description:
       'Mints a single-use password-reset token, stores its hash, and emails the reset link. A redelivery mints a fresh token, which supersedes the previous one.',
+  },
+  [JobName.USER_SIGN_UP_ACCOUNT_EXISTS_V1]: {
+    queueName: QueueName.NOTIFICATIONS,
+    payloadVersion: 1,
+    description:
+      'Tells an address that already has an account that someone tried to register it, in place of an answer that would say so.',
   },
   [JobName.USER_PASSWORD_CHANGED_NOTICE_V1]: {
     queueName: QueueName.NOTIFICATIONS,

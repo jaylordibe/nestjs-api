@@ -85,3 +85,19 @@ export class EmailChangedNoticeJobHandler implements QueueJobHandler<EmailChange
     );
   }
 }
+
+@Injectable()
+@RegisterQueueJobHandler()
+export class SignUpAccountExistsJobHandler implements QueueJobHandler<UserEmailJobPayloadDto> {
+  readonly jobName = JobName.USER_SIGN_UP_ACCOUNT_EXISTS_V1;
+  readonly payloadType = UserEmailJobPayloadDto;
+
+  constructor(private readonly usersService: UsersService) {}
+
+  async handle(payload: UserEmailJobPayloadDto): Promise<JobOutcome> {
+    return deliveryJobOutcome(
+      await this.usersService.deliverSignUpAccountExistsNotice(payload.userId),
+      'account gone',
+    );
+  }
+}

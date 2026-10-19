@@ -10,6 +10,9 @@ export enum SendPurpose {
   PASSWORD_RESET = 'password-reset',
   WORKSPACE_INVITATION = 'workspace-invitation',
   UNVERIFIED_PASSWORD_CHANGED_NOTICE = 'unverified-password-changed-notice',
+  // Anyone can send it by registering someone else's address, so it is capped
+  // tighter than mail the account holder asks for.
+  SIGN_UP_ACCOUNT_EXISTS = 'sign-up-account-exists',
 }
 
 export interface SendLimit {
@@ -26,4 +29,5 @@ export const SEND_LIMITS: Readonly<Record<SendPurpose, SendLimit>> = {
     limit: 5,
     windowSeconds: 60 * 60,
   },
+  [SendPurpose.SIGN_UP_ACCOUNT_EXISTS]: { limit: 3, windowSeconds: 60 * 60 },
 };

@@ -14,6 +14,10 @@ export interface EmailTemplates {
     expiresInMinutes: number;
   };
   'password-changed-notification': { firstName: string; occurredAt: string };
+  // Sent when someone registers an address that already has an account, so
+  // the registration's answer is the same for every address. No name: whoever
+  // registered may not be the address's owner.
+  'sign-up-account-exists': { appUrl: string };
   // Sent to the PREVIOUS address after an email change, so the owner of a
   // taken-over account hears about it at the address they verified.
   'email-changed-notification': { firstName: string; occurredAt: string };
@@ -50,6 +54,7 @@ const TEMPLATE_SUBJECTS: {
   'email-verification-link': 'Verify your email',
   'password-reset-link': 'Reset your password',
   'password-changed-notification': 'Your password was changed',
+  'sign-up-account-exists': 'You already have an account',
   'email-changed-notification': 'Your email address was changed',
   'workspace-invitation': (vars) => `Join ${vars.workspaceName}`,
 };

@@ -19,6 +19,10 @@ import type { RefreshTokenContext } from './refresh-token.service';
 import { RefreshTokenService } from './refresh-token.service';
 import { LOGOUT_KEY_PREFIX } from './strategies/jwt.strategy';
 
+// The one answer to every registration, new address or not.
+const REGISTERED_MESSAGE =
+  'Check your email to verify your account before logging in.';
+
 @Injectable()
 export class AuthService {
   // Compared against when the identifier matches no account, so an unknown
@@ -33,12 +37,33 @@ export class AuthService {
     private readonly refreshTokenService: RefreshTokenService,
   ) {}
 
+  /**
+   * Answers the same for every address, so registration never says whether an
+   * email has an account. A registered one creates nothing: its password is
+   * hashed anyway, so it costs what a new address does, and its owner is
+   * emailed: an unverified account gets its verification link again (the
+   * likely case is its owner retrying), a verified one the notice that
+   * someone tried (`queueSignUpAccountExistsNotice`). Either way the attempt
+   * is audited with its request envelope, so abuse of the notice is traceable.
+   */
   async register(dto: RegisterDto): Promise<RegisterResponseDto> {
     if (isDisposableEmail(dto.email)) {
       throw Errors.emailDomainDisallowed(extractEmailDomain(dto.email) ?? '');
     }
-    if (await this.usersService.findByEmail(dto.email)) {
-      throw Errors.uniqueConstraintViolation('email');
+    const existing = await this.usersService.findByEmail(dto.email);
+    if (existing) {
+      await hashPassword(dto.password);
+      if (existing.emailVerifiedAt) {
+        await this.usersService.queueSignUpAccountExistsNotice(existing.id);
+      } else {
+        await this.usersService.resendEmailVerification(existing.email);
+      }
+      await this.auditService.record({
+        action: 'user.registration_attempted_existing',
+        actorId: null,
+        targetUserId: existing.id,
+      });
+      return { message: REGISTERED_MESSAGE };
     }
     // `create` queues the verification email.
     const user = await this.usersService.create(dto, null);
@@ -49,9 +74,7 @@ export class AuthService {
       actorId: null,
       targetUserId: user.id,
     });
-    return {
-      message: 'Check your email to verify your account before logging in.',
-    };
+    return { message: REGISTERED_MESSAGE };
   }
 
   async login(

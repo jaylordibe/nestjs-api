@@ -148,30 +148,123 @@ describe('Auth (e2e)', () => {
       }
     });
 
-    it('rejects an already-registered email with 409 UNIQUE_CONSTRAINT_VIOLATION', async () => {
+    it('answers an already-registered email as any other, creating nothing and telling its owner', async () => {
       const payload = {
         email: 'dup@example.com',
         password: VALID_PASSWORD,
         firstName: 'Dup',
         lastName: 'User',
       };
-      await request(app.getHttpServer())
+      const first = await request(app.getHttpServer())
         .post('/api/auth/register')
         .send(payload)
         .expect(201);
-      const duplicate = await request(app.getHttpServer())
-        .post('/api/auth/register')
-        .send({ ...payload, email: 'DUP@example.com', firstName: 'Imposter' })
-        .expect(409);
+      await deliverQueuedEmails(app);
+      await app.get(PrismaService).user.updateMany({
+        where: { email: 'dup@example.com' },
+        data: { emailVerifiedAt: new Date() },
+      });
 
-      expect(duplicate.body.errorCode).toBe('UNIQUE_CONSTRAINT_VIOLATION');
-      expect(duplicate.body.details).toEqual({ field: 'email' });
+      const emails = captureEmails(app);
+      try {
+        const duplicate = await request(app.getHttpServer())
+          .post('/api/auth/register')
+          .send({ ...payload, email: 'DUP@example.com', firstName: 'Imposter' })
+          .expect(201);
+        // The same answer as a new address: nothing says this one is taken.
+        expect(duplicate.body).toEqual(first.body);
+
+        expect(await deliverQueuedEmails(app)).toBe(1);
+        expect(emails.sent).toEqual([
+          {
+            to: 'dup@example.com',
+            template: 'sign-up-account-exists',
+            vars: { appUrl: expect.stringMatching(/^https?:\/\//) },
+          },
+        ]);
+      } finally {
+        emails.restore();
+      }
 
       const rows = await app
         .get(PrismaService)
         .user.findMany({ where: { email: 'dup@example.com' } });
       expect(rows).toHaveLength(1);
       expect(rows[0]?.firstName).toBe('Dup');
+      // The attempt is traceable, without the address in it.
+      expect(
+        await app.get(PrismaService).auditLog.count({
+          where: {
+            action: 'user.registration_attempted_existing',
+            targetUserId: rows[0]?.id,
+          },
+        }),
+      ).toBe(1);
+    });
+
+    it('sends an unverified account its verification link again, with the same answer', async () => {
+      const payload = {
+        email: 'again@example.com',
+        password: VALID_PASSWORD,
+        firstName: 'Again',
+        lastName: 'User',
+      };
+      const first = await request(app.getHttpServer())
+        .post('/api/auth/register')
+        .send(payload)
+        .expect(201);
+      await deliverQueuedEmails(app);
+
+      const emails = captureEmails(app);
+      try {
+        const again = await request(app.getHttpServer())
+          .post('/api/auth/register')
+          .send(payload)
+          .expect(201);
+        expect(again.body).toEqual(first.body);
+        await deliverQueuedEmails(app);
+        expect(emails.sent.map((email) => email.template)).toEqual([
+          'email-verification-link',
+        ]);
+      } finally {
+        emails.restore();
+      }
+    });
+
+    it('caps how often an address is told someone registered it', async () => {
+      const payload = {
+        email: 'capped@example.com',
+        password: VALID_PASSWORD,
+        firstName: 'Cap',
+        lastName: 'Ped',
+      };
+      await request(app.getHttpServer())
+        .post('/api/auth/register')
+        .send(payload)
+        .expect(201);
+      await deliverQueuedEmails(app);
+      await app.get(PrismaService).user.updateMany({
+        where: { email: 'capped@example.com' },
+        data: { emailVerifiedAt: new Date() },
+      });
+
+      const emails = captureEmails(app);
+      try {
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          await request(app.getHttpServer())
+            .post('/api/auth/register')
+            .send(payload)
+            .expect(201);
+        }
+        await deliverQueuedEmails(app);
+        expect(
+          emails.sent.filter(
+            (email) => email.template === 'sign-up-account-exists',
+          ),
+        ).toHaveLength(3);
+      } finally {
+        emails.restore();
+      }
     });
 
     it('audits a successful self-signup with the request envelope', async () => {
