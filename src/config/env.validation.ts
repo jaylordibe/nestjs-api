@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import * as Joi from 'joi';
 import { PHONE_OTP_LENGTH } from '../common/constants/phone-otp.constants';
 import { isTrustedProxyList } from '../common/util/trusted-proxy.util';
@@ -42,6 +43,54 @@ function refusedInTest(...realProviders: string[]): Joi.WhenOptions {
   };
 }
 
+// A link a person clicks, so production must name the real public host: the
+// localhost defaults below would boot fine and put an unclickable link in every
+// verification, reset and booking email. Judged on the URL as a browser parses
+// it, so every spelling of a loopback or bare address is caught (`127.1`,
+// `2130706433`, `[::ffff:127.0.0.1]`, `localhost.`, `*.localhost`), and so are
+// credentials in the URL. A deployment links to a hostname, never to an IP.
+function isPublicHostUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.username || url.password) return false;
+  const hostname = url.hostname.toLowerCase().replace(/\.+$/, '');
+  const unbracketed = hostname.replace(/^\[|\]$/g, '');
+  return (
+    hostname !== '' &&
+    hostname !== 'localhost' &&
+    !hostname.endsWith('.localhost') &&
+    isIP(unbracketed) === 0
+  );
+}
+
+function publicUrlInProduction(defaultUrl: string): Joi.StringSchema {
+  return Joi.string()
+    .uri({ scheme: ['http', 'https'] })
+    .pattern(/[^/]$/, { name: 'no-trailing-slash' })
+    .default(defaultUrl)
+    .when('NODE_ENV', {
+      is: 'production',
+      then: Joi.string()
+        .uri({ scheme: ['https'] })
+        .custom((value: string, helpers) =>
+          isPublicHostUrl(value) ? value : helpers.error('publicUrl.host'),
+        )
+        .required()
+        .messages({
+          'any.required':
+            '{{#label}} is required in production — it builds the links in emails and texts, and the default points at localhost.',
+          'string.uriCustomScheme':
+            '{{#label}} must be an https:// URL in production.',
+          'publicUrl.host':
+            '{{#label}} must name the public hostname in production — not localhost, an IP address, or a URL with credentials.',
+        }),
+    });
+}
+
 export const envValidationSchema = Joi.object({
   NODE_ENV: Joi.string()
     .valid('development', 'test', 'staging', 'production')
@@ -61,20 +110,14 @@ export const envValidationSchema = Joi.object({
   // the API base (e.g. `https://api.yourapp.com/api`) and the backend's
   // `GET /auth/verify-email?token=…` endpoint will handle the click.
   // Must be a full URL with scheme — no trailing slash.
-  API_BASE_URL: Joi.string()
-    .uri({ scheme: ['http', 'https'] })
-    .pattern(/[^/]$/, { name: 'no-trailing-slash' })
-    .default('http://localhost:3000/api'),
+  API_BASE_URL: publicUrlInProduction('http://localhost:3000/api'),
 
   // Customer-facing web frontend base URL — distinct from API_BASE_URL
   // (which is the API). Used by emails that link customers to pages
   // they actually browse (booking confirmation CTAs, marketing pages,
   // etc.). Default targets the Vite dev port; production must set this
   // to the real web hostname (e.g. `https://yourapp.com`).
-  WEB_BASE_URL: Joi.string()
-    .uri({ scheme: ['http', 'https'] })
-    .pattern(/[^/]$/, { name: 'no-trailing-slash' })
-    .default('http://localhost:5173'),
+  WEB_BASE_URL: publicUrlInProduction('http://localhost:5173'),
 
   DB_USER: Joi.string().required(),
   DB_PASSWORD: Joi.string().allow('').required(),

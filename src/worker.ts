@@ -1,25 +1,16 @@
 // MUST be first — see the note in src/telemetry.ts. Auto-instrumentation
 // patches modules as they are required, so an import above this line is never
 // traced, silently.
-import { startTelemetry, stopTelemetry } from './telemetry';
+import { startTelemetry } from './telemetry';
 
 startTelemetry();
 
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
-import type { INestApplicationContext } from '@nestjs/common';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 import { formatErrorMessage } from './common/util/error-message.util';
-import { QueueWorkerRegistrar } from './common/queue/queue-worker.registrar';
-
-// How long a shutting-down worker waits for its active jobs before giving up
-// and logging an incomplete shutdown. Deliberately under the termination grace
-// period the platform gives the container (above 25s: "Shutdown" in
-// docs/deployment/README.md), so the process reports what it abandoned instead
-// of being SIGKILLed mid-sentence. Lives here rather than in the queue registry: it is a budget
-// for this PROCESS, not a property of any queue or job.
-const WORKER_SHUTDOWN_TIMEOUT_MILLISECONDS = 25_000;
+import { registerShutdownHandlers } from './graceful-shutdown';
 
 // ── Standalone queue worker ──────────────────────────────────────────────────
 // A second entrypoint into the SAME AppModule, with no HTTP server: it consumes
@@ -47,71 +38,6 @@ const WORKER_SHUTDOWN_TIMEOUT_MILLISECONDS = 25_000;
 // so the schedules belong to this runtime by construction rather than by a
 // teardown step that had to be remembered.
 
-// Nest's enableShutdownHooks() closes the context on SIGTERM but gives no way
-// to bound how long that takes or to say what was still running when the
-// container was killed. Handling the signals here buys both: BullMQ stops
-// accepting new jobs and drains the active ones, and anything still going when
-// the budget runs out is reported rather than vanishing.
-function registerShutdownHandlers(
-  applicationContext: INestApplicationContext,
-  logger: Logger,
-): void {
-  let isShuttingDown = false;
-
-  const shutdown = (signal: NodeJS.Signals): void => {
-    if (isShuttingDown) {
-      return;
-    }
-    isShuttingDown = true;
-    logger.log(
-      `${signal} received — draining active jobs (up to ${WORKER_SHUTDOWN_TIMEOUT_MILLISECONDS}ms)`,
-      'Worker',
-    );
-
-    const shutdownTimer = setTimeout(() => {
-      logger.error(
-        `Shutdown did not finish within ${WORKER_SHUTDOWN_TIMEOUT_MILLISECONDS}ms — exiting with jobs still active. They stay in Redis and will be retried once their lock expires.`,
-        'Worker',
-      );
-      process.exit(1);
-    }, WORKER_SHUTDOWN_TIMEOUT_MILLISECONDS);
-    // Deliberately NOT unref'd. Both branches below clear it, so it can never
-    // outlive a completed shutdown — while an unref'd timer would silently fail
-    // to fire in exactly the case it exists for: `close()` hanging after every
-    // other handle has drained, which would let the process exit 0 and report a
-    // clean shutdown for a worker that abandoned active jobs.
-
-    // BullMQ FIRST, then the context. Nest's own ordering runs
-    // `onModuleDestroy` — which ends the Postgres pool and quits Redis — before
-    // `onApplicationShutdown`, where @nestjs/bullmq closes its workers. Draining
-    // after that point would mean finishing jobs against a closed pool, which is
-    // not a graceful stop however calmly it is logged.
-    applicationContext
-      .get(QueueWorkerRegistrar)
-      .drainWorkers()
-      .then(() => applicationContext.close())
-      // Flush telemetry AFTER the context closes, so spans emitted while jobs
-      // were draining are included rather than cut off mid-shutdown.
-      .then(() => stopTelemetry())
-      .then(() => {
-        clearTimeout(shutdownTimer);
-        logger.log('Worker shut down cleanly', 'Worker');
-        process.exit(0);
-      })
-      .catch((error: unknown) => {
-        clearTimeout(shutdownTimer);
-        logger.error(
-          `Worker shutdown failed: ${formatErrorMessage(error)}`,
-          'Worker',
-        );
-        process.exit(1);
-      });
-  };
-
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
-}
-
 async function bootstrapWorker(): Promise<void> {
   const applicationContext = await NestFactory.createApplicationContext(
     AppModule,
@@ -130,7 +56,7 @@ async function bootstrapWorker(): Promise<void> {
     process.exit(1);
   }
 
-  registerShutdownHandlers(applicationContext, logger);
+  registerShutdownHandlers(applicationContext, logger, 'Worker');
 
   // Reports the DEFAULT, not the effective value — a queue with its own
   // `concurrency` in QUEUE_REGISTRATIONS overrides it, and each processor logs

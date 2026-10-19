@@ -480,13 +480,14 @@ Same image, two commands, one variable:
 
 Two deployments of the same image on whatever runs containers — two services,
 two Deployments, two Compose services. Give the worker a termination grace
-period above `WORKER_SHUTDOWN_TIMEOUT_MILLISECONDS` (25s) so shutdown reports
+period above `SHUTDOWN_TIMEOUT_MILLISECONDS` (25s, `src/graceful-shutdown.ts`) so shutdown reports
 what it abandoned rather than being SIGKILLed mid-sentence. The full contract is
 in `docs/deployment/README.md`.
 
 ### Graceful shutdown
 
-On SIGTERM/SIGINT the worker stops accepting new jobs, drains active ones for up
+On SIGTERM/SIGINT a consuming process (the worker, or an API with
+`QUEUE_WORKER_ENABLED=true`) stops accepting new jobs, drains active ones for up
 to 25s, closes BullMQ and logs an incomplete shutdown if it runs out of budget.
 Jobs still active at that point stay in Redis and are retried once their lock
 expires — nothing is silently abandoned.

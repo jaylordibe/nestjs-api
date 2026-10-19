@@ -270,8 +270,8 @@ import { UsersModule } from './modules/users/users.module';
     PublicModule,
   ],
   providers: [
-    // Participates in enableShutdownHooks() so pending spans and metrics are
-    // flushed after the modules close, instead of being dropped on exit.
+    // Runs when the context closes (src/graceful-shutdown.ts) so pending spans
+    // and metrics are flushed after the modules close, instead of being dropped.
     TelemetryShutdownService,
     // Guard order is the execution order. Throttle before authenticating (an
     // unauthenticated flood must not reach the database), authenticate before

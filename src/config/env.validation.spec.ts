@@ -319,6 +319,106 @@ describe('env.validation cross-field rules', () => {
   // No provider is privileged, and selecting one must never force another's
   // configuration to exist. That is what keeps the same image deployable to a
   // different cloud with only environment changes.
+  describe('public URLs', () => {
+    function messagesFor(key: string, overrides: Record<string, unknown>) {
+      return (validate(overrides).error?.details ?? [])
+        .filter((detail) => detail.path[0] === key)
+        .map((detail) => detail.message);
+    }
+
+    it('keeps the localhost defaults outside production', () => {
+      const { value, error } = validate({}) as {
+        value: Record<string, unknown>;
+        error?: unknown;
+      };
+      expect(error).toBeUndefined();
+      expect(value.API_BASE_URL).toBe('http://localhost:3000/api');
+      expect(value.WEB_BASE_URL).toBe('http://localhost:5173');
+    });
+
+    it.each(['API_BASE_URL', 'WEB_BASE_URL'])(
+      'requires %s in production instead of defaulting to localhost',
+      (key) => {
+        expect(messagesFor(key, { NODE_ENV: 'production' })).toContainEqual(
+          expect.stringContaining('is required in production'),
+        );
+      },
+    );
+
+    it.each(['http://api.example.com/api', 'http://localhost:3000/api'])(
+      'refuses API_BASE_URL %s in production: not https',
+      (url) => {
+        expect(
+          messagesFor('API_BASE_URL', {
+            NODE_ENV: 'production',
+            API_BASE_URL: url,
+          }),
+        ).toContainEqual(expect.stringContaining('must be an https:// URL'));
+      },
+    );
+
+    it.each([
+      'https://localhost/api',
+      'https://LOCALHOST/api',
+      'https://localhost./api',
+      'https://localhost../api',
+      'https://localhost.:5173/api',
+      'https://api.localhost/api',
+      'https://127.0.0.1:3000/api',
+      'https://127.1/api',
+      'https://2130706433/api',
+      'https://0x7f.0.0.1/api',
+      'https://0/api',
+      'https://0.0.0.0/api',
+      'https://[::1]/api',
+      'https://[::]/api',
+      'https://[0:0:0:0:0:0:0:1]/api',
+      'https://[::ffff:127.0.0.1]/api',
+      'https://203.0.113.7/api',
+      'https://user@api.example.com/api',
+      'https://user:secret@api.example.com/api',
+    ])('refuses API_BASE_URL %s in production: no public hostname', (url) => {
+      expect(
+        messagesFor('API_BASE_URL', {
+          NODE_ENV: 'production',
+          API_BASE_URL: url,
+        }),
+      ).toContainEqual(
+        expect.stringContaining('must name the public hostname'),
+      );
+    });
+
+    it('refuses a WEB_BASE_URL with no public hostname too', () => {
+      expect(
+        messagesFor('WEB_BASE_URL', {
+          NODE_ENV: 'production',
+          WEB_BASE_URL: 'https://[::1]:5173',
+        }),
+      ).toContainEqual(
+        expect.stringContaining('must name the public hostname'),
+      );
+    });
+
+    it('accepts public https URLs in production', () => {
+      const overrides = {
+        NODE_ENV: 'production',
+        API_BASE_URL: 'https://api.example.com/api',
+        WEB_BASE_URL: 'https://www.localhost-shop.example.com',
+      };
+      expect(messagesFor('API_BASE_URL', overrides)).toEqual([]);
+      expect(messagesFor('WEB_BASE_URL', overrides)).toEqual([]);
+    });
+
+    it('lets staging keep http and its own hosts', () => {
+      expect(
+        messagesFor('WEB_BASE_URL', {
+          NODE_ENV: 'staging',
+          WEB_BASE_URL: 'http://localhost:5173',
+        }),
+      ).toEqual([]);
+    });
+  });
+
   describe('object storage', () => {
     // The stub is the default precisely so a fresh clone needs nothing granted.
     it('requires no storage configuration on the stub provider', () => {

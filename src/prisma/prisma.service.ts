@@ -89,9 +89,8 @@ export class PrismaService
 
   // `$disconnect()` disposes the driver adapter, which ends the pg pool this
   // service created — so every pooled connection is returned to Postgres rather
-  // than left for the server to time out. Reached through
-  // `app.enableShutdownHooks()` (main.ts) and through the explicit
-  // `context.close()` in the worker entrypoint.
+  // than left for the server to time out. Reached through the context close in
+  // `src/graceful-shutdown.ts`, which both entrypoints use.
   async onModuleDestroy(): Promise<void> {
     await this.$disconnect();
     this.logger.log('Prisma disconnected, Postgres pool closed');

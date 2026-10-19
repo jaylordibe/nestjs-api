@@ -124,19 +124,23 @@ defaults to `stub`, which persists nothing.
 
 ### Shutdown
 
-`SIGTERM` starts an orderly stop in both runtimes.
+`SIGTERM` starts the same orderly stop in both runtimes
+(`src/graceful-shutdown.ts`). Both handle the signal explicitly, because Nest's
+hooks give no way to drain jobs before the database closes, to bound how long
+the close takes, or to report what was still running.
 
-- **API** — `enableShutdownHooks()` closes the Nest context: HTTP stops
-  accepting, Prisma disconnects and **ends the pg pool**, Redis clients quit,
-  BullMQ queues close, telemetry flushes last so the final seconds survive.
-- **Worker** — handles the signal explicitly, because Nest's hooks give no way
-  to bound how long the close takes or to report what was still running. It
-  stops accepting new jobs, drains active ones for up to **25 seconds**, then
-  exits. Anything still active stays in Redis and is retried once its lock
-  expires; nothing is silently abandoned.
+1. BullMQ stops accepting new jobs and drains active ones, for up to
+   **25 seconds** in all. The API runtime consumes nothing, so this is a no-op
+   there; a process that also consumes (the single-container deploy) finishes
+   its jobs before anything below closes.
+2. The Nest context closes: HTTP stops accepting, Prisma disconnects and
+   **ends the pg pool**, Redis clients quit, BullMQ queues close.
+3. Telemetry flushes last so the final seconds survive.
 
-Give the worker a termination grace period **above 25 seconds** so it reports
-what it abandoned rather than being `SIGKILL`ed mid-sentence.
+Anything still active at 25 seconds stays in Redis and is retried once its lock
+expires; nothing is silently abandoned. Give every runtime that consumes jobs a
+termination grace period **above 25 seconds** so it reports what it abandoned
+rather than being `SIGKILL`ed mid-sentence.
 
 ### Migrations
 
@@ -457,7 +461,7 @@ minutes.
 | `REDIS_URL` | secret |
 | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` | secret (password) |
 | `JWT_SECRET` | secret — 48+ random bytes, unique per environment |
-| `API_BASE_URL`, `WEB_BASE_URL` | public hostnames |
+| `API_BASE_URL`, `WEB_BASE_URL` | public `https://` hostnames — **required in production**; the localhost defaults, `http:`, localhost, an IP address and a URL with credentials are refused there |
 | `CORS_ORIGIN` | explicit list; `*` is refused in production |
 | `TRUST_PROXY` | the addresses of the trusted proxy hops — see [Client topologies](#client-topologies); `false` refused in production |
 | `EMAIL_PROVIDER`, `SMS_PROVIDER` | **required in production** — they default to `stub`, and `stub` is refused there. Their own settings are in the adapter table below |

@@ -14,6 +14,7 @@ import {
   configureHttpApp,
   SingleAppExpressAdapter,
 } from './configure-http-app';
+import { registerShutdownHandlers } from './graceful-shutdown';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(
@@ -26,10 +27,12 @@ async function bootstrap(): Promise<void> {
   configureHttpApp(app);
   const port = app.get(ConfigService).getOrThrow<number>('port');
 
-  // Also drives TelemetryShutdownService, which flushes spans and metrics so
-  // the final seconds before a deploy or restart — the window you actually go
-  // looking for — are not the ones that get dropped.
-  app.enableShutdownHooks();
+  // Drains any queue jobs this process runs before Prisma and Redis close,
+  // then flushes spans and metrics so the final seconds before a deploy or
+  // restart — the window you actually go looking for — are not the ones that
+  // get dropped. Replaces `enableShutdownHooks()`, which closes the context
+  // with the jobs still running.
+  registerShutdownHandlers(app, app.get(Logger), 'Bootstrap');
 
   // Bound to 0.0.0.0, not the Node default. Nest's default binds every
   // interface today, but stating it removes the dependency on that default:
