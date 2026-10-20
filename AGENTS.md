@@ -116,8 +116,12 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
   `@IsDateString()`.
 - **Responses:** always `new <Resource>ResponseDto(row)`, never raw Prisma
   rows. Sensitive fields need both `@Exclude()` and `@ApiHideProperty()`.
-- **Schema:** no DB enums (`String` + TS enum in `src/common/enums/` +
-  `@IsEnum()`); every column `@map`s to snake_case.
+- **Schema:** no allowed-value lists in the database: no DB enum types and
+  no `CHECK (column IN (...))`. A column's allowed values live once, in a TS
+  enum (`src/common/enums/`) or constant, validated with `@IsEnum()`/`@IsIn()`,
+  so a new value needs no migration. A `CHECK` states only an invariant: a
+  range, a pairing, or a rule between columns. Every column `@map`s to
+  snake_case.
 - **Authorization:** `JwtAuthGuard` + `PermissionsGuard` are global. Every
   handler declares exactly one of `@Public()` / `@AuthenticatedOnly()` /
   `@RequirePermission()`, or boot fails. The permission catalog in
@@ -172,8 +176,12 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
 - **Redis:** build every client from `buildRedisConnectionOptions`.
 - **Background work:** BullMQ only, and by default: work the response does
   not need (every notification, side-effect call, unbounded loop) is
-  enqueued, never run inline. Never reintroduce `@nestjs/schedule`.
-  Consumers tolerate duplicate delivery and keep `correlationId`.
+  enqueued, never run inline. A side effect the change must not lose (an
+  email or push to a user, an outbound webhook) is an outbox:
+  a row written in the same transaction as the change, enqueued after the
+  commit, and re-queued by a sweep if its job is lost. Never reintroduce
+  `@nestjs/schedule`. Consumers tolerate duplicate delivery and keep
+  `correlationId`.
 - **Cycles:** `forwardRef` in both the import and the `@Inject`.
 - **TypeScript:** decorated signatures need `import type`
   (`isolatedModules`); cast DB strings to enums before comparing.

@@ -1,6 +1,7 @@
 # Schema and lifecycle reference
 
-Naming (`@map` to snake_case, `is*` booleans, no DB enums), partial uniqueness,
+Naming (`@map` to snake_case, `is*` booleans, no allowed-value lists in the
+database), partial uniqueness,
 and soft-delete read semantics are owned by `docs/engineering-conventions.md`.
 The soft-delete mechanism is owned by `src/prisma/prisma-soft-delete.extension.ts`.
 This file holds the field order and the lifecycle choice.
