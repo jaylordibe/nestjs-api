@@ -7,6 +7,7 @@ import {
 } from '../../../common/authorization/app-ability';
 import { buildOrderBy } from '../../../common/dto/meta-query.dto';
 import { PaginationMeta } from '../../../common/dto/paginated-response.dto';
+import { WorkspaceInvitationStatus } from '../../../common/enums/workspace-invitation-status.enum';
 import { WorkspaceMembershipStatus } from '../../../common/enums/workspace-membership-status.enum';
 import { SeededRoleName } from '../../../common/enums/seeded-role-name.enum';
 import { Errors } from '../../../common/errors/errors';
@@ -735,6 +736,18 @@ export class WorkspaceMembershipsService {
         );
       }
 
+      // Suspending or ending a membership withdraws that person's pending
+      // invitations here too. Otherwise a link sent before they were removed
+      // brings them straight back.
+      if (options.to !== WorkspaceMembershipStatus.ACTIVE) {
+        await this.revokePendingInvitations(
+          transaction,
+          workspaceId,
+          existing.userId,
+          actorId,
+        );
+      }
+
       return transaction.workspaceMembership.update({
         where: { id: membershipId },
         data: { ...options.data, status: options.to, updatedBy: actorId },
@@ -785,6 +798,45 @@ export class WorkspaceMembershipsService {
    * ("appoint another owner first") unreachable. What is forbidden is reaching
    * UP: an admin can never mint an owner.
    */
+
+  /**
+   * Withdraws every pending invitation to this person in this workspace.
+   *
+   * By account where the invitation recorded one, and by address where it
+   * could not (the address had no account when it was sent) — the same two
+   * identities `accept` admits, so the address counts only once it is
+   * verified: an unverified one may be somebody else's.
+   */
+  private async revokePendingInvitations(
+    transaction: Prisma.TransactionClient,
+    workspaceId: string,
+    userId: string,
+    actorId: string,
+  ): Promise<void> {
+    const user = await transaction.user.findUnique({
+      where: { id: userId },
+      select: { email: true, emailVerifiedAt: true },
+    });
+    const now = new Date();
+    await transaction.workspaceInvitation.updateMany({
+      where: {
+        workspaceId,
+        status: WorkspaceInvitationStatus.PENDING,
+        OR: [
+          { invitedUserId: userId },
+          ...(user?.email && user.emailVerifiedAt
+            ? [{ invitedUserId: null, email: user.email.toLowerCase() }]
+            : []),
+        ],
+      },
+      data: {
+        status: WorkspaceInvitationStatus.REVOKED,
+        revokedAt: now,
+        revokedBy: actorId,
+        updatedBy: actorId,
+      },
+    });
+  }
 
   // Object-level authorization, evaluated against the REAL row rather than the
   // subject type — which is all the guard could check before the record was

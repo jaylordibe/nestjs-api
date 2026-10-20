@@ -1,4 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { AuditService } from '../../../common/audit/audit.service';
@@ -21,6 +25,7 @@ import {
 } from '../../../common/util/opaque-token.util';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { AbilityScopedQueryService } from '../../authorization/ability-scoped-query.service';
+import { PermissionCheckService } from '../../authorization/permission-check.service';
 import { PermissionLoaderService } from '../../authorization/permission-loader.service';
 import { WorkspaceOwnershipPolicy } from '../workspace-ownership.policy';
 import { WorkspaceRoleAssignmentPolicy } from '../workspace-role-assignment.policy';
@@ -51,6 +56,7 @@ export class WorkspaceInvitationsService {
     private readonly auditService: AuditService,
     private readonly abilityScopedQueryService: AbilityScopedQueryService,
     private readonly permissionLoaderService: PermissionLoaderService,
+    private readonly permissionCheckService: PermissionCheckService,
     private readonly emailService: EmailService,
     private readonly destinationSendLimit: DestinationSendLimitService,
     private readonly queueProducer: QueueProducerService,
@@ -545,6 +551,10 @@ export class WorkspaceInvitationsService {
           transaction,
           invitation.workspaceId,
         );
+        // Under the workspace lock, which every roster change takes, so the
+        // inviter's authority read here is the authority they hold as this
+        // commits — not one a suspension or demotion has just taken away.
+        await this.assertInviterMayStillAssign(invitation);
 
         const consumed = await transaction.workspaceInvitation.updateMany({
           where: {
@@ -580,6 +590,21 @@ export class WorkspaceInvitationsService {
             role: { select: { name: true } },
           },
         });
+
+        // The membership as it is NOW, under the workspace lock — not as it
+        // was when the invitation was sent. Only a former member re-joins;
+        // overwriting a current one would let a stale link lift a suspension
+        // or demote an owner. Throwing rolls the consume above back, so the
+        // invitation stays pending.
+        if (
+          previous &&
+          (previous.status as WorkspaceMembershipStatus) !==
+            WorkspaceMembershipStatus.LEFT
+        ) {
+          throw Errors.resourceConflict(
+            'You already have a membership in this workspace',
+          );
+        }
 
         // Upsert, because someone who previously LEFT still owns the only row
         // `@@unique([workspaceId, userId])` will ever allow. `joinedAt` is
@@ -688,6 +713,53 @@ export class WorkspaceInvitationsService {
       throw Errors.resourceNotFound('Workspace invitation');
     }
     return invitation;
+  }
+
+  /**
+   * An invitation is the inviter's role assignment, deferred, so it is only as
+   * good as their authority now. The same checks `create` applies — the role
+   * is a workspace role, and the inviter may hand it out — re-run against the
+   * inviter as they are at acceptance: a demoted, removed or deactivated
+   * inviter's invitations no longer grant anything.
+   *
+   * Reported as INVITATION_INVALID: the invitee can do nothing about the
+   * inviter's authority, and the remedy is a fresh invitation either way.
+   */
+  private async assertInviterMayStillAssign(invitation: {
+    workspaceId: string;
+    invitedBy: string | null;
+    roleId: string;
+  }): Promise<void> {
+    const inviter = invitation.invitedBy
+      ? await this.prisma.scoped.user.findFirst({
+          where: { id: invitation.invitedBy, isActive: true },
+          select: { id: true },
+        })
+      : null;
+    if (!inviter) {
+      throw Errors.invitationInvalid();
+    }
+    const inviterAbility =
+      await this.permissionCheckService.createAbilityForUser(inviter.id);
+    try {
+      const role = await this.workspaceRoleAssignmentPolicy.loadAssignableRole(
+        invitation.roleId,
+      );
+      await this.workspaceRoleAssignmentPolicy.assertMayAssign(
+        invitation.workspaceId,
+        inviter.id,
+        role,
+        inviterAbility,
+      );
+    } catch (error) {
+      if (
+        error instanceof ForbiddenException ||
+        error instanceof NotFoundException
+      ) {
+        throw Errors.invitationInvalid();
+      }
+      throw error;
+    }
   }
 
   /**

@@ -455,23 +455,28 @@ describe('Workspace invitations (e2e)', () => {
           email: invitee.email,
           roleId: await roleIdFor(app, SeededRoleName.PLATFORM_ADMIN),
           tokenHash: hashOpaqueToken(token),
+          invitedBy: owner.id,
           expiresAt: new Date(Date.now() + 86_400_000),
         },
       });
 
-      // Acceptance succeeds — nothing structurally forbids the row.
-      await acceptAs(invitee, token).expect(200);
+      // Acceptance re-runs the inviter's assignment checks, and no workspace
+      // owner may hand out a platform role, so the row redeems nothing.
+      const response = await acceptAs(invitee, token).expect(400);
+      expect((response.body as ErrorBody).errorCode).toBe('INVITATION_INVALID');
+      expect(
+        await prisma.workspaceMembership.count({
+          where: { workspaceId: workspace.id, userId: invitee.id },
+        }),
+      ).toBe(0);
 
-      // …and the resulting membership confers nothing, because `AbilityFactory`
-      // drops a PLATFORM permission arriving through a membership.
+      // Had it been redeemed, the membership would still confer nothing:
+      // `AbilityFactory` drops a PLATFORM permission arriving through a
+      // membership — `workspace-memberships.e2e-spec.ts` asserts that directly.
       await request(app.getHttpServer())
         .get('/api/users')
         .set('Authorization', `Bearer ${invitee.token}`)
         .expect(403);
-      await request(app.getHttpServer())
-        .get(`/api/workspaces/${workspace.id}`)
-        .set('Authorization', `Bearer ${invitee.token}`)
-        .expect(404);
     });
 
     it('a member with no invite permission cannot invite', async () => {
@@ -738,6 +743,232 @@ describe('Workspace invitations (e2e)', () => {
         .post('/api/invitations/accept')
         .send({ token: 'z'.repeat(43) })
         .expect(401);
+    });
+  });
+
+  /**
+   * An invitation is checked against the membership as it is when it is
+   * ACCEPTED, not when it was sent. These start from an invitation raised
+   * before the person was on the roster and put them on it afterwards.
+   */
+  describe('acceptance checks the membership as it is now', () => {
+    const staleInvitation = async (
+      membershipRole: SeededRoleName,
+      membershipStatus: WorkspaceMembershipStatus,
+    ) => {
+      const person = await createRegularUser(app, 'person@example.com');
+      const { token, invitationId } = await inviteAndCaptureToken(person.email);
+      const membershipId = await addMembership(
+        app,
+        workspace.id,
+        person.id,
+        membershipRole,
+        membershipStatus,
+      );
+      return { person, token, invitationId, membershipId };
+    };
+
+    it.each([
+      [
+        'a suspended member cannot lift their own suspension',
+        SeededRoleName.WORKSPACE_STAFF,
+        WorkspaceMembershipStatus.SUSPENDED,
+      ],
+      [
+        'an owner is never demoted',
+        SeededRoleName.WORKSPACE_OWNER,
+        WorkspaceMembershipStatus.ACTIVE,
+      ],
+      [
+        'an active member cannot change their own role',
+        SeededRoleName.WORKSPACE_ADMIN,
+        WorkspaceMembershipStatus.ACTIVE,
+      ],
+    ])('%s with a stale invitation', async (_label, roleName, status) => {
+      const { person, token, invitationId, membershipId } =
+        await staleInvitation(roleName, status);
+
+      const response = await acceptAs(person, token).expect(409);
+
+      expect((response.body as ErrorBody).errorCode).toBe('RESOURCE_CONFLICT');
+      const prisma = app.get(PrismaService);
+      const membership = await prisma.workspaceMembership.findUniqueOrThrow({
+        where: { id: membershipId },
+        include: { role: { select: { name: true } } },
+      });
+      expect({ role: membership.role.name, status: membership.status }).toEqual(
+        { role: roleName, status },
+      );
+      const invitation = await prisma.workspaceInvitation.findUniqueOrThrow({
+        where: { id: invitationId },
+      });
+      expect(invitation.status).toBe(WorkspaceInvitationStatus.PENDING);
+    });
+  });
+
+  describe('suspending or removing a member revokes their pending invitations', () => {
+    const membershipsUrl = () => `/api/workspaces/${workspace.id}/memberships`;
+
+    const expectRevoked = async (invitationId: string) => {
+      const invitation = await app
+        .get(PrismaService)
+        .workspaceInvitation.findUniqueOrThrow({
+          where: { id: invitationId },
+        });
+      expect(invitation.status).toBe(WorkspaceInvitationStatus.REVOKED);
+      expect(invitation.revokedBy).toBe(owner.id);
+      expect(invitation.revokedAt).not.toBeNull();
+    };
+
+    it('a link sent before a member was removed cannot bring them back', async () => {
+      const person = await createRegularUser(app, 'person@example.com');
+      const { token, invitationId } = await inviteAndCaptureToken(person.email);
+      const membershipId = await addMembership(
+        app,
+        workspace.id,
+        person.id,
+        SeededRoleName.WORKSPACE_STAFF,
+      );
+
+      await request(app.getHttpServer())
+        .delete(`${membershipsUrl()}/${membershipId}`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .expect(204);
+
+      await expectRevoked(invitationId);
+      const response = await acceptAs(person, token).expect(400);
+      expect((response.body as ErrorBody).errorCode).toBe('INVITATION_INVALID');
+      const membership = await app
+        .get(PrismaService)
+        .workspaceMembership.findUniqueOrThrow({ where: { id: membershipId } });
+      expect(membership.status).toBe(WorkspaceMembershipStatus.LEFT);
+    });
+
+    it('suspension revokes an invitation sent to their address, and only in this workspace', async () => {
+      const { invitationId } = await inviteAndCaptureToken('later@example.com');
+      const person = await createRegularUser(app, 'later@example.com');
+      const membershipId = await addMembership(
+        app,
+        workspace.id,
+        person.id,
+        SeededRoleName.WORKSPACE_STAFF,
+      );
+      const other = await createWorkspaceWithOwner(app, owner.id, 'other');
+      const elsewhere = await app.get(WorkspaceInvitationsService).create(
+        other.id,
+        {
+          email: person.email,
+          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_STAFF),
+        },
+        await abilityFor(owner.id),
+        owner.id,
+      );
+
+      await request(app.getHttpServer())
+        .post(`${membershipsUrl()}/${membershipId}/suspend`)
+        .set('Authorization', `Bearer ${owner.token}`)
+        .expect(200);
+
+      await expectRevoked(invitationId);
+      const untouched = await app
+        .get(PrismaService)
+        .workspaceInvitation.findUniqueOrThrow({
+          where: { id: elsewhere.invitation.id },
+        });
+      expect(untouched.status).toBe(WorkspaceInvitationStatus.PENDING);
+    });
+  });
+
+  describe("acceptance re-checks the inviter's authority", () => {
+    const seedInvitingAdmin = async () => {
+      const admin = await createRegularUser(app, 'admin@example.com');
+      const adminMembershipId = await addMembership(
+        app,
+        workspace.id,
+        admin.id,
+        SeededRoleName.WORKSPACE_ADMIN,
+      );
+      const invitee = await createRegularUser(app, 'invitee@example.com');
+      const { token, invitationId } = await inviteAndCaptureToken(
+        invitee.email,
+        SeededRoleName.WORKSPACE_ADMIN,
+        admin.id,
+      );
+      return { admin, adminMembershipId, invitee, token, invitationId };
+    };
+
+    const expectRefused = async (
+      invitee: SeededUser,
+      token: string,
+    ): Promise<void> => {
+      const response = await acceptAs(invitee, token).expect(400);
+      expect((response.body as ErrorBody).errorCode).toBe('INVITATION_INVALID');
+      expect(
+        await app.get(PrismaService).workspaceMembership.count({
+          where: { workspaceId: workspace.id, userId: invitee.id },
+        }),
+      ).toBe(0);
+    };
+
+    it('admits the invitation while the inviter may still hand out the role', async () => {
+      const { invitee, token } = await seedInvitingAdmin();
+      await acceptAs(invitee, token).expect(200);
+    });
+
+    it('refuses it once the inviter has been demoted', async () => {
+      const { adminMembershipId, invitee, token } = await seedInvitingAdmin();
+      await request(app.getHttpServer())
+        .patch(
+          `/api/workspaces/${workspace.id}/memberships/${adminMembershipId}/role`,
+        )
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({
+          roleId: await roleIdFor(app, SeededRoleName.WORKSPACE_MANAGER),
+        })
+        .expect(200);
+
+      await expectRefused(invitee, token);
+    });
+
+    it('refuses it once the inviter has been removed', async () => {
+      const { adminMembershipId, invitee, token } = await seedInvitingAdmin();
+      await request(app.getHttpServer())
+        .delete(
+          `/api/workspaces/${workspace.id}/memberships/${adminMembershipId}`,
+        )
+        .set('Authorization', `Bearer ${owner.token}`)
+        .expect(204);
+
+      await expectRefused(invitee, token);
+    });
+
+    it("refuses it once the inviter's account has been deleted", async () => {
+      const { admin, invitee, token } = await seedInvitingAdmin();
+      await app.get(PrismaService).user.update({
+        where: { id: admin.id },
+        data: { deletedAt: new Date() },
+      });
+
+      await expectRefused(invitee, token);
+    });
+
+    it("refuses it once the inviter's account has been deactivated", async () => {
+      const { admin, invitee, token } = await seedInvitingAdmin();
+      await app
+        .get(PrismaService)
+        .user.update({ where: { id: admin.id }, data: { isActive: false } });
+
+      await expectRefused(invitee, token);
+    });
+
+    it('refuses an invitation that records no inviter', async () => {
+      const { invitee, token, invitationId } = await seedInvitingAdmin();
+      await app.get(PrismaService).workspaceInvitation.update({
+        where: { id: invitationId },
+        data: { invitedBy: null },
+      });
+
+      await expectRefused(invitee, token);
     });
   });
 

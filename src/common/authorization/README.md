@@ -489,7 +489,22 @@ what was true at invite time:
   complete bypass.
 
 Every failure raises the same error the unknown-token path raises, so a holder
-of somebody else's token learns nothing about whose it is. Acceptance is a
+of somebody else's token learns nothing about whose it is.
+
+An invitation is the inviter's role assignment, deferred, so acceptance checks,
+under the workspace lock, two things the invitation cannot have known when it
+was sent:
+
+- **The inviter may still hand out that role.** The same checks as `create`,
+  applied to the inviter as they are now; a demoted, removed, deactivated or
+  deleted inviter's invitations are refused (`INVITATION_INVALID`).
+- **The invitee's membership now.** Only a former member (`left`) re-joins; a
+  current one, active or suspended, is refused with `RESOURCE_CONFLICT`, so a
+  stale link can never lift a suspension or change anyone's role. Suspending
+  or ending a membership also revokes that person's pending invitations to the
+  workspace, so a link sent before they were removed cannot bring them back.
+
+Acceptance is a
 conditional `UPDATE` out of `pending` inside the transaction that writes the
 membership, so two simultaneous redemptions produce exactly one membership and
 the loser's whole transaction rolls back.
