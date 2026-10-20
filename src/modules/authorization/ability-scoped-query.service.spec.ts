@@ -228,4 +228,30 @@ describe('AbilityScopedQueryService', () => {
       // the lookup to the requested id, so a cross-user fetch matches nothing.
     });
   });
+
+  describe('buildWhereOrEmpty', () => {
+    it('matches nothing, with `id: { in: [] }` on top, for a caller with no rule', () => {
+      // Not `{ OR: [] }`: Prisma drops that inside an AND, and `id: { in: [] }`
+      // survives at any depth.
+      expect(
+        service.buildRecordWhereOrEmpty(
+          abilityFor(NO_ROLE_ACCOUNT_GRANTS),
+          'read',
+          'AuditLog',
+          'some-log',
+        ),
+      ).toEqual({ id: { in: [] }, AND: [{ id: 'some-log' }] });
+    });
+
+    it('is buildWhere for a caller holding a rule', () => {
+      expect(
+        service.buildWhereOrEmpty(
+          abilityFor(NO_ROLE_ACCOUNT_GRANTS),
+          'read',
+          'User',
+          { isActive: true },
+        ),
+      ).toEqual({ OR: [{ id: OWN_USER_ID }], AND: [{ isActive: true }] });
+    });
+  });
 });

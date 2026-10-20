@@ -122,8 +122,13 @@ export class AbilityScopedQueryService {
     callerWhere: WhereInputBySubject[TSubject] = {},
   ): WhereInputBySubject[TSubject] {
     if (ability.cannot(action, subject)) {
+      // Typed as loosely as `AccessibleFragment`, for the same cast: given its
+      // precise type, `@typescript-eslint/no-unnecessary-type-assertion`
+      // compares it against every subject's WhereInput and exhausts the
+      // linter's memory.
+      const matchesNothing: { id: unknown } = { id: { in: [] } };
       return {
-        id: { in: [] },
+        ...matchesNothing,
         AND: [callerWhere],
       } as WhereInputBySubject[TSubject];
     }

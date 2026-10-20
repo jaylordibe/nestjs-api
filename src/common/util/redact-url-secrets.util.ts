@@ -1,4 +1,5 @@
-// Strips secret-bearing query parameters from a URL before it is logged.
+// Strips secret-bearing and personal query parameters from a URL before it is
+// logged.
 //
 // Why this is needed at all: pino-http logs `req.url`, query string included,
 // and this API deliberately has endpoints that carry a credential there.
@@ -50,7 +51,20 @@ const SECRET_QUERY_PARAMETER_NAMES = new Set([
   'sv',
 ]);
 
+// Not credentials but personal: what someone typed into a search box. People
+// type names, phone numbers and addresses there, and every list endpoint takes
+// it (`MetaQueryDto.search`).
+const PERSONAL_QUERY_PARAMETER_NAMES = new Set(['search']);
+
 const REDACTED_VALUE = '[redacted]';
+
+function isRedactedParameter(name: string): boolean {
+  const lowerCaseName = name.toLowerCase();
+  return (
+    SECRET_QUERY_PARAMETER_NAMES.has(lowerCaseName) ||
+    PERSONAL_QUERY_PARAMETER_NAMES.has(lowerCaseName)
+  );
+}
 
 // The parsed query object, redacted by the same rules as the raw URL.
 //
@@ -63,9 +77,7 @@ export function redactQueryParameters(
 ): Record<string, unknown> {
   const redactedQuery: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(query)) {
-    redactedQuery[name] = SECRET_QUERY_PARAMETER_NAMES.has(name.toLowerCase())
-      ? REDACTED_VALUE
-      : value;
+    redactedQuery[name] = isRedactedParameter(name) ? REDACTED_VALUE : value;
   }
   return redactedQuery;
 }
@@ -91,11 +103,26 @@ export function redactUrlSecrets(url: string): string {
         return parameter;
       }
       const name = parameter.slice(0, separatorIndex);
-      return SECRET_QUERY_PARAMETER_NAMES.has(name.toLowerCase())
+      return isRedactedParameter(name)
         ? `${name}=${REDACTED_VALUE}`
         : parameter;
     })
     .join('&');
 
   return `${pathPortion}?${redactedQuery}`;
+}
+
+/**
+ * The query attribute an incoming request's span records, redacted:
+ * `instrumentation-http` records the query string of every request it serves,
+ * and a span is exported verbatim.
+ */
+export function redactedIncomingUrlAttributes(url: string | undefined): {
+  'url.query': string;
+} {
+  const redacted = redactUrlSecrets(url ?? '');
+  const queryStart = redacted.indexOf('?');
+  return {
+    'url.query': queryStart === -1 ? '' : redacted.slice(queryStart + 1),
+  };
 }

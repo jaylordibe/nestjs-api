@@ -30,13 +30,14 @@ import { redactUrlSecrets } from '../util/redact-url-secrets.util';
 // This filter replaces the legacy `AllExceptionsFilter` and
 // `PrismaExceptionFilter`. One file, one envelope, one mental model.
 
-// Subset of the meta shape emitted by @prisma/adapter-pg for P2002
-// errors. Prisma's public types don't describe this nested object, so
+// Subset of the meta shape emitted by @prisma/adapter-pg for P2002 and
+// raw driver errors. Prisma's public types don't describe this nested object, so
 // we declare just the path we actually read.
 interface AdapterPgMeta {
   target?: unknown;
   driverAdapterError?: {
     cause?: {
+      originalCode?: string;
       constraint?: {
         fields?: unknown;
       };
@@ -172,6 +173,17 @@ export class GlobalExceptionFilter implements ExceptionFilter {
   private fromPrisma(
     exception: Prisma.PrismaClientKnownRequestError,
   ): Translated {
+    // A statement cut off by its `statement_timeout` (57014), set where a
+    // read must not hold a pooled connection for long: the database is busy,
+    // not broken, so a retry later may succeed.
+    const meta = exception.meta as AdapterPgMeta | undefined;
+    if (meta?.driverAdapterError?.cause?.originalCode === '57014') {
+      return {
+        status: HttpStatus.SERVICE_UNAVAILABLE,
+        errorCode: ErrorCode.EXTERNAL_SERVICE_UNAVAILABLE,
+        message: 'Busy right now; try again in a moment',
+      };
+    }
     switch (exception.code) {
       case 'P2002': {
         const field = this.getTargetField(exception);

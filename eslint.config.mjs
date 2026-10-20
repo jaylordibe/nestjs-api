@@ -163,7 +163,7 @@ export default tseslint.config(
           // a subclass — it was `new HttpException(body, status)`, which the
           // subclass-only selector let through silently.
           selector:
-            "NewExpression[callee.name=/^(HttpException|BadRequestException|UnauthorizedException|ForbiddenException|NotFoundException|ConflictException|ServiceUnavailableException)$/]",
+            'NewExpression[callee.name=/^(HttpException|BadRequestException|UnauthorizedException|ForbiddenException|NotFoundException|ConflictException|ServiceUnavailableException)$/]',
           message:
             'Do not construct HttpException or its subclasses directly. Use the `Errors.*` factory in src/common/errors/errors.ts so the response carries a stable errorCode. If no factory fits, add one there rather than throwing a raw status. See src/common/errors/README.md.',
         },
@@ -192,6 +192,17 @@ export default tseslint.config(
             "Property[key.name=/^(include|select)$/] > ObjectExpression > Property[key.name=/^(user|workspace)$/][value.raw='true']",
           message:
             'Including a soft-deletable relation unfiltered returns deleted rows: `prisma.scoped` only filters top-level reads, never nested ones. Filter it explicitly — `{ where: { deletedAt: null } }` for a to-many relation, or filter the PARENT rows for a to-one (Prisma has no `where` on a to-one include). See src/prisma/prisma-soft-delete.extension.ts.',
+        },
+        // SQL-injection guardrail. Raw SQL is written with the tagged
+        // `$queryRaw` / `$executeRaw` / `Prisma.sql`, which bind every
+        // interpolated value as a parameter. The `Unsafe` variants and
+        // `Prisma.raw` splice a string into the statement instead, so one
+        // caller-supplied value reaching them is an injection.
+        {
+          selector:
+            "MemberExpression[property.name=/^\\$(queryRawUnsafe|executeRawUnsafe)$/], MemberExpression[object.name='Prisma'][property.name='raw']",
+          message:
+            'Do not splice strings into SQL. Use the tagged `$queryRaw` / `$executeRaw` / `Prisma.sql` (with `Prisma.join` for lists), which bind values as parameters; pick between fixed fragments rather than building one from a string.',
         },
       ],
     },

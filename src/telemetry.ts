@@ -8,6 +8,9 @@ import {
   ATTR_SERVICE_NAME,
   ATTR_SERVICE_VERSION,
 } from '@opentelemetry/semantic-conventions';
+// Pure configuration with no patched imports, so loading it here cannot pull a
+// module in ahead of the SDK and leave it unpatched.
+import { HTTP_INSTRUMENTATION_CONFIG } from './common/telemetry/http-instrumentation.config';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OpenTelemetry bootstrap.
@@ -71,13 +74,9 @@ export function startTelemetry(): void {
         // Filesystem spans are pure noise at this granularity — every template
         // read and every module load becomes a span, burying the request.
         '@opentelemetry/instrumentation-fs': { enabled: false },
-        '@opentelemetry/instrumentation-http': {
-          // Health probes run every few seconds forever. Tracing them would
-          // dominate the trace volume and tell you nothing you cannot read off
-          // the probe itself.
-          ignoreIncomingRequestHook: (request) =>
-            (request.url ?? '').startsWith('/api/health'),
-        },
+        // Incoming spans would record query strings: search text, a
+        // verification token; see the config.
+        '@opentelemetry/instrumentation-http': HTTP_INSTRUMENTATION_CONFIG,
       }),
     ],
   });

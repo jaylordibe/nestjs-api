@@ -1,4 +1,5 @@
 import {
+  redactedIncomingUrlAttributes,
   redactQueryParameters,
   redactUrlSecrets,
 } from './redact-url-secrets.util';
@@ -81,6 +82,38 @@ describe('redactUrlSecrets', () => {
     expect(redactUrlSecrets('/api/x?token=a&token=b')).toBe(
       '/api/x?token=[redacted]&token=[redacted]',
     );
+  });
+});
+
+describe('personal query parameters', () => {
+  it('redacts search text, keeping the rest', () => {
+    expect(redactUrlSecrets('/api/users?search=juan%200917&page=2')).toBe(
+      '/api/users?search=[redacted]&page=2',
+    );
+    expect(redactQueryParameters({ Search: 'x', page: '2' })).toEqual({
+      Search: '[redacted]',
+      page: '2',
+    });
+  });
+});
+
+describe('redactedIncomingUrlAttributes', () => {
+  it('redacts the query an incoming span records', () => {
+    expect(
+      redactedIncomingUrlAttributes('/api/users?search=juan&page=2'),
+    ).toEqual({ 'url.query': 'search=[redacted]&page=2' });
+    expect(
+      redactedIncomingUrlAttributes('/api/auth/verify-email?token=secret'),
+    ).toEqual({ 'url.query': 'token=[redacted]' });
+  });
+
+  it('records an empty query for a request without one', () => {
+    expect(redactedIncomingUrlAttributes('/api/users')).toEqual({
+      'url.query': '',
+    });
+    expect(redactedIncomingUrlAttributes(undefined)).toEqual({
+      'url.query': '',
+    });
   });
 });
 

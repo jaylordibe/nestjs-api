@@ -29,6 +29,8 @@ describe('pino-http options', () => {
   const RESPONSE_COOKIE_SECRET = 'session=eeee-response-cookie-secret';
   const QUERY_TOKEN_SECRET = 'ffff-query-token-secret';
   const TURNSTILE_TOKEN_SECRET = 'gggg-turnstile-token-secret';
+  // Personal rather than secret: what was typed into a search box.
+  const SEARCH_TEXT = 'hhhh-juan-dela-cruz';
 
   // Boots a throwaway HTTP server wired to the real options, issues one request
   // carrying every credential shape the API can receive, and returns the raw
@@ -68,7 +70,7 @@ describe('pino-http options', () => {
         {
           port,
           host: '127.0.0.1',
-          path: `/api/auth/verify-email?token=${QUERY_TOKEN_SECRET}&page=2`,
+          path: `/api/auth/verify-email?token=${QUERY_TOKEN_SECRET}&page=2&search=${SEARCH_TEXT}`,
           headers: {
             authorization: AUTHORIZATION_SECRET,
             cookie: REQUEST_COOKIE_SECRET,
@@ -109,6 +111,7 @@ describe('pino-http options', () => {
     ['response Set-Cookie header', RESPONSE_COOKIE_SECRET],
     ['query-string token', QUERY_TOKEN_SECRET],
     ['X-Turnstile-Token header', TURNSTILE_TOKEN_SECRET],
+    ['search text', SEARCH_TEXT],
   ])('never writes the %s to the log', (_label, secret) => {
     expect(logOutput).not.toContain(secret);
   });

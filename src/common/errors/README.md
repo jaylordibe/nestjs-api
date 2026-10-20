@@ -129,7 +129,7 @@ soft-deletes the solely-owned workspaces instead. That asymmetry with
 | Code | Trigger |
 |---|---|
 | `RATE_LIMITED` | Too many requests. Emitted by the global `@nestjs/throttler` guard, and by application code via `Errors.rateLimited()`. A client cannot tell the two apart, and does not need to — the remedy is the same. Note only the throttler sets `Retry-After`; a factory-thrown 429 carries no such header, so a client must have its own backoff and not depend on one being present. |
-| `EXTERNAL_SERVICE_UNAVAILABLE` | Third-party integration unavailable (SMS / email / storage providers, the Turnstile check, etc.). On a Turnstile-checked route, get a new token before retrying: the old one's state is unknown. |
+| `EXTERNAL_SERVICE_UNAVAILABLE` | Third-party integration unavailable (SMS / email / storage providers, the Turnstile check, etc.), or the database cut a statement off at its `statement_timeout` (busy rather than broken). On a Turnstile-checked route, get a new token before retrying: the old one's state is unknown. Otherwise retry after a moment. |
 | `INTERNAL_ERROR` | Catch-all 500 for unexpected runtime errors. Real exception logged server-side; response never leaks internals. |
 
 ## Adding a new error scenario
