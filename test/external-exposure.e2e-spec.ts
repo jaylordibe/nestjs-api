@@ -342,14 +342,19 @@ describe('External exposure (e2e)', () => {
       expect(response.headers['x-content-type-options']).toBe('nosniff');
       expect(response.headers['access-control-allow-origin']).toBeUndefined();
 
-      // ...while the configured origin is still allowed, with credentials.
+      // ...while the configured origin is still allowed. Credentials are NOT
+      // advertised: auth is Bearer-only, so `Access-Control-Allow-Credentials`
+      // is deliberately absent (see configure-http-app.ts) — no page can read a
+      // credentialed cross-origin response even where `origin` reflects any caller.
       const allowed = await rawGet(app, '/api/public/ping', {
         Origin: PRODUCTION_ENV.CORS_ORIGIN,
       });
       expect(allowed.headers['access-control-allow-origin']).toBe(
         PRODUCTION_ENV.CORS_ORIGIN,
       );
-      expect(allowed.headers['access-control-allow-credentials']).toBe('true');
+      expect(
+        allowed.headers['access-control-allow-credentials'],
+      ).toBeUndefined();
     });
 
     it('counts rate limits in Redis on the shared, app-owned client', () => {

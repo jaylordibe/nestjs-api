@@ -61,12 +61,21 @@ export function configureHttpApp(app: NestExpressApplication): void {
   app.set('trust proxy', trustProxy);
   app.use(helmet());
   app.setGlobalPrefix('api');
+  // No `credentials: true`. Authentication is Bearer-only — the access token
+  // rides the `Authorization` header and the refresh token in the request body;
+  // nothing is kept in a cookie, so the browser never needs to send ambient
+  // credentials cross-origin. Enabling it while `origin` reflects any caller
+  // (the `'*'` default outside production) is the one combination that would let
+  // any site read a credentialed response — so the credential is dropped at the
+  // source, in every environment, rather than relying on each one to pin an
+  // origin list. If cookie-based auth is ever introduced, restore this ONLY
+  // together with an explicit origin allowlist (never with the reflect-any
+  // default), and extend the production `CORS_ORIGIN='*'` floor to staging.
   app.enableCors({
     origin:
       corsOrigin === '*'
         ? true
         : corsOrigin.split(',').map((origin) => origin.trim()),
-    credentials: true,
   });
 
   // Swagger gate. Production is hard-off — the schema dump describes every DTO
