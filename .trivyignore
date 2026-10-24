@@ -18,3 +18,10 @@
 #   # <Why no upgrade path exists, and why it is not exploitable in THIS image.>
 #   # Review by 2026-12-31 — <what would let this be dropped>.
 #   CVE-2026-00000
+
+# CVE-2026-109461 — @azure/msal-node: the auth_code flow can disclose parameters
+# to an attacker-chosen endpoint. Fixed only in 7.1.0, which no @azure/identity
+# release accepts yet. Unreachable here; the full rationale is the matching
+# entry in .github/scripts/audit-gate.mjs.
+# Review by 2026-12-31 — drop once @azure/identity accepts msal-node >=7.1.0.
+CVE-2026-109461 exp:2026-12-31

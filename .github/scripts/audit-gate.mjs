@@ -56,7 +56,22 @@ const BLOCKING_SEVERITIES = new Set(['high', 'critical']);
 // permits, at which point the lockfile was stale rather than the constraint
 // real, and a refresh clears the advisory outright — rung 1 of the ladder above.
 // That is why every entry carries a review date.
-const ALLOWLISTED_ADVISORIES = [];
+const ALLOWLISTED_ADVISORIES = [
+  {
+    ids: ['GHSA-xcx6-jx8p-x3h5', 'CVE-2026-109461', '1243111'],
+    package: '@azure/msal-node',
+    reason:
+      'MSAL Node auth_code flow can disclose parameters to an attacker-chosen ' +
+      'endpoint; fixed only in 7.1.0, while @azure/identity (latest 4.14.0, ' +
+      'and 4.15.0-beta.1) still declares msal-node ^6, so no compatible ' +
+      'patched version exists. Unreachable here: the vulnerable ' +
+      'acquireTokenByCode is called only via AuthorizationCodeCredential, and ' +
+      'the one Azure caller (azure-file-storage.adapter.ts, loaded only when ' +
+      'STORAGE_PROVIDER=azure) uses DefaultAzureCredential. Remove once an ' +
+      '@azure/identity release accepts msal-node >=7.1.0.',
+    reviewBy: '2026-12-31',
+  },
+];
 
 const auditJsonPath = process.argv[2];
 if (!auditJsonPath) {
