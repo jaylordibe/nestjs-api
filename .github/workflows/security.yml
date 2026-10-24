@@ -184,7 +184,14 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           # Build output and installed dependencies: noise that the image scan
-          # and the dependency audit already cover from their own angles. Listed
-          # even though they are gitignored (and so absent in CI) so a local
-          # `trivy fs .` reproduces what CI reports.
+          # and the dependency audit already cover from their own angles.
+          #
+          # Reproduce locally on a clean export of HEAD, never on `.`: the
+          # working tree holds gitignored files CI never sees, a developer's
+          # `.env` and its real keys among them. Do not add `.env` to a skip
+          # list instead; that would also hide one committed by mistake.
+          #   dir=$(mktemp -d) && git archive HEAD | tar -x -C "$dir" &&
+          #   trivy fs "$dir" --scanners vuln,secret,misconfig \
+          #     --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+          #     --ignorefile "$dir/.trivyignore"
           skip-dirs: node_modules,dist,coverage
