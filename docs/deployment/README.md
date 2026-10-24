@@ -633,6 +633,10 @@ only then moves the `main` / `staging` tag (migrate first). Enable it with the
 repository variable `PUBLISH_ENABLED=true`. Attestations need a public repository,
 or a plan that supports them on private ones (`ATTEST_PROVENANCE=true`).
 
+The `publish` job outputs both pushed digests, as `image` and `migrate-image`
+(`ghcr.io/<owner>/<repo>@sha256:…` and `…-migrate@sha256:…`), so a deploy job
+added to this workflow with `needs: publish` deploys exactly what was scanned.
+
 Deploying is left to your platform: a single server, a container service or an
 autoscaled cluster. Whichever it is, deploy **by digest** (ideally only digests
 attested by that workflow) and run the `migrate` image to completion before the

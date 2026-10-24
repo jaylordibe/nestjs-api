@@ -5,8 +5,8 @@ name: Publish image
 #   ghcr.io/<owner>/<repo>           the runtime (API: node dist/main.js; worker: node dist/worker.js)
 #   ghcr.io/<owner>/<repo>-migrate   the Dockerfile `migrate` target (prisma deploy + rbac:sync)
 #
-# It DEPLOYS NOTHING and holds no server credential: whatever platform you deploy
-# with pulls the images from the registry. docs/deployment/README.md is the
+# The publish job DEPLOYS NOTHING and holds no server credential: whatever platform
+# you deploy with pulls the images from the registry. docs/deployment/README.md is the
 # contract a deployment follows.
 #
 # Publishing is OPT-IN through the repository variable PUBLISH_ENABLED=true, so a
@@ -75,6 +75,10 @@ jobs:
       packages: write
       id-token: write
       attestations: write
+    # The pushed digests, for a deploy job that `needs: publish`: deploy by digest.
+    outputs:
+      image: ${{ steps.name.outputs.runtime }}@${{ steps.runtime.outputs.digest }}
+      migrate-image: ${{ steps.name.outputs.migrate }}@${{ steps.migrate.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
