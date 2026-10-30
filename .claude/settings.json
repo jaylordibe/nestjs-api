@@ -406,7 +406,13 @@
       "Bash(yarn prisma migrate diff:*)",
       "Bash(npx prisma migrate diff:*)",
       "PowerShell(yarn prisma migrate diff:*)",
-      "PowerShell(npx prisma migrate diff:*)"
+      "PowerShell(npx prisma migrate diff:*)",
+      "Bash(yarn prisma:deploy:*)",
+      "Bash(yarn prisma migrate deploy:*)",
+      "Bash(npx prisma migrate deploy:*)",
+      "PowerShell(yarn prisma:deploy:*)",
+      "PowerShell(yarn prisma migrate deploy:*)",
+      "PowerShell(npx prisma migrate deploy:*)"
     ],
     "deny": [
       "Bash(gh pr create *)",
@@ -560,13 +566,7 @@
       "mcp__*__deleteJiraIssue"
     ],
     "ask": [
-      "Bash(yarn prisma:deploy:*)",
-      "Bash(yarn prisma migrate deploy:*)",
-      "Bash(npx prisma migrate deploy:*)",
       "Bash(yarn rbac:sync:*)",
-      "PowerShell(yarn prisma:deploy:*)",
-      "PowerShell(yarn prisma migrate deploy:*)",
-      "PowerShell(npx prisma migrate deploy:*)",
       "PowerShell(yarn rbac:sync:*)",
       "Bash(psql *)",
       "Bash(mysql *)",
