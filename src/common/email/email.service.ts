@@ -12,7 +12,8 @@ import {
 
 // Facade used by the rest of the app. Resolves templates through the
 // Handlebars engine, then hands a fully-rendered message to whichever
-// adapter is bound (stub in dev/test, Resend in staging/prod). Call sites
+// adapter is bound (Mailpit over smtp in dev, stub in tests, Resend or
+// Mailgun in staging/prod). Call sites
 // should not care which adapter is active — that decision lives in
 // EmailModule's provider factory.
 @Injectable()

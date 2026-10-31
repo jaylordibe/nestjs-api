@@ -67,7 +67,7 @@ TypeScript  →  ESLint  →  config validation  →  boot-time checks  →  e2e
 |---|---|---|
 | **Compiler** | Code that assumes data exists, or an override that silently stops overriding | `strict`, `noUncheckedIndexedAccess`, `noImplicitOverride` — [`tsconfig.json`](tsconfig.json) |
 | **Lint** | Architectural shortcuts | `@casl/prisma` imported outside the authorization module; `src/common` importing `src/modules`; a raw `HttpException` instead of the `Errors.*` factory; a bare `user: true` include that skips soft-delete filtering — [`eslint.config.mjs`](eslint.config.mjs) |
-| **Config validation** | Unsafe configuration, before a request is served | In production: a wildcard `CORS_ORIGIN`, a `TRUST_PROXY` that names no proxy hop, a stub email or SMS provider (stubs log one-time codes). Everywhere: a blank, short or template `JWT_SECRET`, and `REDIS_TLS_ENABLED` disagreeing with the `redis://` / `rediss://` scheme — [`env.validation.ts`](src/config/env.validation.ts) |
+| **Config validation** | Unsafe configuration, before a request is served | In production: a wildcard `CORS_ORIGIN`, a `TRUST_PROXY` that names no proxy hop, a stub email or SMS provider (stubs log one-time codes), the local-only `smtp` email provider. Everywhere: a blank, short or template `JWT_SECRET`, and `REDIS_TLS_ENABLED` disagreeing with the `redis://` / `rediss://` scheme — [`env.validation.ts`](src/config/env.validation.ts) |
 | **Boot checks** | An application whose wiring is inconsistent | A route handler with no authorization decision; a permission catalog that differs from the database; a role assigned outside its scope; a job with no handler, or a queue with no processor |
 | **e2e tests** | Behaviour that breaks under real conditions | Run against real PostgreSQL, Redis and S3-compatible storage — no mocks. Concurrent refresh-token replay revokes the whole family; concurrent demotion never leaves a workspace with zero owners; an invitation redeemed twice at once yields one membership; tenant isolation holds under a forged path parameter |
 | **CI** | Regressions and known-vulnerable artifacts | Lint, build, unit tests and four sharded e2e jobs; the RBAC catalog projected onto a fresh database and checked; the container image built and scanned with Trivy; a dependency audit gate and Trivy filesystem scan; a weekly authenticated OWASP ZAP API scan — [`.github/workflows/`](.github/workflows) |
@@ -250,7 +250,8 @@ yarn install
 cp .env.example .env
 sed -i.bak "s|^JWT_SECRET=.*|JWT_SECRET=\"$(openssl rand -hex 48)\"|" .env && rm .env.bak
 
-# PostgreSQL, Redis and S3-compatible storage (RustFS) on host ports 5433 / 6378 / 9000
+# PostgreSQL, Redis and S3-compatible storage (RustFS) on host ports 5433 / 6378 / 9000,
+# and the Mailpit email inbox (SMTP 1025, inbox 8025)
 docker compose up -d
 
 # Schema, then the RBAC catalog. The API refuses to boot until the catalog is in the database
@@ -264,6 +265,15 @@ yarn start:dev
 
 The Swagger UI is at [localhost:3000/api/docs](http://localhost:3000/api/docs)
 and the readiness check is at [localhost:3000/api/health/readiness](http://localhost:3000/api/health/readiness).
+
+Every email the API sends locally (verification links, one-time codes,
+password resets, invitations) lands in Mailpit, because `.env.example` sets
+`EMAIL_PROVIDER="smtp"` against it. Read them at [localhost:8025](http://localhost:8025),
+or from scripts and automated QA through its HTTP API:
+`GET http://localhost:8025/api/v1/messages` lists them and
+`GET http://localhost:8025/api/v1/message/<ID>` returns one with its text and
+HTML body. Set `EMAIL_PROVIDER="stub"` to log emails to the console instead.
+The e2e stack does not run Mailpit; the suite refuses every provider but the stub.
 
 Run the tests:
 
@@ -361,7 +371,7 @@ src/
     enums/                   # RoleScope, PermissionOwnership, SeededRoleName, Gender, AppPlatform, …
     filters/                 # GlobalExceptionFilter (single unified filter)
     errors/                  # AppException, ErrorCode catalog, Errors factory
-    email/                   # EmailService, adapters (stub/resend/mailgun), typed Handlebars templates
+    email/                   # EmailService, adapters (stub/resend/mailgun/smtp), typed Handlebars templates
     sms/                     # SmsService, adapters (stub/twilio)
     storage/                 # FileStorageService, adapters (stub/s3/gcs/azure)
     logging/                 # pino-http options (redaction, request id)
@@ -468,7 +478,7 @@ worker with `QUEUE_WORKER_ENABLED=true`.
 | Validation | class-validator + class-transformer for requests; Joi for configuration |
 | Rate limiting | `@nestjs/throttler` with shared Redis storage |
 | Observability | pino via `nestjs-pino`, OpenTelemetry SDK with OTLP exporters, `nestjs-cls` request context |
-| Integrations | Resend or Mailgun (email), Twilio (SMS), S3 / GCS / Azure Blob, each behind an adapter with a `stub` for development |
+| Integrations | Resend or Mailgun (email), Twilio (SMS), S3 / GCS / Azure Blob, each behind an adapter with a `stub` for development (email: `smtp` to the local Mailpit inbox) |
 | API docs | `@nestjs/swagger`, generated from DTOs by the compiler plugin |
 | Testing | Jest + supertest; e2e against real infrastructure |
 

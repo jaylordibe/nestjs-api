@@ -516,6 +516,7 @@ describe('env.validation cross-field rules', () => {
     it.each([
       ['EMAIL_PROVIDER', 'resend', { RESEND_API_KEY: 'a-key' }],
       ['EMAIL_PROVIDER', 'mailgun', {}],
+      ['EMAIL_PROVIDER', 'smtp', {}],
       ['SMS_PROVIDER', 'twilio', {}],
       ['STORAGE_PROVIDER', 's3', {}],
       ['STORAGE_PROVIDER', 'gcs', {}],
@@ -588,6 +589,93 @@ describe('env.validation cross-field rules', () => {
       expect(
         validate({ MAILGUN_API_KEY: '', MAILGUN_DOMAIN: '' }).error,
       ).toBeUndefined();
+    });
+
+    const SMTP = {
+      EMAIL_PROVIDER: 'smtp',
+      SMTP_HOST: 'localhost',
+      SMTP_PORT: '1025',
+      EMAIL_FROM: 'App <noreply@app.test>',
+    };
+
+    it('accepts smtp with a host, a port and a sender', () => {
+      const { value, error } = validate(SMTP) as {
+        value: Record<string, unknown>;
+        error?: unknown;
+      };
+      expect(error).toBeUndefined();
+      expect(value.SMTP_PORT).toBe(1025);
+    });
+
+    it.each(['SMTP_HOST', 'SMTP_PORT', 'EMAIL_FROM'])(
+      'refuses smtp without %s',
+      (key) => {
+        expect(messages({ ...SMTP, [key]: undefined })).toContainEqual(
+          `"${key}" is required`,
+        );
+      },
+    );
+
+    it('refuses a malformed SMTP host or port', () => {
+      const refused = messages({
+        ...SMTP,
+        SMTP_HOST: 'not a host',
+        SMTP_PORT: '70000',
+      });
+      expect(refused).toContainEqual('"SMTP_HOST" must be a valid hostname');
+      expect(refused).toContainEqual('"SMTP_PORT" must be a valid port');
+    });
+
+    it('lets the other providers ship with empty SMTP placeholders', () => {
+      expect(validate({ SMTP_HOST: '', SMTP_PORT: '' }).error).toBeUndefined();
+    });
+
+    // A local, unauthenticated relay is never a production delivery path.
+    it('refuses smtp in production', () => {
+      expect(messages({ ...SMTP, NODE_ENV: 'production' })).toContainEqual(
+        expect.stringContaining(
+          'EMAIL_PROVIDER cannot be "smtp" in production',
+        ),
+      );
+    });
+
+    it('refuses stub in production', () => {
+      expect(
+        messages({ NODE_ENV: 'production', EMAIL_PROVIDER: 'stub' }),
+      ).toContainEqual(
+        expect.stringContaining(
+          'EMAIL_PROVIDER cannot be "stub" in production',
+        ),
+      );
+    });
+
+    it('refuses smtp in staging, where the stub is still allowed', () => {
+      expect(messages({ ...SMTP, NODE_ENV: 'staging' })).toContainEqual(
+        expect.stringContaining(
+          'EMAIL_PROVIDER cannot be "smtp" in staging or production',
+        ),
+      );
+      expect(
+        messages({ NODE_ENV: 'staging', EMAIL_PROVIDER: 'stub' }),
+      ).not.toContainEqual(expect.stringContaining('EMAIL_PROVIDER'));
+    });
+
+    it('lets resend ship with empty SMTP placeholders', () => {
+      expect(
+        messages({
+          EMAIL_PROVIDER: 'resend',
+          RESEND_API_KEY: 'a-key',
+          EMAIL_FROM: 'App <noreply@app.test>',
+          SMTP_HOST: '',
+          SMTP_PORT: '',
+        }),
+      ).not.toContainEqual(expect.stringContaining('SMTP_'));
+    });
+
+    it.each(['.env.example'])('documents the SMTP keys in %s', (file) => {
+      const content = readFileSync(join(__dirname, '..', '..', file), 'utf8');
+      expect(content).toMatch(/^#?\s*SMTP_HOST=/m);
+      expect(content).toMatch(/^#?\s*SMTP_PORT=/m);
     });
 
     it('rejects a provider this release has no adapter for', () => {

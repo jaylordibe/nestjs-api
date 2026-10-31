@@ -31,8 +31,10 @@ Package manager: **yarn** (yarn.lock committed). Scripts: `start`, `start:dev`, 
 
 | Stack | Command | Containers | Ports |
 |---|---|---|---|
-| dev | `docker compose up -d` (reads `.env`) | `${SERVICE_NAME}-postgres` / `-redis` / `-s3` | **5433** / **6378** / **9000** |
-| test | `docker compose --env-file .env.test up -d` | `${SERVICE_NAME}-test-postgres` / `-test-redis` / `-test-s3` | **5434** / **6380** / **9002** |
+| dev | `docker compose up -d` (reads `.env`) | `${SERVICE_NAME}-postgres` / `-redis` / `-s3` / `-mailpit` | **5433** / **6378** / **9000** / **1025** (SMTP) + **8025** (inbox) |
+| test | `docker compose --env-file .env.test up -d --wait postgres redis s3` | `${SERVICE_NAME}-test-postgres` / `-test-redis` / `-test-s3` | **5434** / **6380** / **9002** |
+
+The test stack names its services so the dev-only Mailpit inbox (the `smtp` email provider's target; the suite refuses every provider but the stub) never starts there.
 
 Container names are `${SERVICE_NAME}${COMPOSE_STACK_SUFFIX}-*`; `.env.test` sets `COMPOSE_STACK_SUFFIX="-test"` and its own `COMPOSE_PROJECT_NAME`, so the volumes never mix.
 

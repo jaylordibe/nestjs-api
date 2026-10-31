@@ -106,12 +106,15 @@ export interface AppConfig {
     expiresInDays: number;
   };
   email: {
-    provider: 'stub' | 'resend' | 'mailgun';
+    provider: 'stub' | 'resend' | 'mailgun' | 'smtp';
     from: string | undefined;
     resendApiKey: string | undefined;
     mailgunApiKey: string | undefined;
     mailgunDomain: string | undefined;
     mailgunRegion: 'us' | 'eu';
+    // The SMTP relay for EMAIL_PROVIDER=smtp — the local Mailpit inbox.
+    smtpHost: string | undefined;
+    smtpPort: number | undefined;
   };
   sms: {
     provider: 'stub' | 'twilio';
@@ -302,12 +305,17 @@ export default (): AppConfig => ({
   },
   email: {
     provider:
-      (process.env.EMAIL_PROVIDER as 'stub' | 'resend' | 'mailgun') ?? 'stub',
+      (process.env.EMAIL_PROVIDER as 'stub' | 'resend' | 'mailgun' | 'smtp') ??
+      'stub',
     from: process.env.EMAIL_FROM,
     resendApiKey: process.env.RESEND_API_KEY,
     mailgunApiKey: process.env.MAILGUN_API_KEY || undefined,
     mailgunDomain: process.env.MAILGUN_DOMAIN || undefined,
     mailgunRegion: (process.env.MAILGUN_REGION as 'us' | 'eu') || 'us',
+    smtpHost: process.env.SMTP_HOST || undefined,
+    smtpPort: process.env.SMTP_PORT
+      ? parseInt(process.env.SMTP_PORT, 10)
+      : undefined,
   },
   sms: {
     provider: (process.env.SMS_PROVIDER as 'stub' | 'twilio') ?? 'stub',

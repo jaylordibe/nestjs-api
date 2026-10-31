@@ -315,30 +315,41 @@ export const envValidationSchema = Joi.object({
   // visible in the app log so local flows can be completed manually.
   // `resend` routes through resend.com and requires RESEND_API_KEY and
   // EMAIL_FROM (the latter must be a verified sender on that domain).
+  // `smtp` sends to a plain SMTP relay — the local Mailpit inbox in
+  // docker-compose.yml — and requires SMTP_HOST, SMTP_PORT and EMAIL_FROM.
   //
   // Refused in production: `StubEmailAdapter` LOGS THE RENDERED MESSAGE at info
   // level, and that body carries the one-time codes and the
   // `verify-email?token=…` link. Shipping it in production would reintroduce
   // the credential-to-stdout class this template works hard to close, through
   // a default nobody chose. Same floor as CORS_ORIGIN and TRUST_PROXY.
+  // `smtp` is refused there and in staging: it is unauthenticated plaintext,
+  // built for a local inbox, never a delivery path.
   EMAIL_PROVIDER: Joi.string()
-    .valid('stub', 'resend', 'mailgun')
+    .valid('stub', 'resend', 'mailgun', 'smtp')
     .default('stub')
     .when('NODE_ENV', {
       is: 'production',
-      then: Joi.string().invalid('stub').required().messages({
+      then: Joi.string().invalid('stub', 'smtp').required().messages({
         'any.invalid':
-          'EMAIL_PROVIDER cannot be "stub" in production — the stub adapter writes the full message body, including one-time codes and verification links, to stdout. Configure a real provider.',
+          'EMAIL_PROVIDER cannot be "{{#value}}" in production — the stub adapter writes the full message body, including one-time codes and verification links, to stdout, and smtp is an unauthenticated plaintext relay for the local Mailpit inbox. Configure a real provider.',
       }),
     })
-    .when('NODE_ENV', refusedInTest('resend', 'mailgun')),
+    .when('NODE_ENV', {
+      is: 'staging',
+      then: Joi.string().invalid('smtp').messages({
+        'any.invalid':
+          'EMAIL_PROVIDER cannot be "smtp" in staging or production — it is the unauthenticated plaintext relay for the local Mailpit inbox, not a delivery path. Configure a real provider.',
+      }),
+    })
+    .when('NODE_ENV', refusedInTest('resend', 'mailgun', 'smtp')),
   // EMAIL_FROM and each provider's keys tolerate empty strings when their
   // provider is not selected, so a committed `.env` template can ship with
   // `RESEND_API_KEY=""` placeholders without breaking boot on the stub
   // provider. The required check only kicks in when that provider is actually
   // selected. (Mirrors the SMS/Twilio fields below.)
   EMAIL_FROM: Joi.string().when('EMAIL_PROVIDER', {
-    is: Joi.valid('resend', 'mailgun'),
+    is: Joi.valid('resend', 'mailgun', 'smtp'),
     then: Joi.required(),
     otherwise: Joi.string().allow('').optional(),
   }),
@@ -362,6 +373,21 @@ export const envValidationSchema = Joi.object({
       otherwise: Joi.string().allow('').optional(),
     }),
   MAILGUN_REGION: Joi.string().valid('us', 'eu').default('us'),
+  // The relay for EMAIL_PROVIDER=smtp: Mailpit's SMTP port on this machine.
+  SMTP_HOST: Joi.string()
+    .hostname()
+    .when('EMAIL_PROVIDER', {
+      is: 'smtp',
+      then: Joi.required(),
+      otherwise: Joi.allow('').optional(),
+    }),
+  SMTP_PORT: Joi.number()
+    .port()
+    .when('EMAIL_PROVIDER', {
+      is: 'smtp',
+      then: Joi.required(),
+      otherwise: Joi.allow('').optional(),
+    }),
 
   // SMS provider selection. `stub` (default) logs to stdout — OTPs are
   // visible in the app log so local flows can be completed manually.

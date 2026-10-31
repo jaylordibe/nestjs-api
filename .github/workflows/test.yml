@@ -164,7 +164,7 @@ jobs:
       # so a failure to bring up the stack reads as a stack failure in the
       # logs rather than as a mysterious test failure.
       - name: Start Postgres + Redis from docker-compose.yml
-        run: docker compose --env-file .env.test up -d --wait
+        run: docker compose --env-file .env.test up -d --wait postgres redis s3
 
       - name: Set up Node
         uses: actions/setup-node@v7
@@ -246,7 +246,7 @@ jobs:
       # so a failure to bring up the stack reads as a stack failure in the
       # logs rather than as a mysterious test failure.
       - name: Start Postgres + Redis from docker-compose.yml
-        run: docker compose --env-file .env.test up -d --wait
+        run: docker compose --env-file .env.test up -d --wait postgres redis s3
 
       - name: Set up Node
         uses: actions/setup-node@v7

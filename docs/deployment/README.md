@@ -95,7 +95,7 @@ count, surviving the replacement of every process that touched it.
 One process does everything, because there is no autoscaler to duplicate work:
 
 ```bash
-docker compose up -d      # PostgreSQL + Redis + S3-compatible storage
+docker compose up -d      # PostgreSQL + Redis + S3-compatible storage + Mailpit
 yarn prisma:deploy        # or yarn prisma:migrate
 yarn rbac:sync            # the API refuses to boot until the catalog is projected
 yarn start:dev            # QUEUE_WORKER_ENABLED=true, API + worker in one process
@@ -464,7 +464,7 @@ minutes.
 | `API_BASE_URL`, `WEB_BASE_URL` | public `https://` hostnames — **required in production**; the localhost defaults, `http:`, localhost, an IP address and a URL with credentials are refused there |
 | `CORS_ORIGIN` | explicit list; `*` is refused in production |
 | `TRUST_PROXY` | the addresses of the trusted proxy hops — see [Client topologies](#client-topologies); `false` refused in production |
-| `EMAIL_PROVIDER`, `SMS_PROVIDER` | **required in production** — they default to `stub`, and `stub` is refused there. Their own settings are in the adapter table below |
+| `EMAIL_PROVIDER`, `SMS_PROVIDER` | **required in production** — they default to `stub`, and `stub` (and `EMAIL_PROVIDER=smtp`) is refused there. Their own settings are in the adapter table below |
 | `TURNSTILE_WEB_SECRET`, `TURNSTILE_MOBILE_SECRET` | secret — **required in staging and production**: the bot check's two widgets (website, app). Both or neither in any environment; Cloudflare's test secrets refused in staging and production. The worker validates the same configuration, so it needs both too |
 
 `EMAIL_PROVIDER` and `SMS_PROVIDER` are listed here rather than only under the
@@ -510,7 +510,9 @@ solely through Cloudflare), `EMAIL_VERIFIED_REDIRECT_URL`, `PASSWORD_RESET_URL`,
 `EMAIL_PROVIDER` and `SMS_PROVIDER` **cannot be `stub` in production** — boot
 fails. The stub adapters log the rendered message body, which carries one-time
 codes and the verify-email link, so shipping them would put credentials on
-stdout through a default nobody chose.
+stdout through a default nobody chose. `EMAIL_PROVIDER=smtp` (with `SMTP_HOST`
+and `SMTP_PORT`) is refused there and in staging: it is the unauthenticated
+plaintext relay to the local Mailpit inbox, not a delivery path.
 
 `PHONE_CODE_FIXED` (six digits, unset by default) makes every texted code that
 value, for local and staging testing before an SMS sender is approved. It is

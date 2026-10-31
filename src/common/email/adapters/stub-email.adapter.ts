@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { EmailAdapter, OutgoingEmail } from './email-adapter.interface';
 
-// Used when EMAIL_PROVIDER=stub (default for development and test env).
+// Used when EMAIL_PROVIDER=stub (the default when unset, and the test env's).
 // Logs the rendered message instead of hitting a real provider so local
 // flows can observe what would have been sent. Preserves developer UX —
 // links visible in the console, no surprise API calls in tests.
