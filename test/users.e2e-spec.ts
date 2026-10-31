@@ -719,6 +719,32 @@ describe('Users (e2e)', () => {
       ({ id: adminId, token: adminToken } = await createPlatformAdmin(app));
     });
 
+    // A date-time without an offset is read in the process's zone, so the day
+    // stored moves on any host not in UTC — back east of it at midnight,
+    // forward west of it late at night — unless the process runs in the
+    // application zone.
+    it.each(['T00:00:00', 'T23:59:59'])(
+      'POST /api/users stores the birthday a date-time without an offset names (%s), whatever the host zone',
+      async (timeOfDay) => {
+        const res = await request(app.getHttpServer())
+          .post('/api/users')
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send({
+            email: 'birthday@example.com',
+            password: PASSWORD,
+            firstName: 'Birth',
+            lastName: 'Day',
+            birthday: `1990-05-15${timeOfDay}`,
+          })
+          .expect(201);
+
+        const stored = await app
+          .get(PrismaService)
+          .user.findUniqueOrThrow({ where: { id: res.body.id as string } });
+        expect(stored.birthday?.toISOString().slice(0, 10)).toBe('1990-05-15');
+      },
+    );
+
     it('GET /api/users returns a paginated list', async () => {
       const res = await request(app.getHttpServer())
         .get('/api/users')

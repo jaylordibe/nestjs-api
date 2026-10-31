@@ -156,6 +156,7 @@
       "ts"
     ],
     "rootDir": ".",
+    "globalSetup": "<rootDir>/test/setup/unit-global-setup.ts",
     "roots": [
       "<rootDir>/src",
       "<rootDir>/scripts"

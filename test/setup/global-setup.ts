@@ -1,3 +1,4 @@
+import '../../src/config/app-timezone';
 import { execSync } from 'child_process';
 import { resolve } from 'path';
 import * as dotenv from 'dotenv';

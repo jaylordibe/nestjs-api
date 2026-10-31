@@ -21,7 +21,8 @@ import { HTTP_INSTRUMENTATION_CONFIG } from './common/telemetry/http-instrumenta
 // reference to the UNPATCHED module and is invisible forever after — and the
 // failure is silent: no error, just traces that are quietly missing their
 // database and outbound-HTTP spans. `main.ts` and `worker.ts` therefore import
-// this file on their first line, above every other import.
+// this file right after the time-zone pin (`src/config/app-timezone`, which
+// imports no module), above every other import.
 //
 // Why vendor-neutral OTLP rather than a Datadog/New Relic/Sentry SDK: the
 // exporter is the only replaceable part of an observability stack, and baking a

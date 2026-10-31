@@ -1,4 +1,6 @@
-// MUST be first — see the note in src/telemetry.ts. Auto-instrumentation
+import './config/app-timezone';
+// MUST be first after the time-zone pin above (which imports no module) —
+// see the note in src/telemetry.ts. Auto-instrumentation
 // patches modules as they are required, so an import above this line is never
 // traced, silently.
 import { startTelemetry } from './telemetry';

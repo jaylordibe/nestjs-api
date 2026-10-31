@@ -1,3 +1,4 @@
+import '../../src/config/app-timezone';
 import 'dotenv/config';
 import { expand } from 'dotenv-expand';
 import * as dotenv from 'dotenv';

@@ -1,4 +1,6 @@
-// MUST be first: OpenTelemetry auto-instrumentation patches `http`, `pg`, and
+import './config/app-timezone';
+// MUST be first after the time-zone pin above (which imports no module):
+// OpenTelemetry auto-instrumentation patches `http`, `pg`, and
 // `ioredis` as they are required, so anything imported above this line keeps an
 // unpatched reference and silently never produces spans. See src/telemetry.ts.
 import { startTelemetry } from './telemetry';

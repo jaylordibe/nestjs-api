@@ -21,6 +21,7 @@
  *
  * stdout = the raw token ONLY (the workflow captures it); all logs go to stderr.
  */
+import '../../src/config/app-timezone';
 import { expand } from 'dotenv-expand';
 import * as dotenv from 'dotenv';
 import { PrismaPg } from '@prisma/adapter-pg';

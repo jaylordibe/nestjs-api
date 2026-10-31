@@ -72,7 +72,7 @@ done; update stale assertions instead of adding duplicates.
 
 ```
 src/
-  telemetry.ts   OpenTelemetry bootstrap; imported first by both entrypoints
+  telemetry.ts   OpenTelemetry bootstrap; imported right after the time-zone pin
   main.ts        HTTP entrypoint: configureHttpApp + listen
   configure-http-app.ts  the HTTP edge (helmet, /api prefix, CORS, trust
                  proxy, gated Swagger under /api/docs); the e2e harness uses it
@@ -113,7 +113,8 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
 - **Validation:** whitelist + `forbidNonWhitelisted`; extra fields → 400.
   Boolean query filters need `@Transform(toOptionalBoolean)`.
 - **Datetimes:** timestamps use `@IsUtcIsoString()`, date-only fields
-  `@IsDateString()`.
+  `@IsDateString()`. The API pins its own process zone to UTC (see the
+  conventions doc, "Datetime inputs").
 - **Responses:** always `new <Resource>ResponseDto(row)`, never raw Prisma
   rows. Sensitive fields need both `@Exclude()` and `@ApiHideProperty()`.
 - **Schema:** no allowed-value lists in the database: no DB enum types and
@@ -145,7 +146,8 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
   `findById`, one resource per controller, no unpaginated `GET /all`,
   `perPage` clamped to 100.
 - **Config:** `configService.getOrThrow()` only; no `process.env` outside
-  `configuration.ts` (sole exception: `src/telemetry.ts`, which runs first).
+  `configuration.ts` (exceptions: `src/telemetry.ts`, and the process time
+  zone — see the conventions doc, "Datetime inputs").
   A new env var goes in `configuration.ts`, `env.validation.ts`,
   `.env.example`, `.env.test` (when tests need a value) and the runtime
   contract in `docs/deployment/README.md`; unset defaults to safe.
