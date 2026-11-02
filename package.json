@@ -63,6 +63,8 @@
     "@casl/ability": "^7.0.1",
     "@casl/prisma": "^2.0.2",
     "@google-cloud/storage": "^7.22.0",
+    "@modelcontextprotocol/node": "^2.1.2",
+    "@modelcontextprotocol/server": "^2.4.0",
     "@nest-lab/throttler-storage-redis": "^1.2.0",
     "@nestjs/bullmq": "^12.0.0",
     "@nestjs/common": "^12.1.2",
@@ -108,7 +110,8 @@
     "resend": "^6.12.2",
     "rxjs": "^7.8.1",
     "twilio": "^5.4.0",
-    "ua-parser-js": "^2.0.9"
+    "ua-parser-js": "^2.0.9",
+    "zod": "^4.2.0"
   },
   "resolutions": {
     "picomatch": "^4.0.4",
@@ -124,6 +127,7 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
     "@eslint/js": "^9.18.0",
+    "@modelcontextprotocol/client": "^2.4.0",
     "@nestjs/cli": "^12.0.8",
     "@nestjs/schematics": "^12.0.6",
     "@nestjs/testing": "^12.1.2",

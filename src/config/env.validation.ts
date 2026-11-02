@@ -1,6 +1,10 @@
 import { isIP } from 'node:net';
 import * as Joi from 'joi';
 import { PHONE_OTP_LENGTH } from '../common/constants/phone-otp.constants';
+import {
+  parseMcpAllowedOrigins,
+  parseMcpClientCredentials,
+} from '../common/util/mcp-client-credentials.util';
 import { isTrustedProxyList } from '../common/util/trusted-proxy.util';
 
 // Cloudflare's published Turnstile test secrets (`1x…AA`, `2x…AA`, `3x…AA`).
@@ -600,6 +604,37 @@ export const envValidationSchema = Joi.object({
         'TRUST_PROXY must be "false" or a comma-separated list of IP addresses and CIDR ranges of the trusted proxy hops (e.g. "172.30.0.10"). Hop counts, "true", keywords and hostnames are not accepted.',
       'any.invalid':
         'TRUST_PROXY must list the trusted proxy hops in production (e.g. "172.30.0.10"); "false" puts every caller behind the proxy in one rate-limit bucket.',
+    }),
+
+  // MCP integration clients, as `name:sha256hex` pairs (see docs/mcp.md).
+  // Empty leaves `/api/mcp` off. A malformed entry or a repeated name or
+  // digest fails the boot rather than silently dropping a client.
+  MCP_CLIENT_TOKENS: Joi.string()
+    .allow('')
+    .default('')
+    .custom((value: string, helpers) =>
+      parseMcpClientCredentials(value) === null
+        ? helpers.error('mcpClientTokens.format')
+        : value,
+    )
+    .messages({
+      'mcpClientTokens.format':
+        'MCP_CLIENT_TOKENS must be comma-separated "name:sha256hex" pairs: a lowercase slug name and the 64-character lowercase hex SHA-256 of that client\'s token, with no name or digest repeated.',
+    }),
+
+  // Browser origins allowed to call `/api/mcp`. Empty refuses any request
+  // carrying an `Origin` header.
+  MCP_ALLOWED_ORIGINS: Joi.string()
+    .allow('')
+    .default('')
+    .custom((value: string, helpers) =>
+      parseMcpAllowedOrigins(value) === null
+        ? helpers.error('mcpAllowedOrigins.format')
+        : value,
+    )
+    .messages({
+      'mcpAllowedOrigins.format':
+        'MCP_ALLOWED_ORIGINS must be comma-separated origins such as "https://app.example.com" (scheme, host and optional port; no path).',
     }),
 })
   .and('TURNSTILE_WEB_SECRET', 'TURNSTILE_MOBILE_SECRET')

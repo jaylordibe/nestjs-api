@@ -496,6 +496,13 @@ solely through Cloudflare), `EMAIL_VERIFIED_REDIRECT_URL`, `PASSWORD_RESET_URL`,
 `STORAGE_PROVIDER` (stub), `STORAGE_PUBLIC_URL_BASE` (unset),
 `STORAGE_SIGNED_URL_TTL_SECONDS` (300), `STORAGE_REQUEST_TIMEOUT_MS` (15000).
 
+### Optional, MCP endpoint
+
+| Variable | Notes |
+|---|---|
+| `MCP_CLIENT_TOKENS` | secret-adjacent — `name:sha256hex` pairs, one per MCP client. Unset or empty leaves `/api/mcp` off (404). Holds digests only, never a raw token; see [`../mcp.md`](../mcp.md) |
+| `MCP_ALLOWED_ORIGINS` | browser origins allowed to call `/api/mcp`; unset refuses any request carrying an `Origin` header (server-side clients send none) |
+
 ### Optional, only when the matching adapter is selected
 
 | Selected | Requires | Optional |

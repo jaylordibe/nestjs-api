@@ -1,3 +1,9 @@
+import {
+  type McpClientCredential,
+  parseMcpAllowedOrigins,
+  parseMcpClientCredentials,
+} from '../common/util/mcp-client-credentials.util';
+
 export interface AppConfig {
   nodeEnv: 'development' | 'test' | 'staging' | 'production';
   serviceName: string;
@@ -200,6 +206,16 @@ export interface AppConfig {
   // `false`, or the comma-separated trusted-hop list Express compiles itself
   // (see TRUST_PROXY in env.validation.ts).
   trustProxy: false | string;
+  // The MCP endpoint (`/api/mcp`, see src/modules/mcp). It is OFF — answering
+  // 404 — until at least one client credential is configured.
+  mcp: {
+    // One entry per integration client; each holds only its token's SHA-256.
+    clients: McpClientCredential[];
+    // Browser origins allowed to call the endpoint. Empty refuses every
+    // request that carries an `Origin` header; server-side clients (n8n,
+    // Claude Code) send none.
+    allowedOrigins: string[];
+  };
   // Public web URL the API redirects to after a GET /auth/verify-email
   // click. The web app reads `?status=success|error&reason=…` and
   // renders the matching state. Optional in dev (defaults to a stub
@@ -221,6 +237,14 @@ export const isEnvFileIgnored = (): boolean => process.env.NODE_ENV === 'test';
 
 const parseTrustProxy = (raw: string): false | string =>
   raw.trim() === 'false' ? false : raw.trim();
+
+// env.validation.ts has already refused a malformed value; `?? []` only keeps
+// the type honest for a caller that builds config without validating it.
+const parseMcpConfig = (): AppConfig['mcp'] => ({
+  clients: parseMcpClientCredentials(process.env.MCP_CLIENT_TOKENS ?? '') ?? [],
+  allowedOrigins:
+    parseMcpAllowedOrigins(process.env.MCP_ALLOWED_ORIGINS ?? '') ?? [],
+});
 
 export default (): AppConfig => ({
   nodeEnv: (process.env.NODE_ENV as AppConfig['nodeEnv']) ?? 'development',
@@ -372,6 +396,7 @@ export default (): AppConfig => ({
     limit: parseInt(process.env.THROTTLE_LIMIT ?? '100', 10),
   },
   trustProxy: parseTrustProxy(process.env.TRUST_PROXY ?? 'false'),
+  mcp: parseMcpConfig(),
   emailVerifiedRedirectUrl:
     process.env.EMAIL_VERIFIED_REDIRECT_URL ??
     `${process.env.WEB_BASE_URL ?? 'http://localhost:5173'}/auth/verify-email`,
