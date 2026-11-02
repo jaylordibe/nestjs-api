@@ -1,4 +1,7 @@
-import { loginThrottleTracker } from './login-throttle.util';
+import {
+  loginThrottleTracker,
+  passwordSignInThrottleKey,
+} from './login-throttle.util';
 
 describe('loginThrottleTracker', () => {
   it('keys by lower-cased identifier and IP', () => {
@@ -29,5 +32,25 @@ describe('loginThrottleTracker', () => {
     expect(
       loginThrottleTracker({ body: { identifier: 42 }, ip: '203.0.113.7' }),
     ).toBe('|203.0.113.7');
+  });
+});
+
+describe('passwordSignInThrottleKey', () => {
+  it('gives every sign-in route the same key for one identifier and IP', () => {
+    const restLogin = { getClass: () => 'AuthController' };
+    const mcpSignIn = { getClass: () => 'OAuthInteractionController' };
+    expect(
+      passwordSignInThrottleKey(restLogin, 'a@b.c|1.2.3.4', 'default'),
+    ).toBe(passwordSignInThrottleKey(mcpSignIn, 'a@b.c|1.2.3.4', 'default'));
+  });
+
+  it('keeps identifiers and throttlers apart', () => {
+    const key = passwordSignInThrottleKey(null, 'a@b.c|1.2.3.4', 'default');
+    expect(
+      passwordSignInThrottleKey(null, 'x@b.c|1.2.3.4', 'default'),
+    ).not.toBe(key);
+    expect(passwordSignInThrottleKey(null, 'a@b.c|1.2.3.4', 'other')).not.toBe(
+      key,
+    );
   });
 });

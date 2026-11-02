@@ -7,11 +7,18 @@ import type { TurnstileWidget } from './turnstile.service';
 
 export const TURNSTILE_TOKEN_HEADER = 'X-Turnstile-Token';
 
+// The field the Turnstile widget adds to an HTML form. Only the API's own
+// server-rendered page (the MCP OAuth sign-in) posts one: a browser form
+// cannot set a header.
+export const TURNSTILE_TOKEN_FORM_FIELD = 'cf-turnstile-response';
+
 /**
  * The Turnstile bot check, applied per route with `@RequireTurnstile()`.
  *
  * Reads the token from the `X-Turnstile-Token` header — not the body, so DTOs
- * stay business-only and the check runs before validation. Method-level guards
+ * stay business-only and the check runs before validation. A server-rendered
+ * HTML form, which cannot set headers, sends it in the widget's own
+ * `cf-turnstile-response` field instead; the header wins when both are sent. Method-level guards
  * run after the global ones, so the throttler has already counted the request
  * and nothing else has happened: no code minted, no send budget reserved, no
  * password checked.
@@ -38,7 +45,9 @@ export class TurnstileGuard implements CanActivate {
     if (!this.turnstileService.isEnabled()) return true;
 
     const request = context.switchToHttp().getRequest<Request>();
-    const token = request.header(TURNSTILE_TOKEN_HEADER)?.trim();
+    const token = (
+      request.header(TURNSTILE_TOKEN_HEADER) ?? formToken(request)
+    )?.trim();
     if (!token) {
       throw Errors.turnstileTokenMissing();
     }
@@ -49,4 +58,10 @@ export class TurnstileGuard implements CanActivate {
     await this.turnstileService.verify(token, widget, request.ip);
     return true;
   }
+}
+
+function formToken(request: Request): string | undefined {
+  const body = request.body as Record<string, unknown> | undefined;
+  const value = body?.[TURNSTILE_TOKEN_FORM_FIELD];
+  return typeof value === 'string' ? value : undefined;
 }

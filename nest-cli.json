@@ -8,6 +8,10 @@
       {
         "include": "common/email/templates/**/*.hbs",
         "outDir": "dist"
+      },
+      {
+        "include": "modules/mcp-oauth/views/*.hbs",
+        "outDir": "dist"
       }
     ],
     "watchAssets": true,

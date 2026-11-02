@@ -6,6 +6,7 @@ import {
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import { fromBodyParserError } from './common/errors/errors';
+import { MCP_OAUTH_PREFIX_EXCLUSIONS } from './modules/mcp-oauth/mcp-oauth.config';
 
 // The Express adapter every entrypoint creates the application with
 // (`main.ts`, and the e2e harness through `createNestApplication`).
@@ -60,11 +61,16 @@ export function configureHttpApp(app: NestExpressApplication): void {
 
   app.set('trust proxy', trustProxy);
   app.use(helmet());
-  app.setGlobalPrefix('api');
-  // No `credentials: true`. Authentication is Bearer-only — the access token
-  // rides the `Authorization` header and the refresh token in the request body;
-  // nothing is kept in a cookie, so the browser never needs to send ambient
-  // credentials cross-origin. Enabling it while `origin` reflects any caller
+  // The MCP OAuth authorization server's protocol endpoints and discovery
+  // documents live at the origin root, where OAuth clients look for them
+  // (RFC 8414, RFC 9728); everything else stays under `/api`.
+  app.setGlobalPrefix('api', { exclude: MCP_OAUTH_PREFIX_EXCLUSIONS });
+  // No `credentials: true`. API authentication is Bearer-only — the access token
+  // rides the `Authorization` header and the refresh token in the request body,
+  // so the browser never needs to send ambient credentials cross-origin. The
+  // only cookies the API sets are the MCP OAuth sign-in's (`/oauth` path,
+  // signed, SameSite=Lax), used only by same-origin page navigations, never by
+  // a cross-origin fetch. Enabling it while `origin` reflects any caller
   // (the `'*'` default outside production) is the one combination that would let
   // any site read a credentialed response — so the credential is dropped at the
   // source, in every environment, rather than relying on each one to pin an

@@ -3,8 +3,8 @@ import * as Joi from 'joi';
 import { PHONE_OTP_LENGTH } from '../common/constants/phone-otp.constants';
 import {
   parseMcpAllowedOrigins,
-  parseMcpClientCredentials,
-} from '../common/util/mcp-client-credentials.util';
+  parseMcpRedirectOrigins,
+} from '../common/util/mcp-config.util';
 import { isTrustedProxyList } from '../common/util/trusted-proxy.util';
 
 // Cloudflare's published Turnstile test secrets (`1x…AA`, `2x…AA`, `3x…AA`).
@@ -304,6 +304,11 @@ export const envValidationSchema = Joi.object({
   // and skip the check.
   TURNSTILE_WEB_SECRET: turnstileSecretKey,
   TURNSTILE_MOBILE_SECRET: turnstileSecretKey,
+  // The website widget's public site key, rendered by the MCP OAuth sign-in
+  // page. Deliberately NOT required with the secrets: a deployment without it
+  // still boots, and only that page refuses (OAuthPagesService), so adding the
+  // MCP sign-in never takes REST or the worker down.
+  TURNSTILE_WEB_SITE_KEY: Joi.string().trim().empty(''),
 
   // How long a workspace invitation stays redeemable. The token is a bearer
   // credential living in somebody's inbox, so this is bounded on purpose: a
@@ -606,22 +611,6 @@ export const envValidationSchema = Joi.object({
         'TRUST_PROXY must list the trusted proxy hops in production (e.g. "172.30.0.10"); "false" puts every caller behind the proxy in one rate-limit bucket.',
     }),
 
-  // MCP integration clients, as `name:sha256hex` pairs (see docs/mcp.md).
-  // Empty leaves `/api/mcp` off. A malformed entry or a repeated name or
-  // digest fails the boot rather than silently dropping a client.
-  MCP_CLIENT_TOKENS: Joi.string()
-    .allow('')
-    .default('')
-    .custom((value: string, helpers) =>
-      parseMcpClientCredentials(value) === null
-        ? helpers.error('mcpClientTokens.format')
-        : value,
-    )
-    .messages({
-      'mcpClientTokens.format':
-        'MCP_CLIENT_TOKENS must be comma-separated "name:sha256hex" pairs: a lowercase slug name and the 64-character lowercase hex SHA-256 of that client\'s token, with no name or digest repeated.',
-    }),
-
   // Browser origins allowed to call `/api/mcp`. Empty refuses any request
   // carrying an `Origin` header.
   MCP_ALLOWED_ORIGINS: Joi.string()
@@ -635,6 +624,35 @@ export const envValidationSchema = Joi.object({
     .messages({
       'mcpAllowedOrigins.format':
         'MCP_ALLOWED_ORIGINS must be comma-separated origins such as "https://app.example.com" (scheme, host and optional port; no path).',
+    }),
+
+  // The MCP OAuth authorization server (docs/mcp.md). An access token lives
+  // MCP_OAUTH_ACCESS_TOKEN_TTL_MINUTES; the client renews it with a rotating
+  // refresh token for at most MCP_OAUTH_REFRESH_TOKEN_TTL_DAYS from sign-in.
+  MCP_OAUTH_ACCESS_TOKEN_TTL_MINUTES: Joi.number()
+    .integer()
+    .min(5)
+    .max(24 * 60)
+    .default(60),
+  MCP_OAUTH_REFRESH_TOKEN_TTL_DAYS: Joi.number()
+    .integer()
+    .min(1)
+    .max(90)
+    .default(30),
+
+  // https origins an MCP client may register as its OAuth redirect. Empty
+  // allows any https origin; loopback (Claude Code) is always allowed.
+  MCP_OAUTH_REDIRECT_DOMAINS: Joi.string()
+    .allow('')
+    .default('')
+    .custom((value: string, helpers) =>
+      parseMcpRedirectOrigins(value) === null
+        ? helpers.error('mcpRedirectDomains.format')
+        : value,
+    )
+    .messages({
+      'mcpRedirectDomains.format':
+        'MCP_OAUTH_REDIRECT_DOMAINS must be comma-separated https origins such as "https://claude.ai" (scheme, host and optional port; no path).',
     }),
 })
   .and('TURNSTILE_WEB_SECRET', 'TURNSTILE_MOBILE_SECRET')

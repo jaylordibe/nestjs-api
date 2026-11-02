@@ -13,6 +13,7 @@ import {
 // the un-compiled builder so it can chain `.overrideProvider(X).useValue(...)`.
 export async function createTestApp(
   configure?: (builder: TestingModuleBuilder) => TestingModuleBuilder,
+  options: { port?: number } = {},
 ): Promise<INestApplication> {
   let builder = Test.createTestingModule({ imports: [AppModule] });
   if (configure) {
@@ -42,7 +43,11 @@ export async function createTestApp(
   // never adopts the server and never closes it — one stable listener for the
   // whole file, torn down by the spec's `app.close()`. Port 0 = OS-assigned, so
   // parallel jest workers cannot collide.
-  await app.listen(0);
+  //
+  // `options.port` is for a spec whose app must know its own URL before it
+  // starts — the MCP OAuth spec, where API_BASE_URL becomes the issuer and the
+  // protected resource clients check against. It picks a free port itself.
+  await app.listen(options.port ?? 0);
 
   // Nothing is disarmed here, and nothing needs to be. There is no in-process
   // scheduler: all background work — including recurring work — runs on BullMQ,

@@ -136,6 +136,47 @@ model RefreshToken {
   @@map("refresh_tokens")
 }
 
+/// Everything the MCP OAuth authorization server (oidc-provider, see
+/// src/modules/mcp-oauth) persists: registered clients, grants, sign-in
+/// interactions and browser sessions, authorization codes, and access and
+/// refresh tokens. One table in the library's documented adapter shape, keyed
+/// by (model, id), because the library owns these records' lifecycle and
+/// schema; the app reads them only through the provider.
+///
+/// For the credential models (AuthorizationCode, AccessToken, RefreshToken)
+/// `id` is the SHA-256 of the value handed to the client and the payload never
+/// holds the value itself, so a database disclosure hands over no usable token.
+///
+/// No user foreign key: the user id lives in the payload. Deleting or erasing
+/// an account does not need to cascade, because every credential is refused at
+/// use once the account is inactive, deleted or past its session cutoff, and
+/// the retention sweep deletes rows past `expires_at`.
+model OAuthPayload {
+  model      String
+  id         String
+  payload    Json      @db.JsonB
+  /// The grant a token belongs to, so revoking a grant revokes all its tokens.
+  grantId    String?   @map("grant_id")
+  /// Device-flow user code. The device flow is off; kept because the adapter
+  /// interface looks records up by it.
+  userCode   String?   @map("user_code")
+  /// Interaction and session lookup key.
+  uid        String?
+  /// Null for records that never expire (registered clients).
+  expiresAt  DateTime? @map("expires_at")
+  /// Stamped when an authorization code or rotated refresh token is used, so
+  /// a second use is detected as replay.
+  consumedAt DateTime? @map("consumed_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@id([model, id])
+  @@index([grantId])
+  @@index([uid])
+  /// Supports the retention sweep that clears expired rows.
+  @@index([expiresAt])
+  @@map("oauth_payloads")
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Authorization (RBAC + CASL)
 //

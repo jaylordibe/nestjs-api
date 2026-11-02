@@ -437,6 +437,20 @@ export class UsersService {
   }
 
   /**
+   * Names of the user's platform roles (PLATFORM scope), in name order. Used
+   * where a caller identifies itself without a CASL ability — the MCP
+   * `get_current_user` tool.
+   */
+  async findPlatformRoleNames(userId: string): Promise<string[]> {
+    const userRoles = await this.prisma.scoped.userRole.findMany({
+      where: { userId },
+      select: { role: { select: { name: true } } },
+      orderBy: { role: { name: 'asc' } },
+    });
+    return userRoles.map((userRole) => userRole.role.name);
+  }
+
+  /**
    * The caller's own authorization, as packed CASL rules plus the role names
    * behind them. Consumed by `GET /users/me/permissions` so a client can
    * evaluate `can(...)` locally and reach the same verdict the server will.

@@ -1,8 +1,7 @@
 import {
-  type McpClientCredential,
   parseMcpAllowedOrigins,
-  parseMcpClientCredentials,
-} from '../common/util/mcp-client-credentials.util';
+  parseMcpRedirectOrigins,
+} from '../common/util/mcp-config.util';
 
 export interface AppConfig {
   nodeEnv: 'development' | 'test' | 'staging' | 'production';
@@ -104,6 +103,11 @@ export interface AppConfig {
     // without both, and no environment accepts exactly one.
     webSecretKey: string | undefined;
     mobileSecretKey: string | undefined;
+    // The website widget's public site key. Only the API's own server-rendered
+    // page (the MCP OAuth sign-in form) renders a widget, so only it reads this.
+    // Optional: with the check on and no key, only that page refuses (see
+    // TURNSTILE_WEB_SITE_KEY in env.validation.ts).
+    webSiteKey: string | undefined;
   };
   workspaceInvitation: {
     // How long an invitation token stays redeemable. Bounded because the token
@@ -206,15 +210,28 @@ export interface AppConfig {
   // `false`, or the comma-separated trusted-hop list Express compiles itself
   // (see TRUST_PROXY in env.validation.ts).
   trustProxy: false | string;
-  // The MCP endpoint (`/api/mcp`, see src/modules/mcp). It is OFF — answering
-  // 404 — until at least one client credential is configured.
+  // The MCP endpoint (`/api/mcp`, see src/modules/mcp) and the OAuth
+  // authorization server its clients sign in through (src/modules/mcp-oauth,
+  // docs/mcp.md).
   mcp: {
-    // One entry per integration client; each holds only its token's SHA-256.
-    clients: McpClientCredential[];
     // Browser origins allowed to call the endpoint. Empty refuses every
     // request that carries an `Origin` header; server-side clients (n8n,
     // Claude Code) send none.
     allowedOrigins: string[];
+    oauth: {
+      // The authorization server's issuer: the public origin of API_BASE_URL.
+      // Pinned from config, never taken from the request's Host header.
+      issuer: string;
+      // The protected resource tokens are issued for (RFC 8707 audience):
+      // the canonical `/api/mcp` URL.
+      resource: string;
+      accessTokenTtlSeconds: number;
+      // Absolute: rotating a refresh token never extends the chain past this.
+      refreshTokenTtlSeconds: number;
+      // https origins a client may register as its redirect; empty = any
+      // https origin. Loopback redirects are always allowed.
+      redirectOrigins: string[];
+    };
   };
   // Public web URL the API redirects to after a GET /auth/verify-email
   // click. The web app reads `?status=success|error&reason=…` and
@@ -240,17 +257,33 @@ const parseTrustProxy = (raw: string): false | string =>
 
 // env.validation.ts has already refused a malformed value; `?? []` only keeps
 // the type honest for a caller that builds config without validating it.
-const parseMcpConfig = (): AppConfig['mcp'] => ({
-  clients: parseMcpClientCredentials(process.env.MCP_CLIENT_TOKENS ?? '') ?? [],
+const readApiBaseUrl = (): string =>
+  process.env.API_BASE_URL ?? 'http://localhost:3000/api';
+
+const parseMcpConfig = (apiBaseUrl: string): AppConfig['mcp'] => ({
   allowedOrigins:
     parseMcpAllowedOrigins(process.env.MCP_ALLOWED_ORIGINS ?? '') ?? [],
+  oauth: {
+    issuer: new URL(apiBaseUrl).origin,
+    resource: `${apiBaseUrl.replace(/\/+$/, '')}/mcp`,
+    accessTokenTtlSeconds:
+      parseInt(process.env.MCP_OAUTH_ACCESS_TOKEN_TTL_MINUTES ?? '60', 10) * 60,
+    refreshTokenTtlSeconds:
+      parseInt(process.env.MCP_OAUTH_REFRESH_TOKEN_TTL_DAYS ?? '30', 10) *
+      24 *
+      60 *
+      60,
+    redirectOrigins:
+      parseMcpRedirectOrigins(process.env.MCP_OAUTH_REDIRECT_DOMAINS ?? '') ??
+      [],
+  },
 });
 
 export default (): AppConfig => ({
   nodeEnv: (process.env.NODE_ENV as AppConfig['nodeEnv']) ?? 'development',
   serviceName: process.env.SERVICE_NAME!,
   port: parseInt(process.env.PORT ?? '3000', 10),
-  apiBaseUrl: process.env.API_BASE_URL ?? 'http://localhost:3000/api',
+  apiBaseUrl: readApiBaseUrl(),
   webBaseUrl: process.env.WEB_BASE_URL ?? 'http://localhost:5173',
   gitSha: process.env.GIT_SHA ?? 'unknown',
   database: {
@@ -320,6 +353,7 @@ export default (): AppConfig => ({
   turnstile: {
     webSecretKey: process.env.TURNSTILE_WEB_SECRET?.trim() || undefined,
     mobileSecretKey: process.env.TURNSTILE_MOBILE_SECRET?.trim() || undefined,
+    webSiteKey: process.env.TURNSTILE_WEB_SITE_KEY?.trim() || undefined,
   },
   workspaceInvitation: {
     expiresInDays: parseInt(
@@ -396,7 +430,7 @@ export default (): AppConfig => ({
     limit: parseInt(process.env.THROTTLE_LIMIT ?? '100', 10),
   },
   trustProxy: parseTrustProxy(process.env.TRUST_PROXY ?? 'false'),
-  mcp: parseMcpConfig(),
+  mcp: parseMcpConfig(readApiBaseUrl()),
   emailVerifiedRedirectUrl:
     process.env.EMAIL_VERIFIED_REDIRECT_URL ??
     `${process.env.WEB_BASE_URL ?? 'http://localhost:5173'}/auth/verify-email`,

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
+import type { User } from '@prisma/client';
 import type { AuthenticatedUser } from '../../common/decorators/current-user.decorator';
 import { AuditService } from '../../common/audit/audit.service';
 import { Errors } from '../../common/errors/errors';
@@ -81,20 +82,7 @@ export class AuthService {
     dto: LoginDto,
     context: RefreshTokenContext = {},
   ): Promise<LoginResponseDto> {
-    // Soft-deleted accounts resolve to null, the same as an unknown identifier.
-    const user = await this.usersService.findByEmailOrUsername(dto.identifier);
-    const passwordMatches = await bcrypt.compare(
-      dto.password,
-      user?.password ?? (await this.getDummyHash()),
-    );
-    if (!user || !user.isActive || !passwordMatches) {
-      throw Errors.invalidCredentials();
-    }
-    // After the password check, so only the password holder learns the
-    // account exists but is unverified.
-    if (!user.emailVerifiedAt) {
-      throw Errors.emailNotVerified();
-    }
+    const user = await this.verifyCredentials(dto.identifier, dto.password);
     // The cutoff read with the password check authorises the session; a
     // revocation committing before issue is refused inside `startSession`.
     const tokens = await this.refreshTokenService.startSession(
@@ -119,6 +107,34 @@ export class AuthService {
       context,
     );
     return { ...tokens, user: new UserResponseDto(user) };
+  }
+
+  /**
+   * The one password check every sign-in path goes through: the REST login and
+   * the MCP OAuth sign-in page. Returns the user only when the password matches
+   * an active, verified account; it creates no session or token, so each
+   * caller decides what a successful check grants.
+   *
+   * An unknown identifier, an inactive account and a wrong password all answer
+   * `INVALID_CREDENTIALS` after the same bcrypt work, so neither the response
+   * nor its timing says whether the account exists.
+   */
+  async verifyCredentials(identifier: string, password: string): Promise<User> {
+    // Soft-deleted accounts resolve to null, the same as an unknown identifier.
+    const user = await this.usersService.findByEmailOrUsername(identifier);
+    const passwordMatches = await bcrypt.compare(
+      password,
+      user?.password ?? (await this.getDummyHash()),
+    );
+    if (!user || !user.isActive || !passwordMatches) {
+      throw Errors.invalidCredentials();
+    }
+    // After the password check, so only the password holder learns the
+    // account exists but is unverified.
+    if (!user.emailVerifiedAt) {
+      throw Errors.emailNotVerified();
+    }
+    return user;
   }
 
   private async getDummyHash(): Promise<string> {

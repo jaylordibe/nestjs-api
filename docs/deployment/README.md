@@ -466,6 +466,7 @@ minutes.
 | `TRUST_PROXY` | the addresses of the trusted proxy hops — see [Client topologies](#client-topologies); `false` refused in production |
 | `EMAIL_PROVIDER`, `SMS_PROVIDER` | **required in production** — they default to `stub`, and `stub` (and `EMAIL_PROVIDER=smtp`) is refused there. Their own settings are in the adapter table below |
 | `TURNSTILE_WEB_SECRET`, `TURNSTILE_MOBILE_SECRET` | secret — **required in staging and production**: the bot check's two widgets (website, app). Both or neither in any environment; Cloudflare's test secrets refused in staging and production. The worker validates the same configuration, so it needs both too |
+| `TURNSTILE_WEB_SITE_KEY` | public — the website widget's site key, rendered by the MCP sign-in page. Needed wherever the two secrets are set (staging, production) for MCP clients to sign in: without it the API and worker still boot, and only the sign-in page refuses (503). Add the API host to that widget's hostname list in Cloudflare |
 
 `EMAIL_PROVIDER` and `SMS_PROVIDER` are listed here rather than only under the
 adapter table because in production they are not optional: the default is
@@ -500,8 +501,17 @@ solely through Cloudflare), `EMAIL_VERIFIED_REDIRECT_URL`, `PASSWORD_RESET_URL`,
 
 | Variable | Notes |
 |---|---|
-| `MCP_CLIENT_TOKENS` | secret-adjacent — `name:sha256hex` pairs, one per MCP client. Unset or empty leaves `/api/mcp` off (404). Holds digests only, never a raw token; see [`../mcp.md`](../mcp.md) |
 | `MCP_ALLOWED_ORIGINS` | browser origins allowed to call `/api/mcp`; unset refuses any request carrying an `Origin` header (server-side clients send none) |
+| `MCP_OAUTH_ACCESS_TOKEN_TTL_MINUTES` | MCP access token lifetime, default 60 (5–1440) |
+| `MCP_OAUTH_REFRESH_TOKEN_TTL_DAYS` | how long an MCP client may renew before the user signs in again, default 30 (1–90) |
+| `MCP_OAUTH_REDIRECT_DOMAINS` | https origins MCP clients may register as their OAuth redirect; unset allows any https origin (loopback always allowed) |
+
+`/api/mcp` and its OAuth sign-in work with no MCP variable set; see
+[`../mcp.md`](../mcp.md). The OAuth endpoints and discovery documents are at
+the origin root — `/oauth/*`, `/.well-known/oauth-authorization-server`,
+`/.well-known/oauth-protected-resource*` — so the edge must route those to the
+API as well as `/api/*`, without caching. The signing and cookie keys derive
+from `JWT_SECRET`; the issuer is the origin of `API_BASE_URL`.
 
 ### Optional, only when the matching adapter is selected
 

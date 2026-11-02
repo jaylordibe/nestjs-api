@@ -296,6 +296,21 @@ describe('env.validation cross-field rules', () => {
       ).toContainEqual(expect.stringContaining('test secret'));
     });
 
+    // The site key only feeds the MCP sign-in page, which refuses on its own
+    // when it is missing; an existing deployment upgrading without it boots.
+    it.each(['staging', 'production'])(
+      'boots with both secrets and no web site key in %s',
+      (nodeEnv) => {
+        expect(
+          turnstileMessages({
+            NODE_ENV: nodeEnv,
+            ...BOTH_SECRETS,
+            TURNSTILE_WEB_SITE_KEY: '',
+          }),
+        ).toEqual([]);
+      },
+    );
+
     it.each(VALIDATED_ENVIRONMENTS)(
       'refuses exactly one secret in %s',
       (nodeEnv) => {

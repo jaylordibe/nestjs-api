@@ -11,7 +11,9 @@ import {
   McpServer,
 } from '@modelcontextprotocol/server';
 import type { Request, Response } from 'express';
+import { UsersService } from '../users/users.service';
 import { registerEchoTool } from './tools/echo.tool';
+import { registerGetCurrentUserTool } from './tools/get-current-user.tool';
 import {
   registerGetServerInfoTool,
   type ServerIdentity,
@@ -47,15 +49,15 @@ function readPackageIdentity(): ServerIdentity {
 // result, which none of these do); a 2025-era request gets a one-event SSE
 // stream that closes with the result. Neither holds a connection open.
 //
-// Authentication is NOT done here: McpClientAuthGuard has already verified the
-// caller and attached `request.auth` before the controller hands over.
+// Authentication is NOT done here: McpOAuthGuard has already verified the
+// signed-in user and attached `request.auth` before the controller hands over.
 @Injectable()
 export class McpService implements OnModuleDestroy {
   private readonly logger = new Logger(McpService.name);
   private readonly handler: McpHttpHandler;
   private readonly nodeHandler: NodeMcpRequestHandler;
 
-  constructor() {
+  constructor(private readonly usersService: UsersService) {
     const identity = readPackageIdentity();
     // The handler reports rejected client input here as well as its own
     // failures, so it is logged as a warning, message only: a caller sending
@@ -83,6 +85,7 @@ export class McpService implements OnModuleDestroy {
         registerPingTool(server);
         registerEchoTool(server);
         registerGetServerInfoTool(server, identity);
+        registerGetCurrentUserTool(server, this.usersService);
         return server;
       },
       { onerror: logHandlerError },

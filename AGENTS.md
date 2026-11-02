@@ -239,6 +239,6 @@ repository, the change and the owner.
 | Background work (immediate, delayed, recurring) | `src/common/queue/README.md` |
 | Error envelope and `ErrorCode` catalog | `src/common/errors/README.md` |
 | Deployment contract | `docs/deployment/README.md` |
-| MCP endpoint (`/api/mcp`), its client tokens and adding a tool | `docs/mcp.md` |
+| MCP endpoint (`/api/mcp`), its OAuth sign-in and adding a tool | `docs/mcp.md` |
 | Publishing images | `.github/workflows/publish-image.yml`, `docs/README.md` |
 | Which operational controls are enforced | `docs/operations.md` |

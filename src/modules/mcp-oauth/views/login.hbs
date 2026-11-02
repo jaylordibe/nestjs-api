@@ -1,0 +1,39 @@
+<h1>Sign in</h1>
+<p class='muted'><strong>{{clientName}}</strong>
+  wants to connect to
+  {{appName}}. Sign in to continue.</p>
+{{#if error}}<p class='error' role='alert'>{{error}}</p>{{/if}}
+<form method='post' action='{{action}}' novalidate>
+  <input type='hidden' name='formToken' value='{{formToken}}' />
+  <label for='identifier'>Email or username</label>
+  <input
+    id='identifier'
+    name='identifier'
+    type='text'
+    autocomplete='username'
+    autocapitalize='none'
+    spellcheck='false'
+    required
+    value='{{identifier}}'
+    autofocus
+  />
+  <label for='password'>Password</label>
+  <input
+    id='password'
+    name='password'
+    type='password'
+    autocomplete='current-password'
+    required
+  />
+  {{#if turnstileSiteKey}}<div
+      class='cf-turnstile turnstile'
+      data-sitekey='{{turnstileSiteKey}}'
+    ></div>{{/if}}
+  <div class='actions'>
+    <button type='submit' class='primary'>Sign in</button>
+  </div>
+</form>
+<form method='post' action='{{abortAction}}'>
+  <input type='hidden' name='formToken' value='{{formToken}}' />
+  <div class='actions'><button type='submit'>Cancel</button></div>
+</form>

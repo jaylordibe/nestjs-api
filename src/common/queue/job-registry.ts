@@ -23,6 +23,7 @@ import type { JobRetryPolicy } from './queue-registry';
 export enum JobName {
   MAINTENANCE_QUEUE_HEARTBEAT_V1 = 'maintenance.queue-heartbeat.v1',
   AUTH_REFRESH_TOKEN_RETENTION_V1 = 'auth.refresh-token-retention.v1',
+  MCP_OAUTH_PAYLOAD_RETENTION_V1 = 'mcp-oauth.payload-retention.v1',
   USER_EMAIL_VERIFICATION_V1 = 'user.email-verification.v1',
   USER_PASSWORD_RESET_V1 = 'user.password-reset.v1',
   USER_PASSWORD_CHANGED_NOTICE_V1 = 'user.password-changed-notice.v1',
@@ -71,6 +72,20 @@ export const JOB_REGISTRATIONS: Record<JobName, JobRegistration> = {
       initialBackoffMilliseconds: 60_000,
     },
   },
+  [JobName.MCP_OAUTH_PAYLOAD_RETENTION_V1]: {
+    queueName: QueueName.MAINTENANCE,
+    payloadVersion: 1,
+    description:
+      'Deletes MCP OAuth codes, tokens, grants, interactions and sessions past their expiry. Data minimisation: an expired row still names a user and a client. Idempotent — the delete is bounded by `expires_at < now`.',
+    // Same reasoning as the refresh-token sweep: nightly, so a failure past
+    // three quick retries waits for the next tick.
+    retryPolicy: {
+      attempts: 3,
+      backoffStrategy: 'exponential',
+      initialBackoffMilliseconds: 60_000,
+    },
+  },
+
   [JobName.USER_EMAIL_VERIFICATION_V1]: {
     queueName: QueueName.NOTIFICATIONS,
     payloadVersion: 1,

@@ -1,6 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import type { AddressInfo } from 'node:net';
 import { resolve } from 'node:path';
 import { INestApplication } from '@nestjs/common';
 import {
@@ -10,7 +9,18 @@ import {
 } from '@modelcontextprotocol/client';
 import request from 'supertest';
 import { App } from 'supertest/types';
-import { createTestApp } from './setup/test-app';
+import { truncateAll } from './setup/db';
+import {
+  connectWithOAuth,
+  createOAuthTestApp,
+  MCP_PATH,
+  type OAuthTestApp,
+} from './setup/mcp-oauth';
+import {
+  createRegularUser,
+  seedRbacCatalog,
+  TEST_PASSWORD,
+} from './setup/rbac';
 
 // `/api/mcp` (src/modules/mcp). The protocol is driven through the official
 // MCP client SDK in BOTH eras — the 2025 `initialize` handshake that n8n and
@@ -19,26 +29,20 @@ import { createTestApp } from './setup/test-app';
 // cover what a client SDK refuses to send (missing auth, a browser Origin,
 // malformed JSON-RPC).
 //
+// Clients authenticate with an access token from the MCP OAuth sign-in
+// (test/setup/mcp-oauth.ts); that flow itself, and every way the token stops
+// working, is covered in mcp-oauth.e2e-spec.ts.
+//
 // Not covered here: the endpoint's rate limit. The throttler is skipped under
 // NODE_ENV=test for every route (app.module.ts), so it cannot be observed in
 // e2e; the limit itself is a static value in mcp.config.ts.
 
-const MCP_PATH = '/api/mcp';
 const ALLOWED_ORIGIN = 'https://allowed.example.com';
-const TOOL_NAMES = ['ping', 'echo', 'get_server_info'];
+const TOOL_NAMES = ['ping', 'echo', 'get_server_info', 'get_current_user'];
 
 const newToken = (): string => randomBytes(32).toString('base64url');
 const sha256 = (value: string): string =>
   createHash('sha256').update(value, 'utf8').digest('hex');
-
-// `process.env.X = undefined` would store the string "undefined".
-function restoreEnvironment(name: string, value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[name];
-  } else {
-    process.env[name] = value;
-  }
-}
 
 const PACKAGE = JSON.parse(
   readFileSync(resolve(__dirname, '../package.json'), 'utf8'),
@@ -66,13 +70,22 @@ const LEGACY_HEADERS = {
 };
 
 describe('MCP endpoint (e2e)', () => {
-  const originalTokens = process.env.MCP_CLIENT_TOKENS;
-  const originalOrigins = process.env.MCP_ALLOWED_ORIGINS;
-  const n8nToken = newToken();
-  const claudeCodeToken = newToken();
+  let harness: OAuthTestApp;
   let app: INestApplication<App>;
   let endpoint: URL;
+  let accessToken: string;
   const openClients: Client[] = [];
+
+  async function signIn(email: string): Promise<string> {
+    const user = await createRegularUser(app, email);
+    const provider = await connectWithOAuth(endpoint, {
+      identifier: user.email,
+      password: TEST_PASSWORD,
+    });
+    const token = provider.tokens()?.access_token;
+    if (!token) throw new Error('no access token');
+    return token;
+  }
 
   async function connectClient(
     token: string,
@@ -94,25 +107,25 @@ describe('MCP endpoint (e2e)', () => {
 
   beforeAll(async () => {
     // Before the module compiles: the config factory re-runs per AppModule.
-    process.env.MCP_CLIENT_TOKENS = `n8n:${sha256(n8nToken)},claude-code:${sha256(claudeCodeToken)}`;
-    process.env.MCP_ALLOWED_ORIGINS = ALLOWED_ORIGIN;
-    app = await createTestApp();
-    const { port } = app.getHttpServer().address() as AddressInfo;
-    endpoint = new URL(`http://127.0.0.1:${port}${MCP_PATH}`);
+    harness = await createOAuthTestApp({ MCP_ALLOWED_ORIGINS: ALLOWED_ORIGIN });
+    app = harness.app;
+    endpoint = harness.endpoint;
+    await truncateAll(app);
+    await seedRbacCatalog(app);
+    accessToken = await signIn('mcp-endpoint@example.com');
   });
 
   afterAll(async () => {
     await Promise.all(openClients.map((client) => client.close()));
     await app.close();
-    restoreEnvironment('MCP_CLIENT_TOKENS', originalTokens);
-    restoreEnvironment('MCP_ALLOWED_ORIGINS', originalOrigins);
+    harness.restore();
   });
 
   describe.each(['legacy', 'modern'] as const)('%s-era client', (era) => {
     let client: Client;
 
     beforeAll(async () => {
-      client = await connectClient(n8nToken, era);
+      client = await connectClient(accessToken, era);
     });
 
     it('negotiates and identifies the server', () => {
@@ -128,7 +141,7 @@ describe('MCP endpoint (e2e)', () => {
       );
     });
 
-    it('discovers exactly the three tools, in a stable order, with schemas', async () => {
+    it('discovers exactly the four tools, in a stable order, with schemas', async () => {
       const { tools } = await client.listTools();
       expect(tools.map((tool) => tool.name)).toEqual(TOOL_NAMES);
       for (const tool of tools) {
@@ -234,8 +247,9 @@ describe('MCP endpoint (e2e)', () => {
     });
   });
 
-  it('accepts each configured client with its own token', async () => {
-    const client = await connectClient(claudeCodeToken, 'legacy');
+  it('accepts each signed-in client with its own token', async () => {
+    const secondToken = await signIn('second-client@example.com');
+    const client = await connectClient(secondToken, 'legacy');
     await expect(
       client.callTool({ name: 'ping', arguments: {} }),
     ).resolves.toMatchObject({ structuredContent: { message: 'pong' } });
@@ -259,22 +273,26 @@ describe('MCP endpoint (e2e)', () => {
         .set(LEGACY_HEADERS)
         .send(initialize)
         .expect(401);
-      expect(response.headers['www-authenticate']).toMatch(/^Bearer /);
+      // Where to sign in (RFC 9728 §5.1): what starts a client's OAuth flow.
+      expect(response.headers['www-authenticate']).toBe(
+        `Bearer realm="mcp", resource_metadata="${harness.baseUrl}/.well-known/oauth-protected-resource/api/mcp", scope="mcp:use"`,
+      );
       expect(response.body).toMatchObject({ errorCode: 'TOKEN_MISSING' });
     });
 
     it.each([
-      ['an unknown token', `Bearer ${newToken()}`],
+      ['an unknown token', () => `Bearer ${newToken()}`],
+      // The database keys tokens by their SHA-256; that key is not a token.
       [
-        'a token that is the configured digest itself',
-        `Bearer ${sha256(n8nToken)}`,
+        'the stored digest of a valid token',
+        () => `Bearer ${sha256(accessToken)}`,
       ],
-      ['a truncated token', `Bearer ${n8nToken.slice(0, -1)}`],
+      ['a truncated token', () => `Bearer ${accessToken.slice(0, -1)}`],
     ])('refuses %s: 401 invalid_token', async (_, authorization) => {
       const response = await request(app.getHttpServer())
         .post(MCP_PATH)
         .set(LEGACY_HEADERS)
-        .set('Authorization', authorization)
+        .set('Authorization', authorization())
         .send(initialize)
         .expect(401);
       expect(response.headers['www-authenticate']).toContain(
@@ -289,7 +307,7 @@ describe('MCP endpoint (e2e)', () => {
         .set(LEGACY_HEADERS)
         .set(
           'Authorization',
-          `Basic ${Buffer.from(`n8n:${n8nToken}`).toString('base64')}`,
+          `Basic ${Buffer.from(`n8n:${accessToken}`).toString('base64')}`,
         )
         .send(initialize)
         .expect(401);
@@ -318,7 +336,7 @@ describe('MCP endpoint (e2e)', () => {
       const response = await request(app.getHttpServer())
         .post(MCP_PATH)
         .set(LEGACY_HEADERS)
-        .set('Authorization', `Bearer ${n8nToken}`)
+        .set('Authorization', `Bearer ${accessToken}`)
         .set('Origin', 'https://evil.example.com')
         .send(initialize)
         .expect(403);
@@ -329,7 +347,7 @@ describe('MCP endpoint (e2e)', () => {
       const response = await request(app.getHttpServer())
         .post(MCP_PATH)
         .set(LEGACY_HEADERS)
-        .set('Authorization', `Bearer ${n8nToken}`)
+        .set('Authorization', `Bearer ${accessToken}`)
         .set('Origin', ALLOWED_ORIGIN)
         .send(initialize)
         .expect(200);
@@ -352,7 +370,7 @@ describe('MCP endpoint (e2e)', () => {
       .post(MCP_PATH)
       .timeout(3000)
       .set(LEGACY_HEADERS)
-      .set('Authorization', `Bearer ${n8nToken}`)
+      .set('Authorization', `Bearer ${accessToken}`)
       .set('MCP-Protocol-Version', '2026-07-28')
       .set('Mcp-Method', 'subscriptions/listen')
       .send({
@@ -374,7 +392,7 @@ describe('MCP endpoint (e2e)', () => {
       request(app.getHttpServer())
         .post(MCP_PATH)
         .set(LEGACY_HEADERS)
-        .set('Authorization', `Bearer ${n8nToken}`);
+        .set('Authorization', `Bearer ${accessToken}`);
 
     it('answers malformed JSON with 400 and no stack trace', async () => {
       const response = await post().send('{"jsonrpc": "2.0", ').expect(400);
@@ -411,32 +429,7 @@ describe('MCP endpoint (e2e)', () => {
     // A user route still requires a user JWT; an MCP token is not one.
     await request(app.getHttpServer())
       .get('/api/users/me')
-      .set('Authorization', `Bearer ${n8nToken}`)
+      .set('Authorization', `Bearer ${accessToken}`)
       .expect(401);
-  });
-});
-
-describe('MCP endpoint with no client configured (e2e)', () => {
-  const originalTokens = process.env.MCP_CLIENT_TOKENS;
-  let app: INestApplication<App>;
-
-  beforeAll(async () => {
-    process.env.MCP_CLIENT_TOKENS = '';
-    app = await createTestApp();
-  });
-
-  afterAll(async () => {
-    await app.close();
-    restoreEnvironment('MCP_CLIENT_TOKENS', originalTokens);
-  });
-
-  it('answers 404, as if the route did not exist', async () => {
-    const response = await request(app.getHttpServer())
-      .post(MCP_PATH)
-      .set(LEGACY_HEADERS)
-      .set('Authorization', `Bearer ${newToken()}`)
-      .send({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
-      .expect(404);
-    expect(response.body).toMatchObject({ errorCode: 'RESOURCE_NOT_FOUND' });
   });
 });

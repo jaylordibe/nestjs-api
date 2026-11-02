@@ -87,6 +87,18 @@ export const RECURRING_SCHEDULES: readonly RecurringScheduleRegistration[] = [
     buildPayload: () =>
       buildVersionedPayload(JobName.AUTH_REFRESH_TOKEN_RETENTION_V1),
   },
+  {
+    schedule: {
+      schedulerId: 'mcp-oauth:payload-retention:v1',
+      cronExpression: '30 0 * * *',
+      timeZone: SCHEDULE_TIME_ZONE,
+    },
+    jobName: JobName.MCP_OAUTH_PAYLOAD_RETENTION_V1,
+    description:
+      'Nightly deletion of MCP OAuth records past their expiry. Data minimisation — an expired row still names a user and a client.',
+    buildPayload: () =>
+      buildVersionedPayload(JobName.MCP_OAUTH_PAYLOAD_RETENTION_V1),
+  },
 ];
 
 export const REGISTERED_SCHEDULER_IDS: ReadonlySet<string> = new Set(

@@ -9,10 +9,14 @@ describe('TurnstileGuard', () => {
   let verify: jest.Mock;
   let guard: TurnstileGuard;
 
-  function contextWith(headers: Record<string, string>): ExecutionContext {
+  function contextWith(
+    headers: Record<string, string>,
+    body?: Record<string, unknown>,
+  ): ExecutionContext {
     const request = {
       ip: '203.0.113.4',
       header: (name: string) => headers[name.toLowerCase()],
+      body,
     };
     return {
       switchToHttp: () => ({ getRequest: () => request }),
@@ -43,6 +47,30 @@ describe('TurnstileGuard', () => {
   it('verifies a request with no Origin against the app widget — never skips it', async () => {
     await guard.canActivate(contextWith({ 'x-turnstile-token': 'token' }));
     expect(verify).toHaveBeenCalledWith('token', 'mobile', '203.0.113.4');
+  });
+
+  it('reads the token from the widget form field when no header is sent', async () => {
+    await guard.canActivate(
+      contextWith(
+        { origin: 'https://api.example.com' },
+        { 'cf-turnstile-response': 'form-token' },
+      ),
+    );
+    expect(verify).toHaveBeenCalledWith('form-token', 'web', '203.0.113.4');
+  });
+
+  it('prefers the header to the form field', async () => {
+    await guard.canActivate(
+      contextWith(
+        { 'x-turnstile-token': 'header-token' },
+        { 'cf-turnstile-response': 'form-token' },
+      ),
+    );
+    expect(verify).toHaveBeenCalledWith(
+      'header-token',
+      'mobile',
+      '203.0.113.4',
+    );
   });
 
   it.each([{}, { 'x-turnstile-token': '   ' }])(

@@ -45,6 +45,7 @@ import { DeviceTokensModule } from './modules/device-tokens/device-tokens.module
 import { EnumsModule } from './modules/enums/enums.module';
 import { HealthModule } from './modules/health/health.module';
 import { McpModule } from './modules/mcp/mcp.module';
+import { McpOAuthModule } from './modules/mcp-oauth/mcp-oauth.module';
 import { QueueAdminModule } from './modules/queue-admin/queue-admin.module';
 import { RolesModule } from './modules/roles/roles.module';
 import { PublicModule } from './modules/public/public.module';
@@ -270,6 +271,7 @@ import { UsersModule } from './modules/users/users.module';
     QueueAdminModule,
     PublicModule,
     McpModule,
+    McpOAuthModule,
   ],
   providers: [
     // Runs when the context closes (src/graceful-shutdown.ts) so pending spans

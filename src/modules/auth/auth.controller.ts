@@ -27,7 +27,10 @@ import { Public } from '../../common/decorators/public.decorator';
 import { RequireTurnstile } from '../../common/decorators/require-turnstile.decorator';
 import { OperationAcknowledgementDto } from '../../common/dto/operation-acknowledgement.dto';
 import { ErrorCode } from '../../common/errors/error-code.enum';
-import { loginThrottleTracker } from '../../common/util/login-throttle.util';
+import {
+  loginThrottleTracker,
+  passwordSignInThrottleKey,
+} from '../../common/util/login-throttle.util';
 import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
 import { EmailVerificationResponseDto } from './dto/email-verification-response.dto';
@@ -64,7 +67,12 @@ export class AuthController {
   @Public()
   @RequireTurnstile()
   @Throttle({
-    default: { limit: 5, ttl: 60_000, getTracker: loginThrottleTracker },
+    default: {
+      limit: 5,
+      ttl: 60_000,
+      getTracker: loginThrottleTracker,
+      generateKey: passwordSignInThrottleKey,
+    },
   })
   @HttpCode(HttpStatus.OK)
   @ApiOkResponse({ type: LoginResponseDto })

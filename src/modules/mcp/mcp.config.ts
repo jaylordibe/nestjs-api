@@ -2,8 +2,8 @@
 // choices, so they live here rather than in env.
 
 // Per-IP budget on `/api/mcp`, counted before authentication so a token-guessing
-// flood is capped too. Generous for one automation client; an n8n workflow that
-// genuinely needs more belongs behind its own client credential and a review.
+// flood is capped too. Generous for one automation client; a workflow that
+// genuinely needs more is a reason to review this limit, not to raise it blind.
 export const MCP_THROTTLE = { limit: 60, ttl: 60_000 } as const;
 
 // Longest `message` the `echo` tool accepts.
