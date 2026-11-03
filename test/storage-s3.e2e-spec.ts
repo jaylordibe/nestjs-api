@@ -8,11 +8,12 @@ import {
 } from '@aws-sdk/client-s3';
 import { FileStorageModule } from '../src/common/storage/file-storage.module';
 import { FileStorageService } from '../src/common/storage/file-storage.service';
+import { PRIVATE_OBJECT_CACHE_CONTROL } from '../src/common/storage/adapters/file-storage-adapter.interface';
 
 // The only test that drives a REAL object-storage backend.
 //
 // Every other storage test constructs an adapter and asserts which class came
-// back, which proves the selection switch and nothing else — `save`, `delete`
+// back, which proves the selection switch and nothing else — `put`, `delete`
 // and `createSignedReadUrl` had never executed against anything. For an upload
 // path that is the interesting half: a wrong option shape, an unsigned request,
 // a key that does not round-trip, or a signed URL nobody can fetch all survive
@@ -28,18 +29,66 @@ const BUCKET = process.env.STORAGE_S3_BUCKET ?? 'nestjs-e2e-uploads';
 const ENDPOINT = process.env.STORAGE_S3_ENDPOINT ?? 'http://localhost:9002';
 const REGION = process.env.STORAGE_S3_REGION ?? 'us-east-1';
 
-function buildUpload(
+const PNG_CONTENT_DISPOSITION = `inline; filename="photo.png"; filename*=UTF-8''photo.png`;
+
+// Writes `contents` under a fresh key and returns that key — the order the
+// files module uses: mint the key, record it, then write.
+async function putObject(
+  storage: FileStorageService,
   contents: string,
-  originalname: string,
-  mimetype = 'image/png',
-): Express.Multer.File {
-  const buffer = Buffer.from(contents, 'utf8');
-  return {
-    buffer,
-    originalname,
-    mimetype,
-    size: buffer.byteLength,
-  } as Express.Multer.File;
+  contentType = 'image/png',
+): Promise<string> {
+  const storageKey = storage.createKey('files/test', '.png');
+  await storage.put(storageKey, {
+    body: Buffer.from(contents, 'utf8'),
+    contentType,
+    contentDisposition: PNG_CONTENT_DISPOSITION,
+  });
+  return storageKey;
+}
+
+// The real `FileStorageModule` over a hand-built ConfigService holding only the
+// storage subtree, so the test needs no database, Redis or Joi schema.
+async function buildStorage(
+  overrides: Record<string, unknown> = {},
+): Promise<FileStorageService> {
+  const storageConfiguration: Record<string, unknown> = {
+    'storage.provider': 's3',
+    'storage.s3.bucket': BUCKET,
+    'storage.s3.region': REGION,
+    'storage.s3.endpoint': ENDPOINT,
+    'storage.s3.forcePathStyle': true,
+    'storage.signedUrlTtlSeconds': 300,
+    'storage.requestTimeoutMs': 15_000,
+    ...overrides,
+  };
+
+  @Global()
+  @Module({
+    providers: [
+      {
+        provide: ConfigService,
+        useValue: {
+          get: (path: string) => storageConfiguration[path],
+          getOrThrow: (path: string) => {
+            const value = storageConfiguration[path];
+            if (value === undefined) {
+              throw new Error(`Missing configuration: ${path}`);
+            }
+            return value;
+          },
+        },
+      },
+    ],
+    exports: [ConfigService],
+  })
+  class StorageConfigurationTestModule {}
+
+  const moduleRef = await Test.createTestingModule({
+    imports: [StorageConfigurationTestModule, FileStorageModule],
+  }).compile();
+
+  return moduleRef.get(FileStorageService);
 }
 
 describe('S3 storage adapter against a real backend (e2e)', () => {
@@ -58,42 +107,7 @@ describe('S3 storage adapter against a real backend (e2e)', () => {
       // Already there from a previous run. The suite owns this bucket.
     }
 
-    const storageConfiguration: Record<string, unknown> = {
-      'storage.provider': 's3',
-      'storage.s3.bucket': BUCKET,
-      'storage.s3.region': REGION,
-      'storage.s3.endpoint': ENDPOINT,
-      'storage.s3.forcePathStyle': true,
-      'storage.signedUrlTtlSeconds': 300,
-      'storage.requestTimeoutMs': 15_000,
-    };
-
-    @Global()
-    @Module({
-      providers: [
-        {
-          provide: ConfigService,
-          useValue: {
-            get: (path: string) => storageConfiguration[path],
-            getOrThrow: (path: string) => {
-              const value = storageConfiguration[path];
-              if (value === undefined) {
-                throw new Error(`Missing configuration: ${path}`);
-              }
-              return value;
-            },
-          },
-        },
-      ],
-      exports: [ConfigService],
-    })
-    class StorageConfigurationTestModule {}
-
-    const moduleRef = await Test.createTestingModule({
-      imports: [StorageConfigurationTestModule, FileStorageModule],
-    }).compile();
-
-    storage = moduleRef.get(FileStorageService);
+    storage = await buildStorage();
   });
 
   afterAll(() => {
@@ -104,90 +118,86 @@ describe('S3 storage adapter against a real backend (e2e)', () => {
     expect(storage.providerName).toBe('s3');
   });
 
-  it('uploads an object and returns a key that really exists', async () => {
-    const stored = await storage.save(
-      buildUpload('hello-object', 'photo.png'),
-      'avatars',
-    );
+  it('writes an object with the server-chosen headers', async () => {
+    const storageKey = await putObject(storage, 'hello-object');
 
-    expect(stored.storageKey).toMatch(/^avatars\/[0-9a-f-]{36}\.png$/);
+    expect(storageKey).toMatch(/^files\/test\/[0-9a-f-]{36}\.png$/);
 
-    // Asserted against the BACKEND, not against the return value — the return
-    // value would look identical if nothing had been written.
+    // Asserted against the BACKEND, not against the return value — nothing
+    // would look different if nothing had been written.
     const head = await inspectionClient.send(
-      new HeadObjectCommand({ Bucket: BUCKET, Key: stored.storageKey }),
+      new HeadObjectCommand({ Bucket: BUCKET, Key: storageKey }),
     );
     expect(head.ContentLength).toBe(
       Buffer.from('hello-object', 'utf8').byteLength,
     );
     expect(head.ContentType).toBe('image/png');
+    expect(head.ContentDisposition).toBe(PNG_CONTENT_DISPOSITION);
+    // Private, and no longer-lived than the longest signed URL — a shared
+    // cache must not keep serving it after the signature expires.
+    expect(head.CacheControl).toBe(PRIVATE_OBJECT_CACHE_CONTROL);
   });
 
   // Objects are private by default; a signed URL is the supported read path.
   it('mints a signed URL that actually fetches the object', async () => {
-    const stored = await storage.save(
-      buildUpload('signed-url-body', 'doc.png'),
-      'avatars',
-    );
+    const storageKey = await putObject(storage, 'signed-url-body');
 
-    const signedUrl = await storage.createSignedReadUrl(stored.storageKey);
+    const { url: signedUrl } = await storage.createSignedReadUrl(storageKey);
     const response = await fetch(signedUrl);
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('signed-url-body');
+    expect(response.headers.get('cache-control')).toBe(
+      PRIVATE_OBJECT_CACHE_CONTROL,
+    );
   });
 
   // The signature IS the permission. Without it the bucket must refuse.
   it('refuses an unsigned read of the same object', async () => {
-    const stored = await storage.save(
-      buildUpload('private-body', 'private.png'),
-      'avatars',
-    );
+    const storageKey = await putObject(storage, 'private-body');
 
-    const unsignedUrl = `${ENDPOINT}/${BUCKET}/${stored.storageKey}`;
+    const unsignedUrl = `${ENDPOINT}/${BUCKET}/${storageKey}`;
     const response = await fetch(unsignedUrl);
 
     expect(response.status).toBeGreaterThanOrEqual(400);
   });
 
-  it('reports no public URL when no public base is configured', async () => {
-    const stored = await storage.save(
-      buildUpload('no-public-url', 'x.png'),
-      'avatars',
-    );
-
-    expect(stored.publicUrl).toBeNull();
-  });
-
   it('deletes an object it stored', async () => {
-    const stored = await storage.save(
-      buildUpload('delete-me', 'gone.png'),
-      'avatars',
-    );
+    const storageKey = await putObject(storage, 'delete-me');
 
-    await storage.delete(stored.storageKey);
+    await storage.delete(storageKey);
 
     await expect(
       inspectionClient.send(
-        new HeadObjectCommand({ Bucket: BUCKET, Key: stored.storageKey }),
+        new HeadObjectCommand({ Bucket: BUCKET, Key: storageKey }),
       ),
     ).rejects.toThrow();
   });
 
-  // Deletion is best-effort by contract: its callers are rollback and cleanup
-  // paths, where a missing object means the write never completed.
-  it('swallows a delete of something that is not there', async () => {
+  // "Already gone" is success: the cleanup job deletes objects whose write may
+  // never have completed.
+  it('treats a delete of something that is not there as done', async () => {
     await expect(
-      storage.delete('avatars/00000000-0000-4000-8000-000000000000.png'),
+      storage.delete('files/test/00000000-0000-4000-8000-000000000000.png'),
     ).resolves.toBeUndefined();
   });
 
-  // Two saves of the same bytes under the same subdirectory must not collide —
-  // the identifying half of the name is server-minted, never caller-supplied.
-  it('never overwrites an existing object', async () => {
-    const first = await storage.save(buildUpload('same', 'a.png'), 'avatars');
-    const second = await storage.save(buildUpload('same', 'a.png'), 'avatars');
+  // Every other failure must surface, or the cleanup job would drop the row
+  // of an object it never removed.
+  it('propagates a delete failure instead of swallowing it', async () => {
+    const unreachable = await buildStorage({
+      'storage.s3.bucket': 'bucket-that-does-not-exist-e2e',
+    });
+    await expect(
+      unreachable.delete('files/test/00000000-0000-4000-8000-000000000000.png'),
+    ).rejects.toThrow();
+  });
 
-    expect(first.storageKey).not.toBe(second.storageKey);
+  // Two keys for the same subdirectory must not collide — the identifying half
+  // of the name is server-minted, never caller-supplied.
+  it('never mints the same key twice', () => {
+    expect(storage.createKey('files/test', '.png')).not.toBe(
+      storage.createKey('files/test', '.png'),
+    );
   });
 });

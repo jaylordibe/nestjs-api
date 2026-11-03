@@ -7,7 +7,6 @@ import {
   IsEnum,
   IsOptional,
   IsString,
-  IsUrl,
   Matches,
   MaxLength,
   MinLength,
@@ -75,9 +74,4 @@ export class CreateUserDto {
   @IsString()
   @MaxLength(64)
   timezone?: string;
-
-  @IsOptional()
-  @IsUrl({ require_protocol: true })
-  @MaxLength(2048)
-  profileImageUrl?: string;
 }

@@ -1,9 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
-import * as path from 'path';
-import { buildObjectName } from '../../util/storage-object-name.util';
 import {
   FileStorageAdapter,
-  StoredObject,
+  ObjectContent,
 } from './file-storage-adapter.interface';
 
 // Used when STORAGE_PROVIDER=stub — the default, and what local development
@@ -11,9 +9,9 @@ import {
 // persisted. The point is that the upload FLOW is exercisable with no cloud
 // account, no credential, and no network.
 //
-// URLs are shaped `stub://<subdir>/<uuid>.<ext>` so caller code that stores a
-// key, builds a URL, or requests a signed URL behaves identically here and
-// against a real backend.
+// Signed URLs are shaped `stub://<subdir>/<uuid>.<ext>?…` so caller code that
+// stores a key or requests a signed URL behaves identically here and against a
+// real backend.
 @Injectable()
 export class StubFileStorageAdapter implements FileStorageAdapter {
   readonly providerName = 'stub';
@@ -21,22 +19,11 @@ export class StubFileStorageAdapter implements FileStorageAdapter {
   private static readonly URL_PREFIX = 'stub://';
   private readonly logger = new Logger(StubFileStorageAdapter.name);
 
-  save(file: Express.Multer.File, subdirectory: string): Promise<StoredObject> {
-    // Shared with every real adapter, deliberately: the stub is what the tests
-    // exercise, so a subdirectory the real adapters would refuse must be
-    // refused here too — otherwise the rule is only enforced in the one
-    // environment nobody tests against.
-    const storageKey = buildObjectName(
-      subdirectory,
-      path.extname(file.originalname).toLowerCase(),
-    );
+  put(storageKey: string, content: ObjectContent): Promise<void> {
     this.logger.log(
-      `[storage:stub] saved key=${storageKey} size=${file.size} mime=${file.mimetype}`,
+      `[storage:stub] stored key=${storageKey} size=${content.body.byteLength} type=${content.contentType}`,
     );
-    return Promise.resolve({
-      storageKey,
-      publicUrl: this.resolvePublicUrl(storageKey),
-    });
+    return Promise.resolve();
   }
 
   delete(storageKey: string): Promise<void> {
@@ -52,9 +39,5 @@ export class StubFileStorageAdapter implements FileStorageAdapter {
     return Promise.resolve(
       `${StubFileStorageAdapter.URL_PREFIX}${storageKey}?signature=stub&expires=${expiresAtSeconds}`,
     );
-  }
-
-  resolvePublicUrl(storageKey: string): string {
-    return `${StubFileStorageAdapter.URL_PREFIX}${storageKey}`;
   }
 }

@@ -1,22 +1,25 @@
-// An object that has been written to storage.
+import { MAXIMUM_SIGNED_URL_TTL_SECONDS } from '../../util/signed-url-ttl.util';
+
+// The bytes and response headers of one object about to be written.
 //
-// `storageKey` is the CANONICAL IDENTIFIER and the thing a database row should
-// hold. `publicUrl` is a convenience that is null far more often than not.
-export interface StoredObject {
-  // Backend-internal object key (e.g. "avatars/<uuid>.png"). Server-generated,
-  // never caller-chosen — see `buildObjectName`. Store THIS, not a URL: a URL
-  // embeds the bucket, the provider and the access model, so a row holding one
-  // cannot survive a bucket rename, a CDN change or a move between providers.
-  storageKey: string;
-  // A directly-fetchable URL, or **null when the bucket is not public**.
-  //
-  // Null is the default and the safe case. It is non-null only when
-  // STORAGE_PUBLIC_URL_BASE is configured, which is an explicit assertion by
-  // the operator that objects in this bucket are world-readable (or fronted by
-  // a CDN that makes them so). Nothing in this application makes a bucket
-  // public, and nothing assumes one is.
-  publicUrl: string | null;
+// Every field is SERVER-DETERMINED. `contentType` is what the server decided
+// the content is after inspecting it — never the `Content-Type` a client
+// declared for its multipart part, which an attacker sets to `image/png` on an
+// HTML page — and `contentDisposition` is built from a sanitised name
+// (`buildContentDisposition`). An adapter stores them as given.
+export interface ObjectContent {
+  body: Buffer;
+  contentType: string;
+  contentDisposition: string;
 }
+
+// The `Cache-Control` every adapter writes. Objects are private: the only read
+// path is a signed URL, which lives at most `MAXIMUM_SIGNED_URL_TTL_SECONDS`.
+// `private` keeps a shared proxy or CDN from storing the response, and the
+// max-age stops a browser cache from outliving the longest URL that could have
+// fetched it — a `public, max-age=<a year>` header would let a cached copy keep
+// serving after the signature expired and the reader lost access.
+export const PRIVATE_OBJECT_CACHE_CONTROL = `private, max-age=${MAXIMUM_SIGNED_URL_TTL_SECONDS}`;
 
 // The storage capability the application depends on. Deliberately small, and
 // deliberately free of any provider vocabulary — no bucket, no container, no
@@ -33,13 +36,16 @@ export interface FileStorageAdapter {
   // this interface instead.
   readonly providerName: string;
 
-  // Writes the file under a server-generated object name inside `subdirectory`
-  // (a code-chosen constant, never request input) and returns its key.
-  save(file: Express.Multer.File, subdirectory: string): Promise<StoredObject>;
+  // Writes `content` under `storageKey`. The key comes from
+  // `FileStorageService.createKey` — server-minted, never request input — and
+  // the caller records it in the database BEFORE calling this, so no object can
+  // exist that no row knows about.
+  put(storageKey: string, content: ObjectContent): Promise<void>;
 
-  // Deletes by object key. Best-effort — implementations swallow "not found",
-  // because the callers are rollback and cleanup paths where a missing object
-  // just means the write never completed.
+  // Deletes by object key. Deleting a key that does not exist succeeds — the
+  // write it names may never have completed — but every OTHER failure throws,
+  // so a cleanup job can keep the row and retry instead of forgetting an
+  // object it failed to remove.
   delete(storageKey: string): Promise<void>;
 
   // A short-lived, read-only URL for one object.
@@ -51,10 +57,6 @@ export interface FileStorageAdapter {
   //
   // `ttlSeconds` is clamped by `FileStorageService` before it arrives here.
   createSignedReadUrl(storageKey: string, ttlSeconds: number): Promise<string>;
-
-  // The public URL for a key, or null when no public base is configured.
-  // Pure — it builds a string and performs no I/O.
-  resolvePublicUrl(storageKey: string): string | null;
 }
 
 export const FILE_STORAGE_ADAPTER = Symbol('FILE_STORAGE_ADAPTER');

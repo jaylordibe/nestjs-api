@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   DeleteObjectCommand,
@@ -8,12 +8,10 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
-import * as path from 'path';
-import { formatErrorMessage } from '../../util/error-message.util';
-import { buildObjectName } from '../../util/storage-object-name.util';
 import {
   FileStorageAdapter,
-  StoredObject,
+  ObjectContent,
+  PRIVATE_OBJECT_CACHE_CONTROL,
 } from './file-storage-adapter.interface';
 
 // S3 and every S3-compatible backend: AWS S3, Cloudflare R2, DigitalOcean
@@ -37,15 +35,11 @@ import {
 export class S3FileStorageAdapter implements FileStorageAdapter {
   readonly providerName = 's3';
 
-  private readonly logger = new Logger(S3FileStorageAdapter.name);
   private readonly client: S3Client;
   private readonly bucket: string;
-  private readonly publicUrlBase: string | null;
 
   constructor(configService: ConfigService) {
     this.bucket = configService.getOrThrow<string>('storage.s3.bucket');
-    this.publicUrlBase =
-      configService.get<string>('storage.publicUrlBase') ?? null;
 
     const region = configService.get<string>('storage.s3.region');
     const endpoint = configService.get<string>('storage.s3.endpoint');
@@ -70,40 +64,28 @@ export class S3FileStorageAdapter implements FileStorageAdapter {
     });
   }
 
-  async save(
-    file: Express.Multer.File,
-    subdirectory: string,
-  ): Promise<StoredObject> {
-    const storageKey = buildObjectName(
-      subdirectory,
-      path.extname(file.originalname).toLowerCase(),
-    );
+  async put(storageKey: string, content: ObjectContent): Promise<void> {
     await this.client.send(
       new PutObjectCommand({
         Bucket: this.bucket,
         Key: storageKey,
-        Body: file.buffer,
-        ContentType: file.mimetype,
-        // Uploaded objects are immutable — the name is a fresh UUID and nothing
-        // ever overwrites one — so a fronting CDN can keep them indefinitely.
-        // `private` is deliberate and is not overridden by this header: an ACL
-        // is never set here, so the bucket's own policy decides readability.
-        CacheControl: 'public, max-age=31536000, immutable',
+        Body: content.body,
+        ContentType: content.contentType,
+        ContentDisposition: content.contentDisposition,
+        // No ACL is ever set here, so the bucket's own policy decides
+        // readability; this header only bounds caching of signed reads.
+        CacheControl: PRIVATE_OBJECT_CACHE_CONTROL,
       }),
     );
-    return { storageKey, publicUrl: this.resolvePublicUrl(storageKey) };
   }
 
+  // S3 answers a DeleteObject for a missing key with success, so "already
+  // gone" needs no special case; anything else propagates for the caller to
+  // retry.
   async delete(storageKey: string): Promise<void> {
-    try {
-      await this.client.send(
-        new DeleteObjectCommand({ Bucket: this.bucket, Key: storageKey }),
-      );
-    } catch (error) {
-      this.logger.warn(
-        `Failed to delete s3://${this.bucket}/${storageKey}: ${formatErrorMessage(error)}`,
-      );
-    }
+    await this.client.send(
+      new DeleteObjectCommand({ Bucket: this.bucket, Key: storageKey }),
+    );
   }
 
   createSignedReadUrl(storageKey: string, ttlSeconds: number): Promise<string> {
@@ -115,9 +97,5 @@ export class S3FileStorageAdapter implements FileStorageAdapter {
       new GetObjectCommand({ Bucket: this.bucket, Key: storageKey }),
       { expiresIn: ttlSeconds },
     );
-  }
-
-  resolvePublicUrl(storageKey: string): string | null {
-    return this.publicUrlBase ? `${this.publicUrlBase}/${storageKey}` : null;
   }
 }

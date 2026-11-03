@@ -198,28 +198,13 @@ throw Errors.adminSelfTargetForbidden('Use /me/... instead'); // 403
 
 ESLint (`no-restricted-syntax`) rejects `new BadRequestException(...)` etc. anywhere outside `src/common/errors/`.
 
-## Multipart upload + JSON DTO body
+## Files on a resource
 
-```ts
-@Post('upload')
-@RequirePermission('create', 'Order')
-@ApiCreatedResponse({ type: OrderResponseDto })
-@UseInterceptors(FilesInterceptor('files', 50, imageUploadOptions))
-async upload(
-  @UploadedFiles() files: Express.Multer.File[],
-  @Body('data', new ParseJsonPipe(CreateOrderDto)) dto: CreateOrderDto,
-) {
-  const { storageKey } = await this.fileStorage.save(files[0], 'orders');
-  // Persist `storageKey` — NOT a URL. A URL embeds the bucket, the provider and
-  // the access model; a key survives all three changing. On DB failure call
-  // this.fileStorage.delete(storageKey) to roll back.
-  //
-  // To serve it later: authorize the caller FIRST, then
-  // `this.fileStorage.createSignedReadUrl(storageKey)` — a short-lived URL, not
-  // a permanent public one. `resolvePublicUrl()` returns null unless the
-  // deployment has explicitly declared the bucket public.
-}
-```
+Resource endpoints stay JSON. A client uploads with `POST /api/files` and sends
+the returned id in the create or update body; the domain service attaches it
+through `FilesService` inside its own transaction. The contract, the lifecycle
+and the recipes for one file and for a gallery are in
+[`docs/file-uploads.md`](file-uploads.md).
 
 ## Scheduled job
 

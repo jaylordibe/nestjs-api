@@ -1,12 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Storage } from '@google-cloud/storage';
-import * as path from 'path';
-import { formatErrorMessage } from '../../util/error-message.util';
-import { buildObjectName } from '../../util/storage-object-name.util';
 import {
   FileStorageAdapter,
-  StoredObject,
+  ObjectContent,
+  PRIVATE_OBJECT_CACHE_CONTROL,
 } from './file-storage-adapter.interface';
 
 // Google Cloud Storage. Selected with STORAGE_PROVIDER=gcs.
@@ -31,15 +29,11 @@ import {
 export class GcsFileStorageAdapter implements FileStorageAdapter {
   readonly providerName = 'gcs';
 
-  private readonly logger = new Logger(GcsFileStorageAdapter.name);
   private readonly storage: Storage;
   private readonly bucketName: string;
-  private readonly publicUrlBase: string | null;
 
   constructor(configService: ConfigService) {
     this.bucketName = configService.getOrThrow<string>('storage.gcs.bucket');
-    this.publicUrlBase =
-      configService.get<string>('storage.publicUrlBase') ?? null;
 
     const projectId = configService.get<string>('storage.gcs.projectId');
     // `StorageOptions extends ServiceOptions`, which declares `timeout` — so
@@ -59,44 +53,32 @@ export class GcsFileStorageAdapter implements FileStorageAdapter {
     });
   }
 
-  async save(
-    file: Express.Multer.File,
-    subdirectory: string,
-  ): Promise<StoredObject> {
-    const storageKey = buildObjectName(
-      subdirectory,
-      path.extname(file.originalname).toLowerCase(),
-    );
+  async put(storageKey: string, content: ObjectContent): Promise<void> {
     // resumable: false — a single-shot upload is faster for the bounded payload
-    // sizes the upload configs accept; resumable adds a round trip that only
+    // sizes the upload policies accept; resumable adds a round trip that only
     // pays for itself on very large files.
     await this.storage
       .bucket(this.bucketName)
       .file(storageKey)
-      .save(file.buffer, {
-        contentType: file.mimetype,
+      .save(content.body, {
+        contentType: content.contentType,
         resumable: false,
         metadata: {
-          // Immutable objects (fresh UUID per write, never overwritten), so a
-          // fronting CDN can keep them indefinitely. This sets caching, not
-          // permission — the bucket's own policy decides readability.
-          cacheControl: 'public, max-age=31536000, immutable',
+          contentDisposition: content.contentDisposition,
+          // Caching, not permission — the bucket's own policy decides
+          // readability.
+          cacheControl: PRIVATE_OBJECT_CACHE_CONTROL,
         },
       });
-    return { storageKey, publicUrl: this.resolvePublicUrl(storageKey) };
   }
 
+  // `ignoreNotFound` makes "already gone" a success; anything else propagates
+  // for the caller to retry.
   async delete(storageKey: string): Promise<void> {
-    try {
-      await this.storage
-        .bucket(this.bucketName)
-        .file(storageKey)
-        .delete({ ignoreNotFound: true });
-    } catch (error) {
-      this.logger.warn(
-        `Failed to delete gs://${this.bucketName}/${storageKey}: ${formatErrorMessage(error)}`,
-      );
-    }
+    await this.storage
+      .bucket(this.bucketName)
+      .file(storageKey)
+      .delete({ ignoreNotFound: true });
   }
 
   async createSignedReadUrl(
@@ -112,9 +94,5 @@ export class GcsFileStorageAdapter implements FileStorageAdapter {
         expires: Date.now() + ttlSeconds * 1000,
       });
     return signedUrl;
-  }
-
-  resolvePublicUrl(storageKey: string): string | null {
-    return this.publicUrlBase ? `${this.publicUrlBase}/${storageKey}` : null;
   }
 }

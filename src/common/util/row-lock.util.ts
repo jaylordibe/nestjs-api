@@ -78,7 +78,7 @@ import type { Prisma } from '@prisma/client';
  * `UPDATE`/`INSERT` takes a row lock just as surely as `FOR UPDATE` does — so
  * the order that actually has to hold is:
  *
- *     users → workspaces → workspace_invitations → workspace_memberships → refresh_tokens
+ *     users → file_assets → workspaces → workspace_invitations → workspace_memberships → refresh_tokens
  *
  * `WorkspaceInvitationsService.accept` is the path that fixes the relative order
  * of the middle three: it locks the user, then the workspace, then retires or
@@ -86,6 +86,12 @@ import type { Prisma } from '@prisma/client';
  * `workspace_invitations` under the workspace lock. The membership paths
  * (`add`, `changeRole`, `transferOwnership`, `transition`) write
  * `workspace_memberships` under the workspace lock and never touch invitations.
+ *
+ * `file_assets` rows are written only under the lock of the user row that owns
+ * the reference (`UsersService.updateInfo`, `gdprErase`), before anything in a
+ * workspace. The cleanup job writes them without any parent lock, one
+ * conditional statement at a time, so it never holds one while waiting on
+ * another.
  *
  * The rule for anything new: take the workspace lock first, and if you touch both
  * child tables, invitations before memberships. `revoke` and `resend` are safe

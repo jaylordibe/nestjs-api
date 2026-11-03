@@ -465,14 +465,17 @@ describe('Users (e2e)', () => {
         .expect(200);
     });
 
-    it('PATCH /api/users/me/profile-image updates the URL', async () => {
+    // Profile images are uploaded files now (`POST /files`, then
+    // `PATCH /users/me { profileImageFileId }`). The URL route and field are
+    // gone, and a client still sending them gets a clear refusal rather than a
+    // silently ignored field.
+    it('no longer serves PATCH /api/users/me/profile-image', async () => {
       const { token } = await registerVerifiedUser(app);
-      const res = await request(app.getHttpServer())
+      await request(app.getHttpServer())
         .patch('/api/users/me/profile-image')
         .set('Authorization', `Bearer ${token}`)
         .send({ profileImageUrl: 'https://cdn.example.com/me.jpg' })
-        .expect(200);
-      expect(res.body.profileImageUrl).toBe('https://cdn.example.com/me.jpg');
+        .expect(404);
     });
 
     it('POST /api/users/me/request-phone-verification rejects wrong current password with 401', async () => {
@@ -744,6 +747,31 @@ describe('Users (e2e)', () => {
         expect(stored.birthday?.toISOString().slice(0, 10)).toBe('1990-05-15');
       },
     );
+
+    // The admin create/update bodies used to accept any URL as a profile
+    // image. That field is gone: an image is an uploaded file the person
+    // attaches themselves.
+    it('refuses profileImageUrl on POST /api/users and PATCH /api/users/:id', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/users')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          email: 'url-field@example.com',
+          password: PASSWORD,
+          firstName: 'Url',
+          lastName: 'Field',
+          profileImageUrl: 'https://cdn.example.com/me.jpg',
+        })
+        .expect(400);
+      expect(created.body.errorCode).toBe('VALIDATION_FAILED');
+
+      const updated = await request(app.getHttpServer())
+        .patch(`/api/users/${adminId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ profileImageUrl: 'https://cdn.example.com/me.jpg' })
+        .expect(400);
+      expect(updated.body.errorCode).toBe('VALIDATION_FAILED');
+    });
 
     it('GET /api/users returns a paginated list', async () => {
       const res = await request(app.getHttpServer())

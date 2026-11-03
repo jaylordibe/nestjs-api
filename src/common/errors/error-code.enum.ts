@@ -63,9 +63,10 @@ export enum ErrorCode {
   PERMISSION_DENIED = 'PERMISSION_DENIED',
 
   // ── Request body rejected before parsing (413, 415) ─────────────────
-  /** The body exceeds the parser's size limit. */
+  /** The body, or an uploaded file, exceeds the size limit. */
   PAYLOAD_TOO_LARGE = 'PAYLOAD_TOO_LARGE',
-  /** The body's charset or content-encoding is not one the parser accepts. */
+  /** The body's charset or content-encoding is not one the parser accepts, or
+   *  an uploaded file's inspected content is not a type its purpose accepts. */
   UNSUPPORTED_MEDIA_TYPE = 'UNSUPPORTED_MEDIA_TYPE',
 
   // ── Validation / bad input (400) ─────────────────────────────────────
@@ -132,6 +133,23 @@ export enum ErrorCode {
    *  already proved possession of a real token) and because the client's
    *  remedy differs: ask for a fresh invitation rather than check the link. */
   INVITATION_EXPIRED = 'INVITATION_EXPIRED',
+
+  // ── Stored files (409, 422, 429) ─────────────────────────────────────
+  /** 409 — the file id names the caller's own upload for this purpose, but it
+   *  can no longer be attached: it expired, was already attached, or is being
+   *  deleted. The remedy is the same for each — upload the file again. A file
+   *  that is not the caller's, not for this purpose, or already removed by the
+   *  cleanup job is 404 instead — with the same remedy for a file the caller
+   *  did upload. */
+  FILE_NOT_ATTACHABLE = 'FILE_NOT_ATTACHABLE',
+  /** 422 — the content is of an accepted type but cannot be used: it does not
+   *  decode, or its dimensions or pixel count exceed the purpose's limit. */
+  FILE_CONTENT_INVALID = 'FILE_CONTENT_INVALID',
+  /** 429 — the caller already holds the maximum number of uploaded files that
+   *  are not attached to anything. Attach one of them, or wait: each expires
+   *  `FILE_UPLOAD_TTL_SECONDS` after upload. Retrying immediately does not
+   *  help. */
+  FILE_QUOTA_EXCEEDED = 'FILE_QUOTA_EXCEEDED',
 
   // ── Infrastructure (429, 500, 503) ───────────────────────────────────
   /** Too many requests. Emitted by the global @nestjs/throttler guard AND by

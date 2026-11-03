@@ -480,17 +480,16 @@ export const envValidationSchema = Joi.object({
   STORAGE_PROVIDER: Joi.string()
     .valid('stub', 's3', 'gcs', 'azure')
     .default('stub')
-    .when('NODE_ENV', refusedInTest('s3', 'gcs', 'azure')),
-
-  // Applies to EVERY provider. Leave unset unless the bucket/container really
-  // is world-readable or CDN-fronted: unset means `resolvePublicUrl` returns
-  // null and callers must mint a short-lived signed URL instead, which is the
-  // safe default and the one this template assumes.
-  STORAGE_PUBLIC_URL_BASE: Joi.string()
-    .uri({ scheme: ['http', 'https'] })
-    .pattern(/[^/]$/, { name: 'no-trailing-slash' })
-    .allow('')
-    .optional(),
+    .when('NODE_ENV', refusedInTest('s3', 'gcs', 'azure'))
+    // The stub stores nothing, yet answers every upload with 201 and a file id
+    // a profile then points at — in production that is silent data loss.
+    .when('NODE_ENV', {
+      is: 'production',
+      then: Joi.string().invalid('stub').required().messages({
+        'any.invalid':
+          'STORAGE_PROVIDER cannot be "stub" in production — it stores nothing, so every uploaded file would be lost. Configure s3, gcs or azure.',
+      }),
+    }),
 
   // Default lifetime of a signed read URL. Clamped to [30s, 1h] in code
   // whatever is set here — a signed URL is an unrevocable bearer credential, so
@@ -543,6 +542,30 @@ export const envValidationSchema = Joi.object({
     then: Joi.string().required(),
     otherwise: Joi.string().allow('').optional(),
   }),
+
+  // ── File uploads (`POST /files`) ─────────────────────────────────────────
+  // Hard per-file ceiling in bytes, applied while the request streams in; each
+  // upload purpose also has its own lower limit in code. Bounded above because
+  // the file is held in memory until it is processed.
+  FILE_UPLOAD_MAX_BYTES: Joi.number()
+    .integer()
+    .min(1024)
+    .max(100 * 1024 * 1024)
+    .default(25 * 1024 * 1024),
+  // How long an uploaded, unattached file stays attachable before the cleanup
+  // job deletes it.
+  FILE_UPLOAD_TTL_SECONDS: Joi.number()
+    .integer()
+    .min(60)
+    .max(7 * 24 * 60 * 60)
+    .default(86400),
+  // Largest width × height an uploaded image may declare. Refused from the
+  // header, before decoding.
+  FILE_IMAGE_MAX_PIXELS: Joi.number()
+    .integer()
+    .min(1)
+    .max(268_402_689)
+    .default(40_000_000),
 
   // Whether `/api/docs` is served. Only ever NARROWS: production is hard-off in
   // `configuration.ts` regardless of this value, so setting it to `true` there

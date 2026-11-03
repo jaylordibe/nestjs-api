@@ -40,7 +40,6 @@ import { UpdateAuthUserEmailDto } from './dto/update-auth-user-email.dto';
 import { UpdateAuthUserInfoDto } from './dto/update-auth-user-info.dto';
 import { UpdateAuthUserPasswordDto } from './dto/update-auth-user-password.dto';
 import { UpdateAuthUserPhoneDto } from './dto/update-auth-user-phone.dto';
-import { UpdateAuthUserProfileImageDto } from './dto/update-auth-user-profile-image.dto';
 import { UpdateAuthUsernameDto } from './dto/update-auth-username.dto';
 import { UpdatePasswordDto } from './dto/update-password.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -106,7 +105,7 @@ export class UsersController {
     @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<UserResponseDto> {
     const user = await this.usersService.findById(currentUser.id);
-    return new UserResponseDto(user);
+    return this.usersService.toResponse(user);
   }
 
   @Patch('me')
@@ -121,7 +120,7 @@ export class UsersController {
       dto,
       currentUser.id,
     );
-    return new UserResponseDto(user);
+    return this.usersService.toResponse(user);
   }
 
   @Delete('me')
@@ -161,7 +160,7 @@ export class UsersController {
     @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<UserResponseDto> {
     const user = await this.usersService.findById(currentUser.id);
-    return new UserResponseDto(user);
+    return this.usersService.toResponse(user);
   }
 
   @Patch('me/username')
@@ -176,7 +175,7 @@ export class UsersController {
       dto.username,
       currentUser.id,
     );
-    return new UserResponseDto(user);
+    return this.usersService.toResponse(user);
   }
 
   // Other sessions end; the caller gets a fresh session in the response and
@@ -198,7 +197,7 @@ export class UsersController {
       dto,
       readRefreshTokenContext(request),
     );
-    return { ...tokens, user: new UserResponseDto(user) };
+    return { ...tokens, user: await this.usersService.toResponse(user) };
   }
 
   // Other sessions end; the caller gets a fresh session in the response and
@@ -220,22 +219,7 @@ export class UsersController {
       dto,
       readRefreshTokenContext(request),
     );
-    return { ...tokens, user: new UserResponseDto(user) };
-  }
-
-  @Patch('me/profile-image')
-  @RequirePermission('update', 'User')
-  @ApiOkResponse({ type: UserResponseDto })
-  async updateAuthUserProfileImage(
-    @Body() dto: UpdateAuthUserProfileImageDto,
-    @CurrentUser() currentUser: AuthenticatedUser,
-  ): Promise<UserResponseDto> {
-    const user = await this.usersService.updateProfileImage(
-      currentUser.id,
-      dto.profileImageUrl,
-      currentUser.id,
-    );
-    return new UserResponseDto(user);
+    return { ...tokens, user: await this.usersService.toResponse(user) };
   }
 
   // Step 1 of the verified-phone flow — re-auth with the current password,
@@ -276,7 +260,7 @@ export class UsersController {
       dto,
       currentUser.id,
     );
-    return new UserResponseDto(user);
+    return this.usersService.toResponse(user);
   }
 
   // Plain phone update — no OTP, no verification. Sets the new number and
@@ -294,7 +278,7 @@ export class UsersController {
       dto.phoneNumber,
       currentUser.id,
     );
-    return new UserResponseDto(user);
+    return this.usersService.toResponse(user);
   }
 
   @Post()
@@ -308,7 +292,7 @@ export class UsersController {
     @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<UserResponseDto> {
     const user = await this.usersService.create(dto, currentUser.id);
-    return new UserResponseDto(user);
+    return this.usersService.toResponse(user);
   }
 
   @Get()
@@ -319,7 +303,7 @@ export class UsersController {
   ): Promise<PaginatedResponseDto<UserResponseDto>> {
     const { data, meta } = await this.usersService.findPaginated(query);
     return {
-      data: data.map((user) => new UserResponseDto(user)),
+      data: await this.usersService.toResponses(data),
       meta,
     };
   }
@@ -331,7 +315,7 @@ export class UsersController {
     @Param('id', new ParseUUIDPipe()) id: string,
   ): Promise<UserResponseDto> {
     const user = await this.usersService.findById(id);
-    return new UserResponseDto(user);
+    return this.usersService.toResponse(user);
   }
 
   @Patch(':id')
@@ -343,7 +327,7 @@ export class UsersController {
     @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<UserResponseDto> {
     const user = await this.usersService.update(id, dto, currentUser.id);
-    return new UserResponseDto(user);
+    return this.usersService.toResponse(user);
   }
 
   @Patch(':id/password')
@@ -362,7 +346,7 @@ export class UsersController {
       dto.newPassword,
       currentUser.id,
     );
-    return new UserResponseDto(user);
+    return this.usersService.toResponse(user);
   }
 
   @Delete(':id')

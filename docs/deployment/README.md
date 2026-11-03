@@ -281,7 +281,7 @@ startup for the other three.
 
 | `STORAGE_PROVIDER` | Backend | Authentication |
 |---|---|---|
-| `stub` (default) | none — persists nothing | none |
+| `stub` (default; refused in production) | none — persists nothing | none |
 | `s3` | AWS S3, Cloudflare R2, DigitalOcean Spaces, MinIO, Ceph | AWS default credential chain — instance profile, task role, IRSA, or `AWS_*` locally |
 | `gcs` | Google Cloud Storage | Application Default Credentials — attached service account, or Workload Identity Federation |
 | `azure` | Azure Blob Storage | `DefaultAzureCredential` — managed identity, or a CLI login |
@@ -294,10 +294,8 @@ schema.
 
 Objects are **private by default**:
 
-- `STORAGE_PUBLIC_URL_BASE` is unset by default, and `resolvePublicUrl()` then
-  returns **null**. Setting it is an explicit operator assertion that the
-  bucket is world-readable or CDN-fronted. Nothing in the application makes
-  storage public or assumes it is.
+- The application never builds a public URL for an object. Nothing in it
+  makes storage public or assumes it is.
 - Reads use **short-lived signed URLs**: `createSignedReadUrl()`, clamped to
   `[30s, 1h]` in code whatever `STORAGE_SIGNED_URL_TTL_SECONDS` says.
 - **Authorize before signing.** A signed URL is an unrevocable bearer
@@ -309,6 +307,23 @@ Objects are **private by default**:
   choose where an object lands or reach another tenant's.
 - Store the **`storageKey`**, not a URL. A URL embeds the bucket, the provider
   and the access model; a key survives all three changing.
+- Objects are written `Cache-Control: private, max-age=3600` — no longer than
+  the longest signed URL — so a shared cache never keeps serving one after its
+  signature expires.
+- Uploads (`POST /api/files`) are held in memory up to `FILE_UPLOAD_MAX_BYTES`
+  (default 25 MiB) per request. The platform's edge must allow request bodies at
+  least that large on that route, or uploads fail before reaching the API.
+- The worker's `files.cleanup.v1` job (every 10 minutes) deletes unattached
+  and released objects. The storage identity therefore needs delete permission
+  on the bucket, not only write and read.
+- Image uploads are decoded in the API process, at most two at a time per
+  process. Native memory per decode is set by the image's pixel count, not its
+  byte size — about 200 MB at the default `FILE_IMAGE_MAX_PIXELS` (measured in
+  `node:24-alpine`), outside the V8 heap the liveness probe checks. Size the API
+  container for about 400 MB on top of its baseline, and alert on OOM kills.
+- Upgrading a deployed fork across the `file_assets` migration: see
+  "Upgrading a deployed fork" in `docs/file-uploads.md` — it drops
+  `users.profile_image_url`, which the previous release still reads.
 
 ### On a VM: which identity the application presents
 
@@ -464,17 +479,17 @@ minutes.
 | `API_BASE_URL`, `WEB_BASE_URL` | public `https://` hostnames — **required in production**; the localhost defaults, `http:`, localhost, an IP address and a URL with credentials are refused there |
 | `CORS_ORIGIN` | explicit list; `*` is refused in production |
 | `TRUST_PROXY` | the addresses of the trusted proxy hops — see [Client topologies](#client-topologies); `false` refused in production |
-| `EMAIL_PROVIDER`, `SMS_PROVIDER` | **required in production** — they default to `stub`, and `stub` (and `EMAIL_PROVIDER=smtp`) is refused there. Their own settings are in the adapter table below |
+| `EMAIL_PROVIDER`, `SMS_PROVIDER`, `STORAGE_PROVIDER` | **required in production** — they default to `stub`, and `stub` (and `EMAIL_PROVIDER=smtp`) is refused there. Their own settings are in the adapter tables below and in §5 |
 | `TURNSTILE_WEB_SECRET`, `TURNSTILE_MOBILE_SECRET` | secret — **required in staging and production**: the bot check's two widgets (website, app). Both or neither in any environment; Cloudflare's test secrets refused in staging and production. The worker validates the same configuration, so it needs both too |
 | `TURNSTILE_WEB_SITE_KEY` | public — the website widget's site key, rendered by the MCP sign-in page. Needed wherever the two secrets are set (staging, production) for MCP clients to sign in: without it the API and worker still boot, and only the sign-in page refuses (503). Add the API host to that widget's hostname list in Cloudflare |
 
-`EMAIL_PROVIDER` and `SMS_PROVIDER` are listed here rather than only under the
-adapter table because in production they are not optional: the default is
+`EMAIL_PROVIDER`, `SMS_PROVIDER` and `STORAGE_PROVIDER` are listed here rather
+than only under the adapter tables because in production they are not optional: the default is
 `stub`, `stub` is refused, and there is no third value that needs no
 configuration. A production environment assembled from this table alone would
 otherwise crash-loop on the first boot with `"EMAIL_PROVIDER" is required`.
-`STORAGE_PROVIDER` is genuinely optional — it defaults to `stub` in every
-environment, including production.
+`STORAGE_PROVIDER` is the same since file uploads exist: the `stub` default
+stores nothing, so production refuses it and needs `s3`, `gcs` or `azure`.
 
 ### Runtime-distinguishing
 
@@ -494,8 +509,9 @@ environment, including production.
 `REFRESH_TOKEN_EXPIRES_IN_DAYS` (30), `WORKSPACE_INVITATION_EXPIRES_IN_DAYS` (7),
 `TRUST_CLOUDFLARE_HEADERS` (false — set true only when the origin is reachable
 solely through Cloudflare), `EMAIL_VERIFIED_REDIRECT_URL`, `PASSWORD_RESET_URL`,
-`STORAGE_PROVIDER` (stub), `STORAGE_PUBLIC_URL_BASE` (unset),
-`STORAGE_SIGNED_URL_TTL_SECONDS` (300), `STORAGE_REQUEST_TIMEOUT_MS` (15000).
+`STORAGE_SIGNED_URL_TTL_SECONDS` (300), `STORAGE_REQUEST_TIMEOUT_MS` (15000),
+`FILE_UPLOAD_MAX_BYTES` (26214400), `FILE_UPLOAD_TTL_SECONDS` (86400),
+`FILE_IMAGE_MAX_PIXELS` (40000000).
 
 ### Optional, MCP endpoint
 

@@ -43,6 +43,7 @@ import { AuthorizationModule } from './modules/authorization/authorization.modul
 import { WorkspacesModule } from './modules/workspaces/workspaces.module';
 import { DeviceTokensModule } from './modules/device-tokens/device-tokens.module';
 import { EnumsModule } from './modules/enums/enums.module';
+import { FilesModule } from './modules/files/files.module';
 import { HealthModule } from './modules/health/health.module';
 import { McpModule } from './modules/mcp/mcp.module';
 import { McpOAuthModule } from './modules/mcp-oauth/mcp-oauth.module';
@@ -267,6 +268,7 @@ import { UsersModule } from './modules/users/users.module';
     AppVersionsModule,
     DeviceTokensModule,
     EnumsModule,
+    FilesModule,
     HealthModule,
     QueueAdminModule,
     PublicModule,

@@ -12,20 +12,18 @@ import { randomUUID } from 'crypto';
 //
 // The subdirectory is validated rather than merely trimmed. Object stores treat
 // the name as an opaque string with no notion of a parent directory, so `..`
-// does not "escape" anywhere — but the same name is concatenated into a public
-// URL by `resolvePublicUrl` and signed into one by `createSignedReadUrl`, and a
-// name containing `..`, `//` or a leading `/` produces a URL that a CDN, a proxy
+// does not "escape" anywhere — but the same name is signed into a URL by
+// `createSignedReadUrl`, and a name containing `..`, `//` or a leading `/` produces a URL that a CDN, a proxy
 // or a browser may normalise differently from the store. Refusing the shape
 // outright is cheaper than reasoning about which layer normalises what.
 const SAFE_SUBDIRECTORY_PATTERN = /^[a-z0-9][a-z0-9/_-]*$/;
 
-// The extension is the ONE part of the name that comes from the client — every
-// adapter passes `path.extname(file.originalname)`, and the upload filters
-// check the declared MIME type, never the filename. So it is whitelisted rather
-// than trusted.
+// The extension is decorative — the files module passes the one it derived
+// from the inspected content, never the client's filename — but this function
+// is the last line of defence for any caller, so it is whitelisted rather than
+// trusted.
 //
-// It cannot produce a path escape (`path.extname` returns at most the last
-// dot-segment of the last path segment), but it can carry `?` or `#`, and the
+// A caller-supplied suffix can carry `?` or `#`, and the
 // object name is concatenated straight into a URL — `avatars/<uuid>.p?g` yields
 // a URL whose `?g` is parsed as a query string, so the key stops round-tripping.
 // Anything that is not a short alphanumeric suffix is dropped: the object is

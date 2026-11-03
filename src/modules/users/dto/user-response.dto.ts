@@ -1,7 +1,8 @@
-import { ApiHideProperty } from '@nestjs/swagger';
+import { ApiHideProperty, ApiProperty } from '@nestjs/swagger';
 import { Exclude } from 'class-transformer';
 import { User } from '@prisma/client';
 import { Gender } from '../../../common/enums/gender.enum';
+import { AttachedFileResponseDto } from '../../files/dto/attached-file-response.dto';
 
 export class UserResponseDto {
   id!: string;
@@ -27,9 +28,11 @@ export class UserResponseDto {
   phoneNumber!: string | null;
   phoneNumberVerifiedAt!: Date | null;
   gender!: Gender | null;
-  profileImageUrl!: string | null;
   birthday!: Date | null;
   timezone!: string | null;
+  /** The profile picture, with a short-lived URL; null when none is set. */
+  @ApiProperty({ type: AttachedFileResponseDto, nullable: true })
+  profileImage!: AttachedFileResponseDto | null;
 
   // `@Exclude()` strips these from the JSON response at runtime (via
   // ClassSerializerInterceptor). `@ApiHideProperty()` hides them from
@@ -40,8 +43,13 @@ export class UserResponseDto {
   @ApiHideProperty() @Exclude() otpHash!: string | null;
   @ApiHideProperty() @Exclude() otpPurpose!: string | null;
   @ApiHideProperty() @Exclude() otpExpiresAt!: Date | null;
+  @ApiHideProperty() @Exclude() profileImageFileId!: string | null;
 
-  constructor(user: User) {
+  // `profileImage` is required, not defaulted: a call site that forgot it
+  // would report every picture as removed. Build through
+  // `UsersService.toResponse`, which signs the URL.
+  constructor(user: User, profileImage: AttachedFileResponseDto | null) {
     Object.assign(this, user);
+    this.profileImage = profileImage;
   }
 }

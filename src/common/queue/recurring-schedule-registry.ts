@@ -99,6 +99,19 @@ export const RECURRING_SCHEDULES: readonly RecurringScheduleRegistration[] = [
     buildPayload: () =>
       buildVersionedPayload(JobName.MCP_OAUTH_PAYLOAD_RETENTION_V1),
   },
+  {
+    // Every ten minutes: an expired upload's object should not outlive its
+    // expiry by long, and a run is bounded to one batch of deletes.
+    schedule: {
+      schedulerId: 'files:cleanup:v1',
+      cronExpression: '*/10 * * * *',
+      timeZone: SCHEDULE_TIME_ZONE,
+    },
+    jobName: JobName.FILES_CLEANUP_V1,
+    description:
+      'Deletes stored files nothing uses — expired uploads, abandoned uploads, released files — and retries object deletes that failed.',
+    buildPayload: () => buildVersionedPayload(JobName.FILES_CLEANUP_V1),
+  },
 ];
 
 export const REGISTERED_SCHEDULER_IDS: ReadonlySet<string> = new Set(

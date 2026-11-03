@@ -1,4 +1,8 @@
-import type { ArgumentsHost } from '@nestjs/common';
+import {
+  PayloadTooLargeException,
+  UnsupportedMediaTypeException,
+  type ArgumentsHost,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ErrorCode } from '../errors/error-code.enum';
 import { GlobalExceptionFilter } from './global-exception.filter';
@@ -53,5 +57,23 @@ describe('GlobalExceptionFilter', () => {
     const { status, body } = answer(postgresError('XX000'));
     expect(status).toBe(500);
     expect(body).toMatchObject({ errorCode: ErrorCode.INTERNAL_ERROR });
+  });
+
+  // Multer raises a bare PayloadTooLargeException for an oversized file; a
+  // client must read a named code, not INTERNAL_ERROR.
+  it('answers an untagged 413 with PAYLOAD_TOO_LARGE', () => {
+    const { status, body } = answer(
+      new PayloadTooLargeException('File too large'),
+    );
+    expect(status).toBe(413);
+    expect(body).toMatchObject({ errorCode: ErrorCode.PAYLOAD_TOO_LARGE });
+  });
+
+  it('answers an untagged 415 with UNSUPPORTED_MEDIA_TYPE', () => {
+    const { status, body } = answer(new UnsupportedMediaTypeException());
+    expect(status).toBe(415);
+    expect(body).toMatchObject({
+      errorCode: ErrorCode.UNSUPPORTED_MEDIA_TYPE,
+    });
   });
 });

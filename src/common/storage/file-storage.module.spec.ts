@@ -18,7 +18,6 @@ import { MAXIMUM_SIGNED_URL_TTL_SECONDS } from '../util/signed-url-ttl.util';
 describe('FileStorageModule provider selection', () => {
   const STORAGE_KEYS = [
     'STORAGE_PROVIDER',
-    'STORAGE_PUBLIC_URL_BASE',
     'STORAGE_S3_BUCKET',
     'STORAGE_S3_REGION',
     'STORAGE_GCS_BUCKET',
@@ -146,35 +145,6 @@ describe('FileStorageModule provider selection', () => {
     expect(service.providerName).toBe('azure');
   });
 
-  describe('public-URL policy', () => {
-    // The default must be "not public". A bucket is only readable because an
-    // operator said so, and this is where that assertion enters the system.
-    it('reports no public URL when no public base is configured', async () => {
-      const service = await buildStorageService({
-        ...BASE_CONFIGURATION,
-        'storage.provider': 's3',
-        'storage.s3.bucket': 'uploads',
-        'storage.s3.region': 'eu-central-1',
-      });
-
-      expect(service.resolvePublicUrl('avatars/abc.png')).toBeNull();
-    });
-
-    it('builds a public URL only once a base is declared', async () => {
-      const service = await buildStorageService({
-        ...BASE_CONFIGURATION,
-        'storage.provider': 's3',
-        'storage.s3.bucket': 'uploads',
-        'storage.s3.region': 'eu-central-1',
-        'storage.publicUrlBase': 'https://cdn.example.com',
-      });
-
-      expect(service.resolvePublicUrl('avatars/abc.png')).toBe(
-        'https://cdn.example.com/avatars/abc.png',
-      );
-    });
-  });
-
   describe('signed URLs', () => {
     it('mints a bounded, expiring URL through the stub', async () => {
       const service = await buildStorageService({
@@ -182,10 +152,24 @@ describe('FileStorageModule provider selection', () => {
         'storage.provider': 'stub',
       });
 
-      const signedUrl = await service.createSignedReadUrl('avatars/abc.png');
+      const { url: signedUrl, expiresAt } =
+        await service.createSignedReadUrl('avatars/abc.png');
 
       expect(signedUrl).toContain('avatars/abc.png');
       expect(signedUrl).toMatch(/expires=\d+/);
+      // The reported expiry is the signature's, so a client refreshing at it
+      // is never late.
+      const signedExpirySeconds = Number(/expires=(\d+)/.exec(signedUrl)?.[1]);
+      expect(Math.floor(expiresAt.getTime() / 1000)).toBeLessThanOrEqual(
+        signedExpirySeconds,
+      );
+      // …and it is the real expiry, not a placeholder: at least the default
+      // TTL from now, give or take the clock tick between the two stamps.
+      expect(expiresAt.getTime()).toBeGreaterThanOrEqual(
+        Date.now() +
+          BASE_CONFIGURATION['storage.signedUrlTtlSeconds'] * 1000 -
+          2_000,
+      );
     });
 
     // The clamp lives in the service, not the adapters, so no provider can be
@@ -197,7 +181,7 @@ describe('FileStorageModule provider selection', () => {
       });
 
       const nowSeconds = Math.floor(Date.now() / 1000);
-      const signedUrl = await service.createSignedReadUrl(
+      const { url: signedUrl } = await service.createSignedReadUrl(
         'avatars/abc.png',
         86_400,
       );

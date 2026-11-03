@@ -71,16 +71,14 @@ describe('buildObjectName', () => {
   });
 });
 
-// The extension is the one part of the object name that comes from the client:
-// every adapter passes `path.extname(file.originalname)`, and the upload filters
-// only ever check the declared MIME type — never the filename.
+// The extension is whitelisted rather than trusted, whatever the caller passes.
 describe('file extension handling', () => {
   it('keeps an ordinary extension', () => {
     expect(buildObjectName('avatars', '.png')).toMatch(/\.png$/);
   });
 
   // `avatars/<uuid>.p?g` concatenated into a URL makes `?g` a query string, so
-  // the stored key stops round-tripping through resolvePublicUrl.
+  // the stored key stops round-tripping through a signed URL.
   it.each([
     ['query character', '.p?g'],
     ['fragment character', '.pn#g'],

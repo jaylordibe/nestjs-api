@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DefaultAzureCredential } from '@azure/identity';
 import {
@@ -6,13 +6,12 @@ import {
   BlobServiceClient,
   SASProtocol,
   generateBlobSASQueryParameters,
+  type UserDelegationKey,
 } from '@azure/storage-blob';
-import * as path from 'path';
-import { formatErrorMessage } from '../../util/error-message.util';
-import { buildObjectName } from '../../util/storage-object-name.util';
 import {
   FileStorageAdapter,
-  StoredObject,
+  ObjectContent,
+  PRIVATE_OBJECT_CACHE_CONTROL,
 } from './file-storage-adapter.interface';
 
 // Azure Blob Storage. Selected with STORAGE_PROVIDER=azure.
@@ -35,15 +34,24 @@ import {
 // costs nothing: the grant's EXPIRY is still measured from now.
 const CLOCK_SKEW_ALLOWANCE_MILLISECONDS = 5 * 60 * 1000;
 
+// How long one user delegation key is requested for. Every SAS it signs must
+// expire before it does, so it is renewed once it would not outlive the URL
+// being signed (URLs live at most an hour, `MAXIMUM_SIGNED_URL_TTL_SECONDS`).
+const DELEGATION_KEY_LIFETIME_MILLISECONDS = 2 * 60 * 60 * 1000;
+
+interface CachedDelegationKey {
+  expiresOn: Date;
+  key: Promise<UserDelegationKey>;
+}
+
 @Injectable()
 export class AzureFileStorageAdapter implements FileStorageAdapter {
   readonly providerName = 'azure';
 
-  private readonly logger = new Logger(AzureFileStorageAdapter.name);
   private readonly blobServiceClient: BlobServiceClient;
+  private cachedDelegationKey: CachedDelegationKey | null = null;
   private readonly accountName: string;
   private readonly containerName: string;
-  private readonly publicUrlBase: string | null;
 
   constructor(configService: ConfigService) {
     this.accountName = configService.getOrThrow<string>(
@@ -52,8 +60,6 @@ export class AzureFileStorageAdapter implements FileStorageAdapter {
     this.containerName = configService.getOrThrow<string>(
       'storage.azure.container',
     );
-    this.publicUrlBase =
-      configService.get<string>('storage.publicUrlBase') ?? null;
 
     this.blobServiceClient = new BlobServiceClient(
       `https://${this.accountName}.blob.core.windows.net`,
@@ -76,34 +82,22 @@ export class AzureFileStorageAdapter implements FileStorageAdapter {
       .getBlockBlobClient(storageKey);
   }
 
-  async save(
-    file: Express.Multer.File,
-    subdirectory: string,
-  ): Promise<StoredObject> {
-    const storageKey = buildObjectName(
-      subdirectory,
-      path.extname(file.originalname).toLowerCase(),
-    );
-    await this.blobClient(storageKey).uploadData(file.buffer, {
+  async put(storageKey: string, content: ObjectContent): Promise<void> {
+    await this.blobClient(storageKey).uploadData(content.body, {
       blobHTTPHeaders: {
-        blobContentType: file.mimetype,
-        // Immutable objects (fresh UUID per write), so a fronting CDN can keep
-        // them indefinitely. Caching, not permission — the container's own
-        // access level decides readability.
-        blobCacheControl: 'public, max-age=31536000, immutable',
+        blobContentType: content.contentType,
+        blobContentDisposition: content.contentDisposition,
+        // Caching, not permission — the container's own access level decides
+        // readability.
+        blobCacheControl: PRIVATE_OBJECT_CACHE_CONTROL,
       },
     });
-    return { storageKey, publicUrl: this.resolvePublicUrl(storageKey) };
   }
 
+  // `deleteIfExists` makes "already gone" a success; anything else propagates
+  // for the caller to retry.
   async delete(storageKey: string): Promise<void> {
-    try {
-      await this.blobClient(storageKey).deleteIfExists();
-    } catch (error) {
-      this.logger.warn(
-        `Failed to delete ${this.containerName}/${storageKey}: ${formatErrorMessage(error)}`,
-      );
-    }
+    await this.blobClient(storageKey).deleteIfExists();
   }
 
   async createSignedReadUrl(
@@ -118,14 +112,7 @@ export class AzureFileStorageAdapter implements FileStorageAdapter {
     const startsOn = new Date(Date.now() - CLOCK_SKEW_ALLOWANCE_MILLISECONDS);
     const expiresOn = new Date(Date.now() + ttlSeconds * 1000);
 
-    // The delegation key is fetched per call rather than cached. It is an
-    // Azure AD round trip, but caching one would mean holding a signing
-    // credential in memory past the lifetime of the URLs it was fetched for —
-    // and signed reads are not on a hot path.
-    const userDelegationKey = await this.blobServiceClient.getUserDelegationKey(
-      startsOn,
-      expiresOn,
-    );
+    const userDelegationKey = await this.delegationKeyValidUntil(expiresOn);
 
     const sasQueryParameters = generateBlobSASQueryParameters(
       {
@@ -145,7 +132,32 @@ export class AzureFileStorageAdapter implements FileStorageAdapter {
     return `${this.blobClient(storageKey).url}?${sasQueryParameters.toString()}`;
   }
 
-  resolvePublicUrl(storageKey: string): string | null {
-    return this.publicUrlBase ? `${this.publicUrlBase}/${storageKey}` : null;
+  // A user delegation key is an Azure AD round trip, and every user response
+  // that shows a picture signs a URL — a list page would otherwise make one
+  // round trip per row. One key is shared until it would not outlive the URL
+  // being signed; concurrent callers share the in-flight fetch, and a failed
+  // fetch is forgotten so the next call retries. The key is held in memory for
+  // at most DELEGATION_KEY_LIFETIME_MILLISECONDS.
+  private delegationKeyValidUntil(
+    signatureExpiresOn: Date,
+  ): Promise<UserDelegationKey> {
+    const cached = this.cachedDelegationKey;
+    if (cached && cached.expiresOn > signatureExpiresOn) {
+      return cached.key;
+    }
+    const startsOn = new Date(Date.now() - CLOCK_SKEW_ALLOWANCE_MILLISECONDS);
+    const expiresOn = new Date(
+      Date.now() + DELEGATION_KEY_LIFETIME_MILLISECONDS,
+    );
+    const key = this.blobServiceClient
+      .getUserDelegationKey(startsOn, expiresOn)
+      .catch((error: unknown) => {
+        if (this.cachedDelegationKey?.key === key) {
+          this.cachedDelegationKey = null;
+        }
+        throw error;
+      });
+    this.cachedDelegationKey = { expiresOn, key };
+    return key;
   }
 }

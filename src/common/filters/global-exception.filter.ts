@@ -76,6 +76,9 @@ const STATUS_TO_DEFAULT_CODE: Record<number, ErrorCode> = {
   [HttpStatus.FORBIDDEN]: ErrorCode.INSUFFICIENT_ROLE,
   [HttpStatus.NOT_FOUND]: ErrorCode.RESOURCE_NOT_FOUND,
   [HttpStatus.CONFLICT]: ErrorCode.RESOURCE_CONFLICT,
+  // Multer raises a bare PayloadTooLargeException for an oversized upload.
+  [HttpStatus.PAYLOAD_TOO_LARGE]: ErrorCode.PAYLOAD_TOO_LARGE,
+  [HttpStatus.UNSUPPORTED_MEDIA_TYPE]: ErrorCode.UNSUPPORTED_MEDIA_TYPE,
   [HttpStatus.TOO_MANY_REQUESTS]: ErrorCode.RATE_LIMITED,
   [HttpStatus.SERVICE_UNAVAILABLE]: ErrorCode.EXTERNAL_SERVICE_UNAVAILABLE,
 };

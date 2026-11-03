@@ -30,6 +30,8 @@ import {
   BCRYPT_ROUNDS,
   hashPassword,
 } from '../../common/util/password-hashing.util';
+import { FilePurpose } from '../../common/enums/file-purpose.enum';
+import { lockUserRow } from '../../common/util/row-lock.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import type {
   RefreshTokenContext,
@@ -37,6 +39,7 @@ import type {
 } from '../auth/refresh-token.service';
 import { RefreshTokenService } from '../auth/refresh-token.service';
 import { PermissionLoaderService } from '../authorization/permission-loader.service';
+import { FilesService } from '../files/files.service';
 import { WorkspaceOwnershipPolicy } from '../workspaces/workspace-ownership.policy';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
@@ -45,6 +48,7 @@ import { UpdateAuthUserInfoDto } from './dto/update-auth-user-info.dto';
 import { UpdateAuthUserPasswordDto } from './dto/update-auth-user-password.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserPermissionsResponseDto } from './dto/user-permissions-response.dto';
+import { UserResponseDto } from './dto/user-response.dto';
 import { VerifyAuthUserPhoneDto } from './dto/verify-auth-user-phone.dto';
 
 const OTP_EXPIRY_MS = 15 * 60 * 1000;
@@ -83,6 +87,7 @@ export class UsersService {
     // is the other half of "a live workspace always has an active owner"; drop
     // it and a deleted owner leaves the workspace ownerless.
     private readonly workspaceOwnershipPolicy: WorkspaceOwnershipPolicy,
+    private readonly filesService: FilesService,
   ) {
     this.fixedPhoneCode = configService.get<string>('phoneCodes.fixedCode');
     if (this.fixedPhoneCode) {
@@ -417,7 +422,6 @@ export class UsersService {
         gender: dto.gender,
         birthday: dto.birthday,
         timezone: dto.timezone,
-        profileImageUrl: dto.profileImageUrl,
         createdBy: actorId,
         updatedBy: actorId,
       },
@@ -599,7 +603,6 @@ export class UsersService {
       gender: dto.gender,
       birthday: dto.birthday,
       timezone: dto.timezone,
-      profileImageUrl: dto.profileImageUrl,
       isActive: dto.isActive,
       updatedBy: actorId,
     };
@@ -719,6 +722,20 @@ export class UsersService {
         // what every membership mutation takes, so the two sides of the
         // ownership invariant would deadlock against each other.
         await this.refreshTokenService.lockSessions(transaction, userId);
+        // Files go with the person: the picture and every upload never
+        // attached. Released here, in the erasing transaction, so the cleanup
+        // job deletes their objects even if this process dies after commit.
+        // A fork that attaches files to shared records (a workspace's gallery)
+        // decides here whether those leave with the uploader or stay.
+        const { profileImageFileId } = await transaction.user.findUniqueOrThrow(
+          { where: { id: userId }, select: { profileImageFileId: true } },
+        );
+        if (profileImageFileId) {
+          await this.filesService.markDeleting(transaction, [
+            profileImageFileId,
+          ]);
+        }
+        await this.filesService.markUnattachedDeleting(transaction, userId);
         const closed =
           await this.workspaceOwnershipPolicy.closeSolelyOwnedWorkspaces(
             transaction,
@@ -744,7 +761,7 @@ export class UsersService {
             gender: null,
             birthday: null,
             timezone: null,
-            profileImageUrl: null,
+            profileImageFile: { disconnect: true },
             otpHash: null,
             otpPurpose: null,
             otpExpiresAt: null,
@@ -823,19 +840,99 @@ export class UsersService {
     actorId: string,
   ): Promise<User> {
     await this.findById(userId);
-    return this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        firstName: dto.firstName,
-        middleName: dto.middleName,
-        lastName: dto.lastName,
-        phoneNumber: dto.phoneNumber,
-        gender: dto.gender,
-        birthday: dto.birthday,
-        timezone: dto.timezone,
-        updatedBy: actorId,
-      },
+    return this.prisma.$transaction(async (transaction) => {
+      // The user row first (`row-lock.util.ts` order): two concurrent picture
+      // changes must not both read the same "current" file — the loser's
+      // replacement would never be released.
+      await lockUserRow(transaction, userId);
+      // Re-read under the lock: an erasure that committed while this request
+      // waited must not have its anonymised row written back over.
+      const lockedUser = await transaction.user.findFirst({
+        where: { id: userId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!lockedUser) {
+        throw Errors.resourceNotFound('User');
+      }
+      const profileImageChange = await this.applyProfileImageChange(
+        transaction,
+        userId,
+        dto.profileImageFileId,
+        actorId,
+      );
+      return transaction.user.update({
+        where: { id: userId },
+        data: {
+          firstName: dto.firstName,
+          middleName: dto.middleName,
+          lastName: dto.lastName,
+          phoneNumber: dto.phoneNumber,
+          gender: dto.gender,
+          birthday: dto.birthday,
+          timezone: dto.timezone,
+          ...profileImageChange,
+          updatedBy: actorId,
+        },
+      });
     });
+  }
+
+  // Omitted → no change. The current id again → no change (a client retrying
+  // a request that already succeeded). Otherwise claim the new file — which
+  // must be the actor's own unattached `profile_image` upload — and release
+  // the one it replaces, in the caller's transaction.
+  private async applyProfileImageChange(
+    transaction: Prisma.TransactionClient,
+    userId: string,
+    requestedFileId: string | null | undefined,
+    actorId: string,
+  ): Promise<{ profileImageFileId?: string | null }> {
+    if (requestedFileId === undefined) return {};
+    const { profileImageFileId: currentFileId } =
+      await transaction.user.findUniqueOrThrow({
+        where: { id: userId },
+        select: { profileImageFileId: true },
+      });
+    if (requestedFileId === currentFileId) return {};
+
+    if (requestedFileId !== null) {
+      await this.filesService.claimForAttachment(transaction, {
+        fileId: requestedFileId,
+        actorId,
+        purpose: FilePurpose.PROFILE_IMAGE,
+      });
+    }
+    if (currentFileId) {
+      await this.filesService.markDeleting(transaction, [currentFileId]);
+    }
+    return { profileImageFileId: requestedFileId };
+  }
+
+  /**
+   * The API shape of a user, with a freshly signed profile-picture URL.
+   * **Only for a user the caller was authorized to read** — the URL is a
+   * bearer credential for the picture. Never fails for a storage problem: the
+   * picture is then null (see `FilesService.findAttachedResponses`).
+   */
+  async toResponse(user: User): Promise<UserResponseDto> {
+    const [response] = await this.toResponses([user]);
+    return response as UserResponseDto;
+  }
+
+  async toResponses(users: User[]): Promise<UserResponseDto[]> {
+    const pictures = await this.filesService.findAttachedResponses(
+      users
+        .map((user) => user.profileImageFileId)
+        .filter((fileId): fileId is string => fileId !== null),
+    );
+    return users.map(
+      (user) =>
+        new UserResponseDto(
+          user,
+          (user.profileImageFileId && pictures.get(user.profileImageFileId)) ||
+            null,
+        ),
+    );
   }
 
   async softDelete(userId: string, actorId: string): Promise<void> {
@@ -993,18 +1090,6 @@ export class UsersService {
     });
     await this.queuePasswordChangedNotice(userId);
     return updated;
-  }
-
-  async updateProfileImage(
-    userId: string,
-    profileImageUrl: string,
-    actorId: string,
-  ): Promise<User> {
-    await this.findById(userId);
-    return this.prisma.user.update({
-      where: { id: userId },
-      data: { profileImageUrl, updatedBy: actorId },
-    });
   }
 
   // Step 1 of phone update: verify the password (the kickoff is gated on

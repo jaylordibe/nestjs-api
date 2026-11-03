@@ -1,5 +1,6 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { FilesModule } from '../files/files.module';
 import { WorkspacesModule } from '../workspaces/workspaces.module';
 import {
   EmailChangedNoticeJobHandler,
@@ -15,7 +16,7 @@ import { UsersService } from './users.service';
   // `WorkspacesModule` is imported directly, not through `forwardRef`: it
   // imports nothing, so there is no cycle to break. Reaching for `forwardRef`
   // "just in case" hides a real cycle the day one appears.
-  imports: [forwardRef(() => AuthModule), WorkspacesModule],
+  imports: [forwardRef(() => AuthModule), WorkspacesModule, FilesModule],
   controllers: [UsersController],
   providers: [
     UsersService,

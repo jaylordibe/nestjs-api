@@ -80,14 +80,14 @@ The `TOKEN_*` / `REFRESH_TOKEN_INVALID` / `SESSION_INVALIDATED` / `USER_INACTIVE
 | `INSUFFICIENT_ROLE` | Generic 403 fallback for a bare framework `ForbiddenException`. Application code should emit `PERMISSION_DENIED` instead — it names the refused action and subject. |
 | `ADMIN_SELF_TARGET_FORBIDDEN` | Admin trying an operation that's refused against themselves (e.g. `PATCH /users/:id/password` when `:id === self.id`). |
 
-### Request body rejected by the parser (HTTP 413, 415)
+### Request body or file rejected (HTTP 413, 415)
 
-Raised before any handler runs, by Express's body parser; mapped to the envelope by `fromBodyParserError` (`errors.ts`). `details` is `null`.
+Raised before any handler runs, by Express's body parser (mapped by `fromBodyParserError` in `errors.ts`) or by multer on `POST /files`, and by the file upload path itself. `details` is `null`.
 
 | Code | Trigger |
 |---|---|
-| `PAYLOAD_TOO_LARGE` | The body exceeds the parser's size limit. |
-| `UNSUPPORTED_MEDIA_TYPE` | The body's charset or content-encoding is not one the parser accepts. |
+| `PAYLOAD_TOO_LARGE` | The body exceeds the parser's size limit, or an uploaded file exceeds its purpose's size limit. |
+| `UNSUPPORTED_MEDIA_TYPE` | The body's charset or content-encoding is not one the parser accepts, or an uploaded file's inspected content is not a type its purpose accepts. |
 
 ### Validation / bad input (HTTP 400)
 
@@ -118,6 +118,14 @@ Raised before any handler runs, by Express's body parser; mapped to the envelope
 | `ROLE_NOT_ASSIGNABLE` | 403 | The role is out of scope, above the caller's rank ceiling, or privileged while the caller holds no `assignRole WorkspaceMembership` — or the caller has no ACTIVE membership in the workspace. **One code for all four**, so a caller probing for escalation cannot learn which wall they hit; the remedy is the same either way. | `null` |
 | `INVITATION_INVALID` | 400 | Unknown, consumed, revoked, rotated by a resend, addressed to a different account, or presented by a caller who has not verified control of the invited address. **Deliberately indistinguishable**, so a token cannot be probed. | `null` |
 | `INVITATION_EXPIRED` | 400 | Distinguishable on purpose: the holder already proved possession of a real token, so this discloses nothing new, and their remedy differs — ask for a resend. | `null` |
+
+### Stored files (HTTP 409, 422, 429)
+
+| Code | Status | Trigger | `details` shape |
+|---|---|---|---|
+| `FILE_NOT_ATTACHABLE` | 409 | A file id names the caller's own upload for this purpose, but it expired, was already attached, or is being deleted. Upload it again. A file that is not the caller's, not for this purpose, or already removed by the cleanup job is `RESOURCE_NOT_FOUND` instead, so ids cannot be probed — for the caller's own expired upload the remedy is the same: upload again. | `null` |
+| `FILE_CONTENT_INVALID` | 422 | `POST /files`: the content is an accepted type but does not decode, or exceeds the purpose's dimension or pixel limit. | `null` |
+| `FILE_QUOTA_EXCEEDED` | 429 | `POST /files`: the caller already holds the maximum number of uploaded files that are not attached to anything. Attach one, or wait for unused uploads to expire (`FILE_UPLOAD_TTL_SECONDS`); an immediate retry does not help. | `{ limit: number }` |
 
 `POST /users/me/gdpr-erase` never raises `LAST_OWNER_PROTECTED`. Erasure answers
 a legal obligation and cannot be refused for a commercial relationship, so it

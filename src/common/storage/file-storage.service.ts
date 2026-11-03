@@ -1,9 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { resolveSignedUrlTtlSeconds } from '../util/signed-url-ttl.util';
+import { buildObjectName } from '../util/storage-object-name.util';
 import {
   FILE_STORAGE_ADAPTER,
-  StoredObject,
+  ObjectContent,
 } from './adapters/file-storage-adapter.interface';
 import type { FileStorageAdapter } from './adapters/file-storage-adapter.interface';
 
@@ -12,18 +13,25 @@ import type { FileStorageAdapter } from './adapters/file-storage-adapter.interfa
 // factory, so no call site knows or can discover which backend is active — and
 // no provider SDK is reachable from domain code.
 //
-// Typical flow when persisting a user upload:
-//   1. `save(file, 'avatars')` → `{ storageKey, publicUrl }`
-//   2. write **`storageKey`** into the database row — not the URL. A URL embeds
+// The flow when persisting a file (`src/modules/files` is the one caller):
+//   1. `createKey('files/documents', '.pdf')` → a server-minted key.
+//   2. write **that key** into the database row FIRST — not a URL. A URL embeds
 //      the bucket, the provider and the access model; a key survives all three
-//      changing.
-//   3. on DB failure, `delete(storageKey)` to roll back.
+//      changing. Recording it before the write means no object can exist that
+//      no row knows about, so cleanup never has to list the bucket.
+//   3. `put(key, content)`.
 //   4. to serve it later: authorize the caller, THEN `createSignedReadUrl`.
+//   5. to remove it: `delete(key)`, which throws on any failure other than
+//      "already gone" so the caller can keep the row and retry.
 //
-// `subdirectory` is a CODE-CHOSEN CONSTANT, never request input. The adapters
-// build the object name themselves (`buildObjectName`), which refuses anything
-// that could reshape the stored path and always mints the identifying half as a
-// fresh UUID.
+// `subdirectory` is a CODE-CHOSEN CONSTANT, never request input.
+// `buildObjectName` refuses anything that could reshape the stored path and
+// always mints the identifying half as a fresh UUID.
+export interface SignedReadUrl {
+  url: string;
+  expiresAt: Date;
+}
+
 @Injectable()
 export class FileStorageService {
   private readonly defaultSignedUrlTtlSeconds: number;
@@ -43,8 +51,12 @@ export class FileStorageService {
     return this.adapter.providerName;
   }
 
-  save(file: Express.Multer.File, subdirectory: string): Promise<StoredObject> {
-    return this.adapter.save(file, subdirectory);
+  createKey(subdirectory: string, fileExtension: string): string {
+    return buildObjectName(subdirectory, fileExtension);
+  }
+
+  put(storageKey: string, content: ObjectContent): Promise<void> {
+    return this.adapter.put(storageKey, content);
   }
 
   delete(storageKey: string): Promise<void> {
@@ -62,28 +74,24 @@ export class FileStorageService {
    * the 404-versus-403 rule in `src/common/authorization/README.md`).
    *
    * The lifetime is clamped centrally (`resolveSignedUrlTtlSeconds`), so a call
-   * site cannot mint a long-lived one by passing a large number.
+   * site cannot mint a long-lived one by passing a large number. `expiresAt`
+   * tells the client when to ask again.
    */
-  createSignedReadUrl(
+  async createSignedReadUrl(
     storageKey: string,
     ttlSeconds?: number,
-  ): Promise<string> {
-    return this.adapter.createSignedReadUrl(
-      storageKey,
-      resolveSignedUrlTtlSeconds(ttlSeconds, this.defaultSignedUrlTtlSeconds),
+  ): Promise<SignedReadUrl> {
+    const effectiveTtlSeconds = resolveSignedUrlTtlSeconds(
+      ttlSeconds,
+      this.defaultSignedUrlTtlSeconds,
     );
-  }
-
-  /**
-   * The directly-fetchable URL for a key, or **null when the deployment has not
-   * declared its objects public**.
-   *
-   * Null is the default. A non-null result means an operator set
-   * `STORAGE_PUBLIC_URL_BASE`, which is an explicit assertion that this bucket
-   * is world-readable or CDN-fronted. Nothing here makes a bucket public and
-   * nothing assumes one is; for private storage, use `createSignedReadUrl`.
-   */
-  resolvePublicUrl(storageKey: string): string | null {
-    return this.adapter.resolvePublicUrl(storageKey);
+    // Stamped BEFORE signing, so the reported expiry is never later than the
+    // signature's own — a client refreshing at `expiresAt` is never late.
+    const expiresAt = new Date(Date.now() + effectiveTtlSeconds * 1000);
+    const url = await this.adapter.createSignedReadUrl(
+      storageKey,
+      effectiveTtlSeconds,
+    );
+    return { url, expiresAt };
   }
 }

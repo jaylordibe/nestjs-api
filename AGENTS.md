@@ -82,7 +82,7 @@ src/
   config/        configuration.ts (typed) + env.validation.ts (Joi)
   prisma/        PrismaService + soft-delete extension
   common/        leaf layer: authorization catalog, audit, constants,
-                 decorators, dto, enums, errors, filters, pipes,
+                 decorators, dto, enums, errors, filters,
                  email/sms/storage, queue, redis, logging, telemetry, util
   modules/       feature modules; authorization/ holds the global guard,
                  AbilityScopedQueryService and the boot-time integrity gates
@@ -175,6 +175,9 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
 - **Providers:** email/SMS/storage adapters are selected by env; a provider
   SDK is imported only by its own adapter. Store `storageKey`, never a URL;
   authorize before issuing a signed URL.
+- **Files:** resource endpoints stay JSON; a file is uploaded with
+  `POST /files` and attached by id through `FilesService` inside the domain's
+  transaction (`docs/file-uploads.md`). No other route takes multipart.
 - **Redis:** build every client from `buildRedisConnectionOptions`.
 - **Background work:** BullMQ only, and by default: work the response does
   not need (every notification, side-effect call, unbounded loop) is
@@ -206,8 +209,8 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
 - **Never apply migrations during in-progress work.** `yarn build` verifies
   schema changes. Consolidate into one migration and let the user apply it.
   If applied by mistake, un-apply surgically; never `migrate reset`.
-- **Never edit an applied migration.** The template ships one `init`
-  migration; squash into it only before any deploy has applied it.
+- **Never edit an applied migration.** Add a new one; the template's history
+  starts at `init`, and any migration may already have been applied by a fork.
 - **Storage adapters are `require`d lazily**; don't convert to static imports.
   No adapter accepts a long-lived cloud credential.
 - **`.claude/settings.json` is the only enforcement layer.** Mirror every
@@ -237,6 +240,7 @@ repository, the change and the owner.
 | Auth, JWT, sessions, verification, password reset | `auth-security` skill |
 | e2e specs | `e2e-testing` skill |
 | Background work (immediate, delayed, recurring) | `src/common/queue/README.md` |
+| File uploads, attaching files to a resource | `docs/file-uploads.md` |
 | Error envelope and `ErrorCode` catalog | `src/common/errors/README.md` |
 | Deployment contract | `docs/deployment/README.md` |
 | MCP endpoint (`/api/mcp`), its OAuth sign-in and adding a tool | `docs/mcp.md` |

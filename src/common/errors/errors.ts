@@ -8,6 +8,7 @@ import {
   PayloadTooLargeException,
   ServiceUnavailableException,
   UnauthorizedException,
+  UnprocessableEntityException,
   UnsupportedMediaTypeException,
 } from '@nestjs/common';
 import { ErrorCode } from './error-code.enum';
@@ -192,8 +193,8 @@ export const Errors = {
       details: { domain },
     }),
   // Generic bad-request escape hatch for input that's malformed in a way
-  // class-validator can't express (e.g. a JSON-string multipart field that
-  // doesn't parse). Carries VALIDATION_FAILED — clients treat it like any
+  // class-validator can't express (e.g. a multipart request with no file
+  // part). Carries VALIDATION_FAILED — clients treat it like any
   // other 400 input error.
   badRequest: (message: string): BadRequestException =>
     new BadRequestException({
@@ -230,6 +231,21 @@ export const Errors = {
       errorCode: ErrorCode.RESOURCE_CONFLICT,
       message,
     }),
+  fileNotAttachable: (): ConflictException =>
+    new ConflictException({
+      errorCode: ErrorCode.FILE_NOT_ATTACHABLE,
+      message:
+        'This file can no longer be attached. It expired or was already used; upload it again.',
+    }),
+
+  // ── 422 ────────────────────────────────────────────────────────────
+  // The message names the reason (does not decode, too many pixels); it is
+  // written by the server, never echoes the decoder's own error text.
+  fileContentInvalid: (message: string): UnprocessableEntityException =>
+    new UnprocessableEntityException({
+      errorCode: ErrorCode.FILE_CONTENT_INVALID,
+      message,
+    }),
 
   // ── 429 ────────────────────────────────────────────────────────────
   // Nest ships no `TooManyRequestsException`, so this is the one place that
@@ -255,9 +271,22 @@ export const Errors = {
       HttpStatus.TOO_MANY_REQUESTS,
     ),
 
+  // Same reason as `rateLimited` for the raw `HttpException`. A quota, not a
+  // rate: waiting does not help unless the caller's unattached files are
+  // attached or expire.
+  fileQuotaExceeded: (limit: number): HttpException =>
+    new HttpException(
+      {
+        errorCode: ErrorCode.FILE_QUOTA_EXCEEDED,
+        message: `You can hold at most ${limit} uploaded files that are not attached to anything. Attach one, or wait for unused uploads to expire.`,
+        details: { limit },
+      },
+      HttpStatus.TOO_MANY_REQUESTS,
+    ),
+
   // ── 413 / 415 ──────────────────────────────────────────────────────
-  // Raised by the body parser, not by application code — see
-  // `fromBodyParserError` below.
+  // Raised by the body parser (`fromBodyParserError` below) and by the file
+  // upload path.
   payloadTooLarge: (message: string): PayloadTooLargeException =>
     new PayloadTooLargeException({
       errorCode: ErrorCode.PAYLOAD_TOO_LARGE,

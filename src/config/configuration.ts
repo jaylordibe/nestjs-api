@@ -142,13 +142,6 @@ export interface AppConfig {
     // account. The rest are equal citizens — no provider is privileged, and
     // only the selected one's SDK is ever loaded.
     provider: 'stub' | 's3' | 'gcs' | 'azure';
-    // Public URL prefix for stored objects, applied by EVERY adapter.
-    //
-    // Undefined is the default and the safe case: `resolvePublicUrl` then
-    // returns null and callers must use a signed URL. Setting this is an
-    // explicit assertion that the bucket/container is world-readable or
-    // CDN-fronted. Nothing in this application makes storage public.
-    publicUrlBase: string | undefined;
     // Default lifetime for a signed read URL. Clamped by
     // `resolveSignedUrlTtlSeconds` regardless of what is configured here — a
     // signed URL cannot be revoked, so its lifetime is its whole security
@@ -187,6 +180,19 @@ export interface AppConfig {
       accountName: string | undefined;
       container: string | undefined;
     };
+  };
+  files: {
+    // Hard ceiling on one uploaded file, enforced by multer while the request
+    // streams in, before any purpose's own (lower) limit is checked. It bounds
+    // memory: the file is held in RAM until it is inspected and processed.
+    maxUploadBytes: number;
+    // How long an uploaded file stays attachable. A file never attached within
+    // this window is deleted by the cleanup job.
+    uploadTtlSeconds: number;
+    // Ceiling on width × height an image may DECLARE. Checked from the header
+    // before decoding, so a small file claiming enormous dimensions (a
+    // decompression bomb) is refused without allocating its pixels.
+    imageMaxPixels: number;
   };
   swagger: {
     // Whether `/api/docs` is served. Production is hard-OFF and cannot be
@@ -388,7 +394,6 @@ export default (): AppConfig => ({
     provider:
       (process.env.STORAGE_PROVIDER as AppConfig['storage']['provider']) ??
       'stub',
-    publicUrlBase: process.env.STORAGE_PUBLIC_URL_BASE || undefined,
     signedUrlTtlSeconds: parseInt(
       process.env.STORAGE_SIGNED_URL_TTL_SECONDS ?? '300',
       10,
@@ -414,6 +419,20 @@ export default (): AppConfig => ({
       accountName: process.env.STORAGE_AZURE_ACCOUNT_NAME || undefined,
       container: process.env.STORAGE_AZURE_CONTAINER || undefined,
     },
+  },
+  files: {
+    maxUploadBytes: parseInt(
+      process.env.FILE_UPLOAD_MAX_BYTES ?? String(25 * 1024 * 1024),
+      10,
+    ),
+    uploadTtlSeconds: parseInt(
+      process.env.FILE_UPLOAD_TTL_SECONDS ?? '86400',
+      10,
+    ),
+    imageMaxPixels: parseInt(
+      process.env.FILE_IMAGE_MAX_PIXELS ?? '40000000',
+      10,
+    ),
   },
   swagger: {
     // Two independent conditions, and the production one is not a default that

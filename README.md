@@ -212,10 +212,11 @@ The routes that send an email, create an account or check a password require an 
 - `POST /auth/logout` / `POST /auth/logout-all` — per-token / everywhere revocation.
 - `GET /users/me`, `GET /users/me/export` (GDPR data access), `PATCH /users/me`, `DELETE /users/me` (soft delete).
 - `POST /users/me/gdpr-erase` — PII anonymisation and deletion (requires `currentPassword`).
-- `PATCH /users/me/{username,email,password,profile-image}` — self-service updates. `email` and `password` end every other session and return a fresh `{ accessToken, refreshToken, expiresIn, user }`; a new email is unverified until its link is followed.
+- `PATCH /users/me/{username,email,password}` — self-service updates; `PATCH /users/me` also sets the profile picture by the id `POST /files` returned (see `docs/file-uploads.md`). `email` and `password` end every other session and return a fresh `{ accessToken, refreshToken, expiresIn, user }`; a new email is unverified until its link is followed.
 - `POST /users/me/request-phone-verification` → `PATCH /users/me/verify-phone` — OTP-verify a phone number; `PATCH /users/me/phone` sets one unverified.
 - `GET /users/me/permissions` — the caller's packed CASL rules, for client-side ability sync.
 - `POST|GET|PATCH|DELETE /device-tokens` — your own push tokens (a platform admin manages anyone's).
+- `POST /files` — upload one file (multipart `file` + `purpose`); attach it by the returned id in a JSON request. See `docs/file-uploads.md`.
 
 **Workspace scope**
 
@@ -376,7 +377,7 @@ src/
     storage/                 # FileStorageService, adapters (stub/s3/gcs/azure)
     logging/                 # pino-http options (redaction, request id)
     telemetry/               # telemetry shutdown hook
-    constants/, pipes/       # shared constants, ParseJsonPipe
+    constants/               # shared constants
     audit/                   # AuditService (@Global)
     redis/                   # RedisService (@Global, shared ioredis client)
     queue/                   # @Global BullMQ layer: registries, producer, processor base, handlers
@@ -391,12 +392,13 @@ src/
     audit-logs/              # read-only audit trail
     app-versions/            # client update signal, one row per release train
     device-tokens/           # push notification tokens (FK to User, hard delete)
+    files/                   # POST /files: content checks, image re-encoding, attach/release, cleanup job
     health/                  # liveness + readiness + worker heartbeat + version
     enums/                   # public enum catalog for clients
     public/                  # example unauthenticated routes
 prisma/
   schema.prisma              # models
-  migrations/                # a single `init` migration (a starter is a fork in time)
+  migrations/                # the migration history, from `init` (a starter is a fork in time)
   rbac-seeder.ts             # projects the permission catalog onto the DB (used by seed.ts and rbac:sync)
   seed.ts                    # rbac-seeder + env-driven admin/demo users
   scripts/                   # rbac:sync / rbac:check / ZAP token scripts
@@ -444,7 +446,7 @@ worker with `QUEUE_WORKER_ENABLED=true`.
 - [ ] `QUEUE_WORKER_ENABLED=false` on the API deployment and `true` on the worker deployment. The API must never process jobs, and only the worker installs recurring schedules.
 - [ ] `DATABASE_POOL_MAX` × max instances (API **and** worker), plus the migration job, kept under the database's connection limit. The arithmetic is worked through in `.env.example`.
 - [ ] `REDIS_TLS_ENABLED=true` with a `rediss://` URL against any managed Redis. Boot fails if the flag and the scheme disagree, so a half-configured TLS setup cannot ship silently.
-- [ ] Storage bucket kept **private** (the default), with reads served through short-lived signed URLs and authorization performed before signing. Set `STORAGE_PUBLIC_URL_BASE` only if the bucket really is public or CDN-fronted.
+- [ ] Storage bucket kept **private**, with reads served through short-lived signed URLs and authorization performed before signing. `STORAGE_PROVIDER` set to `s3`, `gcs` or `azure` (production refuses `stub`).
 - [ ] Migrations run as a separate job before the new revision takes traffic, never on API or worker startup.
 - [ ] A retention job scheduled to hard-delete soft-deleted users after N days (this cascades to `device_tokens` via FK).
 - [ ] Redis running with AOF persistence, a durable volume and backups. **Queued jobs are exactly as durable as the Redis they live in**, and there is no in-memory fallback by design.

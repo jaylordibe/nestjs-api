@@ -10,7 +10,6 @@ import {
 } from '../../common/util/disposable-email.util';
 import { RedisService } from '../../common/redis/redis.service';
 import { hashPassword } from '../../common/util/password-hashing.util';
-import { UserResponseDto } from '../users/dto/user-response.dto';
 import { UsersService } from '../users/users.service';
 import { LoginDto } from './dto/login.dto';
 import { LoginResponseDto } from './dto/login-response.dto';
@@ -90,7 +89,7 @@ export class AuthService {
       user.passwordChangedAt,
       context,
     );
-    return { ...tokens, user: new UserResponseDto(user) };
+    return { ...tokens, user: await this.usersService.toResponse(user) };
   }
 
   /**
@@ -106,7 +105,7 @@ export class AuthService {
       presentedToken,
       context,
     );
-    return { ...tokens, user: new UserResponseDto(user) };
+    return { ...tokens, user: await this.usersService.toResponse(user) };
   }
 
   /**

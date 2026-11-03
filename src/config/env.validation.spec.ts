@@ -516,13 +516,6 @@ describe('env.validation cross-field rules', () => {
       const { value } = validate({}) as { value: Record<string, unknown> };
       expect(value.STORAGE_SIGNED_URL_TTL_SECONDS).toBe(300);
     });
-
-    // Objects are private unless an operator explicitly says otherwise.
-    it('leaves the public URL base unset by default', () => {
-      const { value } = validate({}) as { value: Record<string, unknown> };
-
-      expect(value.STORAGE_PUBLIC_URL_BASE).toBeUndefined();
-    });
   });
 
   describe('test environment', () => {
@@ -557,6 +550,38 @@ describe('env.validation cross-field rules', () => {
           STORAGE_PROVIDER: 'stub',
         }).error,
       ).toBeUndefined();
+    });
+  });
+
+  // The stub answers every upload with 201 and stores nothing; in production
+  // that would lose every file a user uploads.
+  describe('storage in production', () => {
+    function storageMessages(overrides: Record<string, unknown>): string[] {
+      return (validate(overrides).error?.details ?? []).map(
+        (detail) => detail.message,
+      );
+    }
+
+    it.each([{ STORAGE_PROVIDER: 'stub' }, {}])(
+      'refuses the stub, explicit or by default (%j)',
+      (overrides) => {
+        expect(
+          storageMessages({ NODE_ENV: 'production', ...overrides }),
+        ).toContainEqual(expect.stringContaining('STORAGE_PROVIDER'));
+      },
+    );
+
+    it('accepts a real provider, and the stub outside production', () => {
+      expect(
+        storageMessages({
+          NODE_ENV: 'production',
+          STORAGE_PROVIDER: 's3',
+          STORAGE_S3_BUCKET: 'uploads',
+        }),
+      ).not.toContainEqual(expect.stringContaining('STORAGE_'));
+      expect(
+        storageMessages({ NODE_ENV: 'staging', STORAGE_PROVIDER: 'stub' }),
+      ).not.toContainEqual(expect.stringContaining('STORAGE_'));
     });
   });
 

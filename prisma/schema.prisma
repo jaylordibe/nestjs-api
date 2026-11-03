@@ -53,11 +53,14 @@ model User {
   phoneNumber           String?   @map("phone_number")
   phoneNumberVerifiedAt DateTime? @map("phone_number_verified_at")
   gender                String?
-  profileImageUrl       String?   @map("profile_image_url")
+  // The stored file shown as this person's picture. Unique: an attached file
+  // belongs to exactly one reference (see `FileAsset`). Set only through
+  // `PATCH /users/me` with the id `POST /files` returned.
+  profileImageFileId    String?   @unique @map("profile_image_file_id") @db.Uuid
   birthday              DateTime? @db.Date
   timezone              String?
 
-  deviceTokens DeviceToken[]
+  deviceTokens        DeviceToken[]
   // PLATFORM-scope role assignments. WORKSPACE-scope roles live on
   // `workspaceMemberships` instead; `AbilityFactory` refuses to compile a
   // permission that arrives through the wrong one.
@@ -66,18 +69,81 @@ model User {
   // functioning account: their self-service capabilities come from
   // AUTHENTICATED_USER_PERMISSIONS, which the ability factory injects for
   // every authenticated caller rather than from a row in this table.
-  userRoles    UserRole[]
+  userRoles           UserRole[]
   // Every workspace this person belongs to, in any role, active or ended. One
   // row per workspace, forever.
-  memberships  WorkspaceMembership[]
+  memberships         WorkspaceMembership[]
   // Invitations this person sent. Distinct from `memberships` because an
   // inviter is not necessarily still a member by the time it is accepted.
-  sentInvitations    WorkspaceMembership[] @relation("WorkspaceMembershipInviter")
+  sentInvitations     WorkspaceMembership[] @relation("WorkspaceMembershipInviter")
   // Invitations addressed to this person, resolved when the invite was raised.
   receivedInvitations WorkspaceInvitation[] @relation("WorkspaceInvitationInvitee")
-  refreshTokens      RefreshToken[]
+  refreshTokens       RefreshToken[]
+  /// RESTRICT, not SetNull: the file ROW cannot be deleted while this column
+  /// points at it. Its object is protected by `FilesService.markDeleting`'s
+  /// contract instead — the release clears this column in the same transaction.
+  profileImageFile    FileAsset?            @relation("UserProfileImage", fields: [profileImageFileId], references: [id], onDelete: Restrict)
+  uploadedFiles       FileAsset[]           @relation("FileAssetUploader")
 
   @@map("users")
+}
+
+/// One stored file: its details and its lifecycle, in one row.
+///
+/// `POST /files` creates the row (`processing`), writes the object, and marks it
+/// `ready` with an `expiresAt`. A resource then ATTACHES it by id in a JSON
+/// request — one conditional UPDATE from `ready` to `attached`, so an id is
+/// consumed exactly once. A `ready` file that is never attached expires, and the
+/// cleanup job removes it.
+///
+/// Ownership: until attached, a file belongs to `uploadedBy` and only they can
+/// attach it. Once attached it belongs to exactly ONE reference (each
+/// referencing column is unique). Detaching it — replace, remove, account
+/// erasure — marks it `deleting` in the same transaction that clears the
+/// reference; the cleanup job deletes the object and then the row. A
+/// `deleting` row is the durable record that an object still has to go, so a
+/// failed delete is retried rather than forgotten.
+///
+/// `storageKey` is recorded BEFORE the object is written, so no object exists
+/// that no row knows about, and is never returned by the API.
+model FileAsset {
+  id             String    @id @default(uuid()) @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  uploadedBy     String    @map("uploaded_by") @db.Uuid
+  // `FilePurpose` — decides which content is accepted and what may attach it.
+  purpose        String
+  // `FileAssetStatus`.
+  status         String    @default("processing")
+  storageKey     String    @unique @map("storage_key")
+  // `FileKind`.
+  kind           String
+  // Server-determined from the inspected content, never the client's header.
+  contentType    String    @map("content_type")
+  // Null until the processed bytes are written.
+  sizeBytes      Int?      @map("size_bytes")
+  width          Int?
+  height         Int?
+  // User content: the client's file name, reduced to a safe display form.
+  fileName       String    @map("file_name")
+  // Set exactly while `ready` (CHECK in the migration): the moment an
+  // unattached file stops being attachable.
+  expiresAt      DateTime? @map("expires_at")
+  attachedAt     DateTime? @map("attached_at")
+  deleteAttempts Int       @default(0) @map("delete_attempts")
+
+  /// RESTRICT: users are soft-deleted or anonymised, never hard-deleted, and a
+  /// hard delete must not drop rows whose objects are still in storage.
+  uploader        User  @relation("FileAssetUploader", fields: [uploadedBy], references: [id], onDelete: Restrict)
+  profileImageFor User? @relation("UserProfileImage")
+
+  /// The cleanup job's claim: `ready` rows past `expires_at`, and `processing`
+  /// and `deleting` rows by age.
+  @@index([status, expiresAt])
+  /// The per-user quota count of unattached files, and the index behind the
+  /// RESTRICT FK.
+  @@index([uploadedBy, status])
+  @@map("file_assets")
 }
 
 /// One issued refresh token.

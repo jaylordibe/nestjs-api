@@ -35,6 +35,7 @@ async function build(fixedCode?: string) {
     unused,
     unused,
     unused,
+    unused,
   );
   jest
     .spyOn(service, 'findById')
