@@ -722,9 +722,17 @@ export class UsersService {
         // what every membership mutation takes, so the two sides of the
         // ownership invariant would deadlock against each other.
         await this.refreshTokenService.lockSessions(transaction, userId);
+        const closed =
+          await this.workspaceOwnershipPolicy.closeSolelyOwnedWorkspaces(
+            transaction,
+            userId,
+            userId,
+          );
         // Files go with the person: the picture and every upload never
         // attached. Released here, in the erasing transaction, so the cleanup
-        // job deletes their objects even if this process dies after commit.
+        // job deletes their objects even if this process dies after commit —
+        // and after the workspace locks, because `file_assets` is always
+        // locked last (`row-lock.util.ts`).
         // A fork that attaches files to shared records (a workspace's gallery)
         // decides here whether those leave with the uploader or stay.
         const { profileImageFileId } = await transaction.user.findUniqueOrThrow(
@@ -736,12 +744,6 @@ export class UsersService {
           ]);
         }
         await this.filesService.markUnattachedDeleting(transaction, userId);
-        const closed =
-          await this.workspaceOwnershipPolicy.closeSolelyOwnedWorkspaces(
-            transaction,
-            userId,
-            userId,
-          );
 
         // The anonymisation rides INSIDE the session-ending mutation, so the
         // erased row and the dead sessions are one row version. There is no

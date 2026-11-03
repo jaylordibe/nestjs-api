@@ -1,5 +1,6 @@
 import { FileKind } from '../../common/enums/file-kind.enum';
 import { FilePurpose } from '../../common/enums/file-purpose.enum';
+import { PRIVATE_OBJECT_CACHE_CONTROL } from '../../common/storage/adapters/file-storage-adapter.interface';
 
 // One accepted content type: what the inspected bytes must be, how they are
 // handled, and the extension the stored object and download name carry.
@@ -63,6 +64,9 @@ export interface FilePurposePolicy {
   imageMaxDimension: number;
   // Code-chosen object-name prefix (`buildObjectName`), never request input.
   storageSubdirectory: string;
+  // `PRIVATE_OBJECT_CACHE_CONTROL`, or `NO_STORE_CACHE_CONTROL` for a file no
+  // cache may keep (an identity document, a signed contract).
+  cacheControl: string;
   // Keyed by the content type the bytes were DETECTED as — never by the type
   // a client declared or the extension it named.
   accepted: ReadonlyMap<string, AcceptedContentType>;
@@ -85,12 +89,14 @@ export const FILE_PURPOSE_POLICIES: Record<FilePurpose, FilePurposePolicy> = {
     maxBytes: 10 * MEBIBYTE,
     imageMaxDimension: 1024,
     storageSubdirectory: 'files/profile-images',
+    cacheControl: PRIVATE_OBJECT_CACHE_CONTROL,
     accepted: acceptedTypes(JPEG, PNG, WEBP),
   },
   [FilePurpose.DOCUMENT]: {
     maxBytes: 25 * MEBIBYTE,
     imageMaxDimension: 4096,
     storageSubdirectory: 'files/documents',
+    cacheControl: PRIVATE_OBJECT_CACHE_CONTROL,
     accepted: acceptedTypes(JPEG, PNG, WEBP, PDF, DOCX, XLSX, PPTX),
   },
 };

@@ -63,7 +63,9 @@ a picture could not be signed.
 - Raw bytes live only in request memory. Nothing unprocessed is written
   anywhere.
 - Every object is written `Cache-Control: private, max-age=3600`, so no shared
-  cache keeps a copy after the signed URL that fetched it expires.
+  cache keeps a copy after the signed URL that fetched it expires. A purpose
+  whose files no cache may keep, the reader's browser included (an identity
+  document), sets `cacheControl: NO_STORE_CACHE_CONTROL` in its policy.
 
 ## Lifecycle
 
@@ -97,15 +99,16 @@ uploading it again.
 
 1. A value in `FilePurpose` (`src/common/enums/file-purpose.enum.ts`).
 2. An entry in `FILE_PURPOSE_POLICIES`: byte limit, image maximum dimension,
-   storage subdirectory (a code constant), and accepted types.
+   storage subdirectory (a code constant), cache rule, and accepted types.
 
-No migration. A new image type also needs a case in `FileProcessor.encode`, or
+No migration. A new image type also needs a case in `FileProcessor.encoderFor`, or
 it fails loudly rather than being stored un-re-encoded.
 
 ## Attaching files to a new resource
 
 The files module knows no resource; the domain service owns the reference and
-calls `FilesService` inside its own transaction.
+calls `FilesService` inside its own transaction. Take every parent lock first:
+`file_assets` rows are always locked last (`row-lock.util.ts`).
 
 **One file** (like the profile picture): a nullable, unique `<name>FileId`
 column with a `RESTRICT` foreign key to `file_assets`. Copy
@@ -136,17 +139,8 @@ workspace-scoped, take the workspace from the authorized route — never from th
 file.
 
 Responses: build them through one method that calls
-`FilesService.toAttachedResponse`, and only for records the caller was
+`FilesService.findAttachedResponses`, and only for records the caller was
 authorized to read.
-
-## Upgrading a deployed fork
-
-The migration that introduced `file_assets` also drops
-`users.profile_image_url`; existing URL values are not carried over. Pods of the
-previous release read that column on every user query, so on a deployment that
-runs migrations before the new revision takes traffic, either replace all pods
-at once, or split the drop: ship this code with a migration that only adds, and
-drop the column in a later release.
 
 ## Not here
 

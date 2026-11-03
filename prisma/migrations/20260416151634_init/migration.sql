@@ -22,7 +22,6 @@ CREATE TABLE "users" (
     "phone_number" TEXT,
     "phone_number_verified_at" TIMESTAMP(3),
     "gender" TEXT,
-    "profile_image_url" TEXT,
     "birthday" DATE,
     "timezone" TEXT,
 

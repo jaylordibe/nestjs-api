@@ -6,6 +6,7 @@ import {
   parseMcpRedirectOrigins,
 } from '../common/util/mcp-config.util';
 import { isTrustedProxyList } from '../common/util/trusted-proxy.util';
+import { FILE_UPLOAD_DEFAULTS } from './file-upload.defaults';
 
 // Cloudflare's published Turnstile test secrets (`1x…AA`, `2x…AA`, `3x…AA`).
 // The first answers success for ANY token, so one left in a deployed
@@ -551,21 +552,21 @@ export const envValidationSchema = Joi.object({
     .integer()
     .min(1024)
     .max(100 * 1024 * 1024)
-    .default(25 * 1024 * 1024),
+    .default(FILE_UPLOAD_DEFAULTS.maxUploadBytes),
   // How long an uploaded, unattached file stays attachable before the cleanup
   // job deletes it.
   FILE_UPLOAD_TTL_SECONDS: Joi.number()
     .integer()
     .min(60)
     .max(7 * 24 * 60 * 60)
-    .default(86400),
+    .default(FILE_UPLOAD_DEFAULTS.uploadTtlSeconds),
   // Largest width × height an uploaded image may declare. Refused from the
   // header, before decoding.
   FILE_IMAGE_MAX_PIXELS: Joi.number()
     .integer()
     .min(1)
     .max(268_402_689)
-    .default(40_000_000),
+    .default(FILE_UPLOAD_DEFAULTS.imageMaxPixels),
 
   // Whether `/api/docs` is served. Only ever NARROWS: production is hard-off in
   // `configuration.ts` regardless of this value, so setting it to `true` there

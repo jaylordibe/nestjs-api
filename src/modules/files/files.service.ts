@@ -146,6 +146,7 @@ export class FilesService {
           accepted.kind === FileKind.IMAGE ? 'inline' : 'attachment',
           fileName,
         ),
+        cacheControl: policy.cacheControl,
       });
     } catch (error) {
       this.logger.error(

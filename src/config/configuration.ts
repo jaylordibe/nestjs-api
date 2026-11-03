@@ -2,6 +2,7 @@ import {
   parseMcpAllowedOrigins,
   parseMcpRedirectOrigins,
 } from '../common/util/mcp-config.util';
+import { FILE_UPLOAD_DEFAULTS } from './file-upload.defaults';
 
 export interface AppConfig {
   nodeEnv: 'development' | 'test' | 'staging' | 'production';
@@ -422,15 +423,18 @@ export default (): AppConfig => ({
   },
   files: {
     maxUploadBytes: parseInt(
-      process.env.FILE_UPLOAD_MAX_BYTES ?? String(25 * 1024 * 1024),
+      process.env.FILE_UPLOAD_MAX_BYTES ??
+        String(FILE_UPLOAD_DEFAULTS.maxUploadBytes),
       10,
     ),
     uploadTtlSeconds: parseInt(
-      process.env.FILE_UPLOAD_TTL_SECONDS ?? '86400',
+      process.env.FILE_UPLOAD_TTL_SECONDS ??
+        String(FILE_UPLOAD_DEFAULTS.uploadTtlSeconds),
       10,
     ),
     imageMaxPixels: parseInt(
-      process.env.FILE_IMAGE_MAX_PIXELS ?? '40000000',
+      process.env.FILE_IMAGE_MAX_PIXELS ??
+        String(FILE_UPLOAD_DEFAULTS.imageMaxPixels),
       10,
     ),
   },

@@ -11,7 +11,6 @@ import {
 import {
   FileStorageAdapter,
   ObjectContent,
-  PRIVATE_OBJECT_CACHE_CONTROL,
 } from './file-storage-adapter.interface';
 
 // Azure Blob Storage. Selected with STORAGE_PROVIDER=azure.
@@ -89,7 +88,7 @@ export class AzureFileStorageAdapter implements FileStorageAdapter {
         blobContentDisposition: content.contentDisposition,
         // Caching, not permission — the container's own access level decides
         // readability.
-        blobCacheControl: PRIVATE_OBJECT_CACHE_CONTROL,
+        blobCacheControl: content.cacheControl,
       },
     });
   }

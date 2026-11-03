@@ -209,8 +209,10 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
 - **Never apply migrations during in-progress work.** `yarn build` verifies
   schema changes. Consolidate into one migration and let the user apply it.
   If applied by mistake, un-apply surgically; never `migrate reset`.
-- **Never edit an applied migration.** Add a new one; the template's history
-  starts at `init`, and any migration may already have been applied by a fork.
+- **Never edit an applied migration** in a project built from this template:
+  add a new one. In the template itself nothing is applied — a project copies
+  it once and never syncs back — so fold a schema change into the migration
+  that owns the table and keep no upgrade path for existing projects.
 - **Storage adapters are `require`d lazily**; don't convert to static imports.
   No adapter accepts a long-lived cloud credential.
 - **`.claude/settings.json` is the only enforcement layer.** Mirror every

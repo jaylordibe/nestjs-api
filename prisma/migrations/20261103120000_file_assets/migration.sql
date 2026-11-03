@@ -1,11 +1,6 @@
 -- Stored files (`file_assets`) and the user's profile image as a reference to one.
---
--- Drops `users.profile_image_url`: profile images are now uploaded files, never
--- client-supplied URLs. A deployment that must keep serving old pods during a
--- rollout splits this: ship the code first, drop the column in a later migration.
 -- AlterTable
-ALTER TABLE "users" DROP COLUMN "profile_image_url",
-ADD COLUMN     "profile_image_file_id" UUID;
+ALTER TABLE "users" ADD COLUMN     "profile_image_file_id" UUID;
 
 -- CreateTable
 CREATE TABLE "file_assets" (
@@ -62,3 +57,8 @@ ALTER TABLE "file_assets" ADD CONSTRAINT "file_assets_size_bytes_check"
 
 ALTER TABLE "file_assets" ADD CONSTRAINT "file_assets_delete_attempts_check"
     CHECK ("delete_attempts" >= 0);
+
+-- A file's dimensions: both or neither (a document has none), and never zero.
+-- Every image the processor writes has both, so this only refuses a defect.
+ALTER TABLE "file_assets" ADD CONSTRAINT "file_assets_dimensions_check"
+    CHECK (("width" IS NULL) = ("height" IS NULL) AND ("width" IS NULL OR ("width" > 0 AND "height" > 0)));

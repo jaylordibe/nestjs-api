@@ -11,7 +11,6 @@ import { NodeHttpHandler } from '@smithy/node-http-handler';
 import {
   FileStorageAdapter,
   ObjectContent,
-  PRIVATE_OBJECT_CACHE_CONTROL,
 } from './file-storage-adapter.interface';
 
 // S3 and every S3-compatible backend: AWS S3, Cloudflare R2, DigitalOcean
@@ -74,7 +73,7 @@ export class S3FileStorageAdapter implements FileStorageAdapter {
         ContentDisposition: content.contentDisposition,
         // No ACL is ever set here, so the bucket's own policy decides
         // readability; this header only bounds caching of signed reads.
-        CacheControl: PRIVATE_OBJECT_CACHE_CONTROL,
+        CacheControl: content.cacheControl,
       }),
     );
   }

@@ -4,7 +4,6 @@ import { Storage } from '@google-cloud/storage';
 import {
   FileStorageAdapter,
   ObjectContent,
-  PRIVATE_OBJECT_CACHE_CONTROL,
 } from './file-storage-adapter.interface';
 
 // Google Cloud Storage. Selected with STORAGE_PROVIDER=gcs.
@@ -67,7 +66,7 @@ export class GcsFileStorageAdapter implements FileStorageAdapter {
           contentDisposition: content.contentDisposition,
           // Caching, not permission — the bucket's own policy decides
           // readability.
-          cacheControl: PRIVATE_OBJECT_CACHE_CONTROL,
+          cacheControl: content.cacheControl,
         },
       });
   }

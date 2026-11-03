@@ -321,9 +321,6 @@ Objects are **private by default**:
   byte size — about 200 MB at the default `FILE_IMAGE_MAX_PIXELS` (measured in
   `node:24-alpine`), outside the V8 heap the liveness probe checks. Size the API
   container for about 400 MB on top of its baseline, and alert on OOM kills.
-- Upgrading a deployed fork across the `file_assets` migration: see
-  "Upgrading a deployed fork" in `docs/file-uploads.md` — it drops
-  `users.profile_image_url`, which the previous release still reads.
 
 ### On a VM: which identity the application presents
 

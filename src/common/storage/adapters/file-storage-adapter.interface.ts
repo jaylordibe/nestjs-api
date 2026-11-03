@@ -11,15 +11,23 @@ export interface ObjectContent {
   body: Buffer;
   contentType: string;
   contentDisposition: string;
+  // One of the two values below, chosen by the file's purpose
+  // (`FilePurposePolicy.cacheControl`).
+  cacheControl: string;
 }
 
-// The `Cache-Control` every adapter writes. Objects are private: the only read
-// path is a signed URL, which lives at most `MAXIMUM_SIGNED_URL_TTL_SECONDS`.
-// `private` keeps a shared proxy or CDN from storing the response, and the
-// max-age stops a browser cache from outliving the longest URL that could have
-// fetched it — a `public, max-age=<a year>` header would let a cached copy keep
-// serving after the signature expired and the reader lost access.
+// The default `Cache-Control`. Objects are private: the only read path is a
+// signed URL, which lives at most `MAXIMUM_SIGNED_URL_TTL_SECONDS`. `private`
+// keeps a shared proxy or CDN from storing the response, and the max-age stops
+// a browser cache from outliving the longest URL that could have fetched it — a
+// `public, max-age=<a year>` header would let a cached copy keep serving after
+// the signature expired and the reader lost access.
 export const PRIVATE_OBJECT_CACHE_CONTROL = `private, max-age=${MAXIMUM_SIGNED_URL_TTL_SECONDS}`;
+
+// For a file no cache may keep, the reader's own browser included — an
+// identity document or contract whose reader may lose access the moment their
+// link expires.
+export const NO_STORE_CACHE_CONTROL = 'private, no-store';
 
 // The storage capability the application depends on. Deliberately small, and
 // deliberately free of any provider vocabulary — no bucket, no container, no

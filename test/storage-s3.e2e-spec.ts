@@ -43,6 +43,7 @@ async function putObject(
     body: Buffer.from(contents, 'utf8'),
     contentType,
     contentDisposition: PNG_CONTENT_DISPOSITION,
+    cacheControl: PRIVATE_OBJECT_CACHE_CONTROL,
   });
   return storageKey;
 }

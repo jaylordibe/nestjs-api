@@ -3,10 +3,15 @@ import sharp from 'sharp';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { MULTER_MODULE_OPTIONS } from '@nestjs/platform-express/multer/files.constants';
-import { FILE_STORAGE_ADAPTER } from '../src/common/storage/adapters/file-storage-adapter.interface';
+import {
+  FILE_STORAGE_ADAPTER,
+  PRIVATE_OBJECT_CACHE_CONTROL,
+} from '../src/common/storage/adapters/file-storage-adapter.interface';
 import { FileAssetStatus } from '../src/common/enums/file-asset-status.enum';
 import { FileCleanupHandler } from '../src/modules/files/file-cleanup.handler';
 import { FileProcessor } from '../src/modules/files/file-processor';
+import { FILE_PURPOSE_POLICIES } from '../src/modules/files/file-purpose.policy';
+import { FilePurpose } from '../src/common/enums/file-purpose.enum';
 import { FileStorageService } from '../src/common/storage/file-storage.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import {
@@ -293,6 +298,40 @@ describe('Files (e2e)', () => {
       expect((res.body as UploadedFileBody).fileName).toBe('résumé — 2026.pdf');
     });
 
+    // The object's caching comes from the purpose's policy, not one constant.
+    it("writes each object with its purpose's cache rule", async () => {
+      const user = await createRegularUser(app, 'cache@example.com');
+      const res = await upload(
+        user.token,
+        'profile_image',
+        await buildPng(),
+        'me.png',
+      ).expect(201);
+      const row = await prisma.fileAsset.findUniqueOrThrow({
+        where: { id: (res.body as UploadedFileBody).id },
+      });
+      expect(storage.objects.get(row.storageKey)?.cacheControl).toBe(
+        FILE_PURPOSE_POLICIES[FilePurpose.PROFILE_IMAGE].cacheControl,
+      );
+    });
+
+    // A file's dimensions are both set or both absent, and never zero.
+    it('refuses a stored file with a zero or half-missing size', async () => {
+      const user = await createRegularUser(app, 'sizes@example.com');
+      const res = await upload(
+        user.token,
+        'profile_image',
+        await buildPng(),
+        'me.png',
+      ).expect(201);
+      const id = (res.body as UploadedFileBody).id;
+      for (const size of [{ width: 0 }, { height: null }]) {
+        await expect(
+          prisma.fileAsset.update({ where: { id }, data: size }),
+        ).rejects.toThrow(/file_assets_dimensions_check/);
+      }
+    });
+
     // The cleanup job reclaimed this upload's row while it was still writing:
     // the request must remove the object it wrote, or nothing ever would.
     it('removes its own object when its row was released mid-upload', async () => {
@@ -418,6 +457,7 @@ describe('Files (e2e)', () => {
         body: Buffer.from('%PDF'),
         contentType: 'application/pdf',
         contentDisposition: 'attachment',
+        cacheControl: PRIVATE_OBJECT_CACHE_CONTROL,
       });
       return { id: file.id, storageKey };
     }
