@@ -124,8 +124,9 @@ Raised before any handler runs, by Express's body parser (mapped by `fromBodyPar
 | Code | Status | Trigger | `details` shape |
 |---|---|---|---|
 | `FILE_NOT_ATTACHABLE` | 409 | A file id names the caller's own upload for this purpose, but it expired, was already attached, or is being deleted. Upload it again. A file that is not the caller's, not for this purpose, or already removed by the cleanup job is `RESOURCE_NOT_FOUND` instead, so ids cannot be probed — for the caller's own expired upload the remedy is the same: upload again. | `null` |
+| `FILE_NOT_RELEASABLE` | 409 | `DELETE /files/:id`: the id names the caller's own file, but it is attached to something (or still being processed), so it cannot be released; remove it from the resource that shows it instead. Someone else's file, or one already removed, is `RESOURCE_NOT_FOUND`. | `null` |
 | `FILE_CONTENT_INVALID` | 422 | `POST /files`: the content is an accepted type but does not decode, or exceeds the purpose's dimension or pixel limit. | `null` |
-| `FILE_QUOTA_EXCEEDED` | 429 | `POST /files`: the caller already holds the maximum number of uploaded files that are not attached to anything. Attach one, or wait for unused uploads to expire (`FILE_UPLOAD_TTL_SECONDS`); an immediate retry does not help. | `{ limit: number }` |
+| `FILE_QUOTA_EXCEEDED` | 429 | `POST /files`: the caller already holds the maximum number of uploaded files that are not attached to anything. Attach or release one (`DELETE /files/:id`), or wait for unused uploads to expire (`FILE_UPLOAD_TTL_SECONDS`); a released upload can still count for up to an hour after it was uploaded (`docs/file-uploads.md`). An immediate retry does not help. | `{ limit: number }` |
 
 `POST /users/me/gdpr-erase` never raises `LAST_OWNER_PROTECTED`. Erasure answers
 a legal obligation and cannot be refused for a commercial relationship, so it

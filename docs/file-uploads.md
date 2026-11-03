@@ -28,7 +28,7 @@ changing step 2.
 | 413 | `PAYLOAD_TOO_LARGE` | Over the purpose's size limit, or over `FILE_UPLOAD_MAX_BYTES` |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | The bytes are not a type the purpose accepts — whatever the client declared |
 | 422 | `FILE_CONTENT_INVALID` | An accepted type that does not decode, or exceeds the pixel / dimension limits |
-| 429 | `FILE_QUOTA_EXCEEDED` | 20 uploaded files not yet attached (`details.limit`). Attach one or wait for unused uploads to expire; retrying at once does not help |
+| 429 | `FILE_QUOTA_EXCEEDED` | 20 uploaded files not yet attached (`details.limit`), counting the ones released within an hour of their upload until the cleanup job removes them. Attach or release one, or wait for unused uploads to expire; retrying at once does not help |
 | 503 | `EXTERNAL_SERVICE_UNAVAILABLE` | Storage refused the write; retry |
 
 At the attach site: someone else's file, or one uploaded for a different
@@ -36,6 +36,15 @@ purpose, is `404 RESOURCE_NOT_FOUND` — indistinguishable from an id that does
 not exist. The caller's own file that expired, was already attached, or is being
 deleted is `409 FILE_NOT_ATTACHABLE`; once the cleanup job has removed an
 expired file entirely, the same id answers 404. Either way: upload it again.
+
+An upload the client will not attach — a replaced pick, an attach that was
+refused — is given back with `DELETE /api/files/:id` (`204`, and `204` again on a
+repeat). Only the uploader's own unattached file matches: someone else's, or one
+already removed, is `404 RESOURCE_NOT_FOUND`; the caller's own file that is
+attached (or still being processed) is `409 FILE_NOT_RELEASABLE` (detach it from
+its resource instead). The cleanup job
+deletes it within minutes; until then, and for at most an hour after it was
+uploaded, it still counts toward the 20.
 
 Single-file attribute semantics on PATCH: **omitted** = unchanged, **`null`** =
 remove, **an id** = attach or replace. Re-sending the id that is already current
@@ -145,6 +154,6 @@ authorized to read.
 ## Not here
 
 No virus scanning or document sanitisation, no thumbnails or variants, no
-direct-to-storage (presigned) upload, no endpoint to read or delete a file by its
-own id. The deployment edge must allow request bodies of at least
+direct-to-storage (presigned) upload, no endpoint to read a file by its own id
+(only to release an unattached one). The deployment edge must allow request bodies of at least
 `FILE_UPLOAD_MAX_BYTES` on `POST /api/files`.

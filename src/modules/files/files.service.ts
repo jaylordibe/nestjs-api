@@ -56,6 +56,38 @@ const UNATTACHED_STATUSES = [
   FileAssetStatus.READY,
 ] as const;
 
+// What the upload quota counts: unattached files, and the ones the uploader
+// released (`DELETE /files/:id`) within an hour of uploading them. Without
+// the last, uploading and releasing in a loop would add objects faster than
+// one cleanup run deletes them, delaying every other user's released files;
+// with it, a loop gets at most the limit per cleanup run, and per hour once
+// cleanup falls behind. Such a file is a `deleting` row
+// that reached `ready` (`sizeBytes` is written then) and was never attached
+// (`attachedAt`). A refused upload, or a file a resource let go of — whoever
+// removed it — never counts. The window is a time, not a count of failed
+// deletes, so however slowly a storage outage lets cleanup run, it cannot
+// lock an uploader out for longer. The top-level `status` keeps the count on
+// the `[uploadedBy, status]` index.
+const RELEASED_FILE_QUOTA_WINDOW_MILLISECONDS = 60 * 60 * 1000;
+
+function quotaWhere(actorId: string): Prisma.FileAssetWhereInput {
+  return {
+    uploadedBy: actorId,
+    status: { in: [...UNATTACHED_STATUSES, FileAssetStatus.DELETING] },
+    OR: [
+      { status: { in: [...UNATTACHED_STATUSES] } },
+      {
+        status: FileAssetStatus.DELETING,
+        sizeBytes: { not: null },
+        attachedAt: null,
+        createdAt: {
+          gt: new Date(Date.now() - RELEASED_FILE_QUOTA_WINDOW_MILLISECONDS),
+        },
+      },
+    ],
+  };
+}
+
 // The shared file capability: ingest, attach, sign, and release. It knows no
 // resource — a domain service owns the column or table that references a file,
 // and calls `claimForAttachment` / `markDeleting` inside ITS transaction, so
@@ -103,7 +135,7 @@ export class FilesService {
     // limit. The route's throttle bounds that overshoot, and every one of
     // these files expires anyway.
     const unattachedCount = await this.prisma.fileAsset.count({
-      where: { uploadedBy: actorId, status: { in: [...UNATTACHED_STATUSES] } },
+      where: quotaWhere(actorId),
     });
     if (unattachedCount >= MAX_UNATTACHED_FILES_PER_USER) {
       throw Errors.fileQuotaExceeded(MAX_UNATTACHED_FILES_PER_USER);
@@ -229,6 +261,39 @@ export class FilesService {
       throw Errors.resourceNotFound('File');
     }
     throw Errors.fileNotAttachable();
+  }
+
+  /**
+   * Releases the caller's own upload that was never attached (`DELETE
+   * /files/:id`); the cleanup job then deletes its object and row. A repeat is
+   * a no-op. One conditional statement, never a read then a write: under READ
+   * COMMITTED it waits for an attach of the same file to commit and then
+   * matches nothing, so an attached file is never released here — its bytes
+   * would be deleted while a resource still shows it. It takes no other lock,
+   * keeping `file_assets` locked last.
+   *
+   * Someone else's file, or one already removed, is 404 — whether an id
+   * exists is not disclosed to anyone who did not upload it. The caller's own
+   * attached (or still processing) file is 409.
+   */
+  async releaseUnattached(fileId: string, actorId: string): Promise<void> {
+    const released = await this.prisma.fileAsset.updateMany({
+      where: { id: fileId, uploadedBy: actorId, status: FileAssetStatus.READY },
+      data: { status: FileAssetStatus.DELETING, expiresAt: null },
+    });
+    if (released.count === 1) return;
+
+    const ownFile = await this.prisma.fileAsset.findFirst({
+      where: { id: fileId, uploadedBy: actorId },
+      select: { status: true },
+    });
+    if (!ownFile) {
+      throw Errors.resourceNotFound('File');
+    }
+    if ((ownFile.status as FileAssetStatus) === FileAssetStatus.DELETING) {
+      return;
+    }
+    throw Errors.fileNotReleasable();
   }
 
   /**

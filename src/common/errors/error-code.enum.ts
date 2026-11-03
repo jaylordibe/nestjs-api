@@ -142,13 +142,18 @@ export enum ErrorCode {
    *  cleanup job is 404 instead — with the same remedy for a file the caller
    *  did upload. */
   FILE_NOT_ATTACHABLE = 'FILE_NOT_ATTACHABLE',
+  /** 409 — `DELETE /files/:id` names the caller's own file, but it is
+   *  attached to something (or still being processed), so it cannot be
+   *  released this way: remove it from whatever shows it instead. */
+  FILE_NOT_RELEASABLE = 'FILE_NOT_RELEASABLE',
   /** 422 — the content is of an accepted type but cannot be used: it does not
    *  decode, or its dimensions or pixel count exceed the purpose's limit. */
   FILE_CONTENT_INVALID = 'FILE_CONTENT_INVALID',
   /** 429 — the caller already holds the maximum number of uploaded files that
-   *  are not attached to anything. Attach one of them, or wait: each expires
-   *  `FILE_UPLOAD_TTL_SECONDS` after upload. Retrying immediately does not
-   *  help. */
+   *  are not attached to anything. Attach or release one of them, or wait:
+   *  each expires `FILE_UPLOAD_TTL_SECONDS` after upload, and a released one
+   *  can still count for up to an hour after it was uploaded. Retrying
+   *  immediately does not help. */
   FILE_QUOTA_EXCEEDED = 'FILE_QUOTA_EXCEEDED',
 
   // ── Infrastructure (429, 500, 503) ───────────────────────────────────

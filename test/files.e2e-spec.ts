@@ -9,6 +9,7 @@ import {
 } from '../src/common/storage/adapters/file-storage-adapter.interface';
 import { FileAssetStatus } from '../src/common/enums/file-asset-status.enum';
 import { FileCleanupHandler } from '../src/modules/files/file-cleanup.handler';
+import { MAX_UNATTACHED_FILES_PER_USER } from '../src/modules/files/file-purpose.policy';
 import { FileProcessor } from '../src/modules/files/file-processor';
 import { FILE_PURPOSE_POLICIES } from '../src/modules/files/file-purpose.policy';
 import { FilePurpose } from '../src/common/enums/file-purpose.enum';
@@ -380,6 +381,72 @@ describe('Files (e2e)', () => {
       });
     });
 
+    // The bytes a server-side upload relay sends: its own `purpose` part
+    // first, under a quoted boundary it writes into the Content-Type, so the
+    // browser behind it cannot choose what the file is for.
+    function rawUpload(token: string, boundary: string, parts: Buffer[]) {
+      const body = Buffer.concat([
+        ...parts.flatMap((part) => [
+          Buffer.from(`--${boundary}\r\n`),
+          part,
+          Buffer.from('\r\n'),
+        ]),
+        Buffer.from(`--${boundary}--\r\n`),
+      ]);
+      return request(app.getHttpServer())
+        .post('/api/files')
+        .set('Authorization', `Bearer ${token}`)
+        .set('Content-Type', `multipart/form-data; boundary="${boundary}"`)
+        .send(body);
+    }
+
+    const purposePart = (purpose: string) =>
+      Buffer.from(
+        `Content-Disposition: form-data; name="purpose"\r\n\r\n${purpose}`,
+      );
+
+    async function filePart(): Promise<Buffer> {
+      return Buffer.concat([
+        Buffer.from(
+          'Content-Disposition: form-data; name="file"; filename="a.png"\r\nContent-Type: image/png\r\n\r\n',
+        ),
+        await buildPng(),
+      ]);
+    }
+
+    it('reads a purpose part written ahead of the file under a quoted boundary', async () => {
+      const user = await createRegularUser(app, 'relay@example.com');
+      const boundary = '----WebKitFormBoundary7MA4YWxk';
+      const res = await rawUpload(user.token, boundary, [
+        purposePart('profile_image'),
+        await filePart(),
+      ]).expect(201);
+      expect((res.body as UploadedFileBody).purpose).toBe('profile_image');
+    });
+
+    it('reads a quoted boundary holding characters a bare one may not', async () => {
+      const user = await createRegularUser(app, 'spaced@example.com');
+      const boundary = '----Lysta boundary:1=';
+      const res = await rawUpload(user.token, boundary, [
+        purposePart('profile_image'),
+        await filePart(),
+      ]).expect(201);
+      expect((res.body as UploadedFileBody).purpose).toBe('profile_image');
+    });
+
+    it('refuses a second purpose part after the relay’s own, storing nothing', async () => {
+      const user = await createRegularUser(app, 'second@example.com');
+      const boundary = '----WebKitFormBoundary7MA4YWxk';
+      const res = await rawUpload(user.token, boundary, [
+        purposePart('profile_image'),
+        purposePart('document'),
+        await filePart(),
+      ]);
+      expect(res.status).toBe(400);
+      expect(res.body.errorCode).toBe('VALIDATION_FAILED');
+      expect(await prisma.fileAsset.count()).toBe(0);
+    });
+
     it('refuses an upload past the unattached-file quota with 429', async () => {
       const user = await createRegularUser(app, 'hoarder@example.com');
       const expiresAt = new Date(Date.now() + 60_000);
@@ -423,6 +490,253 @@ describe('Files (e2e)', () => {
 
       const rows = await prisma.fileAsset.findMany();
       expect(rows.map((row) => row.status)).toEqual([FileAssetStatus.DELETING]);
+    });
+  });
+
+  describe('DELETE /api/files/:id', () => {
+    function release(token: string, fileId: string): request.Test {
+      return request(app.getHttpServer())
+        .delete(`/api/files/${fileId}`)
+        .set('Authorization', `Bearer ${token}`);
+    }
+
+    async function uploaded(token: string): Promise<string> {
+      const res = await upload(
+        token,
+        'profile_image',
+        await buildPng(),
+        'pick.png',
+      ).expect(201);
+      return (res.body as UploadedFileBody).id;
+    }
+
+    async function status(fileId: string): Promise<string | undefined> {
+      return (await prisma.fileAsset.findUnique({ where: { id: fileId } }))
+        ?.status;
+    }
+
+    it('releases the caller’s own unattached upload, and a repeat changes nothing', async () => {
+      const user = await createRegularUser(app, 'release@example.com');
+      const fileId = await uploaded(user.token);
+
+      await release(user.token, fileId).expect(204);
+      expect(await status(fileId)).toBe(FileAssetStatus.DELETING);
+      const row = await prisma.fileAsset.findUniqueOrThrow({
+        where: { id: fileId },
+      });
+      expect(row.expiresAt).toBeNull();
+
+      await release(user.token, fileId).expect(204);
+      expect(await status(fileId)).toBe(FileAssetStatus.DELETING);
+    });
+
+    it('releases an expired upload the cleanup job has not reached yet', async () => {
+      const user = await createRegularUser(app, 'late@example.com');
+      const fileId = await uploaded(user.token);
+      await prisma.fileAsset.update({
+        where: { id: fileId },
+        data: { expiresAt: new Date(Date.now() - 1_000) },
+      });
+
+      await release(user.token, fileId).expect(204);
+      expect(await status(fileId)).toBe(FileAssetStatus.DELETING);
+    });
+
+    it('lets the cleanup job delete a released upload — object, then row', async () => {
+      const user = await createRegularUser(app, 'gone@example.com');
+      const fileId = await uploaded(user.token);
+      const { storageKey } = await prisma.fileAsset.findUniqueOrThrow({
+        where: { id: fileId },
+      });
+
+      await release(user.token, fileId).expect(204);
+      expect(storage.objects.has(storageKey)).toBe(true);
+      expect(await app.get(FileCleanupHandler).runOnce()).toMatchObject({
+        deleted: 1,
+        failed: 0,
+      });
+      expect(await status(fileId)).toBeUndefined();
+      expect(storage.objects.has(storageKey)).toBe(false);
+
+      // Once removed it is like any unknown id.
+      const res = await release(user.token, fileId).expect(404);
+      expect(res.body).toMatchObject({
+        errorCode: 'RESOURCE_NOT_FOUND',
+        details: { resource: 'File' },
+      });
+    });
+
+    it('refuses the caller’s own attached file with 409 and leaves it attached', async () => {
+      const user = await createRegularUser(app, 'attached@example.com');
+      const fileId = await uploaded(user.token);
+      await request(app.getHttpServer())
+        .patch('/api/users/me')
+        .set('Authorization', `Bearer ${user.token}`)
+        .send({ profileImageFileId: fileId })
+        .expect(200);
+
+      const res = await release(user.token, fileId).expect(409);
+      expect(res.body.errorCode).toBe('FILE_NOT_RELEASABLE');
+      expect(await status(fileId)).toBe(FileAssetStatus.ATTACHED);
+    });
+
+    it('refuses the caller’s own file still being processed with 409', async () => {
+      const user = await createRegularUser(app, 'processing@example.com');
+      const file = await prisma.fileAsset.create({
+        data: {
+          uploadedBy: user.id,
+          purpose: 'profile_image',
+          status: FileAssetStatus.PROCESSING,
+          storageKey: 'files/profile-images/in-flight.png',
+          kind: 'image',
+          contentType: 'image/png',
+          fileName: 'x.png',
+          sizeBytes: 1,
+        },
+      });
+
+      const res = await release(user.token, file.id).expect(409);
+      expect(res.body.errorCode).toBe('FILE_NOT_RELEASABLE');
+      expect(await status(file.id)).toBe(FileAssetStatus.PROCESSING);
+    });
+
+    // Whether an id exists, and in what state, is not disclosed to anyone who
+    // did not upload it — so someone else's file in any state answers exactly
+    // like an id that never existed, and is left as it was.
+    it('answers someone else’s file, in any state, exactly like an unknown id', async () => {
+      const owner = await createRegularUser(app, 'owner@example.com');
+      const other = await createRegularUser(app, 'other@example.com');
+      const ready = await uploaded(owner.token);
+      const attached = await uploaded(owner.token);
+      await request(app.getHttpServer())
+        .patch('/api/users/me')
+        .set('Authorization', `Bearer ${owner.token}`)
+        .send({ profileImageFileId: attached })
+        .expect(200);
+      const released = await uploaded(owner.token);
+      await release(owner.token, released).expect(204);
+
+      const unknown = await release(
+        other.token,
+        '00000000-0000-4000-8000-000000000000',
+      ).expect(404);
+      // Everything but the per-request fields (path, request id, time).
+      const comparable = (body: Record<string, unknown>) => ({
+        statusCode: body.statusCode,
+        errorCode: body.errorCode,
+        message: body.message,
+        details: body.details,
+      });
+      for (const fileId of [ready, attached, released]) {
+        const res = await release(other.token, fileId).expect(404);
+        expect(comparable(res.body as Record<string, unknown>)).toEqual(
+          comparable(unknown.body as Record<string, unknown>),
+        );
+      }
+      expect(await status(ready)).toBe(FileAssetStatus.READY);
+      expect(await status(attached)).toBe(FileAssetStatus.ATTACHED);
+    });
+
+    it('refuses an id that is not a UUID, and an anonymous caller', async () => {
+      const user = await createRegularUser(app, 'shape@example.com');
+      const res = await release(user.token, 'not-a-uuid').expect(400);
+      expect(res.body.errorCode).toBe('VALIDATION_FAILED');
+      await request(app.getHttpServer())
+        .delete('/api/files/00000000-0000-4000-8000-000000000000')
+        .expect(401);
+    });
+
+    // A released upload stops counting only once the cleanup job removes it,
+    // so uploading and releasing in a loop cannot outrun the cleanup job.
+    it('counts a released upload toward the quota until the cleanup job removes it', async () => {
+      const user = await createRegularUser(app, 'cycler@example.com');
+      const expiresAt = new Date(Date.now() + 60_000);
+      await prisma.fileAsset.createMany({
+        data: Array.from({ length: 19 }, (_, index) => ({
+          uploadedBy: user.id,
+          purpose: 'profile_image',
+          status: FileAssetStatus.READY,
+          storageKey: `files/profile-images/held-${index}.png`,
+          kind: 'image',
+          contentType: 'image/png',
+          fileName: 'x.png',
+          sizeBytes: 1,
+          expiresAt,
+        })),
+      });
+      const twentieth = await uploaded(user.token);
+      await release(user.token, twentieth).expect(204);
+
+      const refused = await upload(
+        user.token,
+        'profile_image',
+        await buildPng(),
+        'again.png',
+      ).expect(429);
+      expect(refused.body.errorCode).toBe('FILE_QUOTA_EXCEEDED');
+
+      await app.get(FileCleanupHandler).runOnce();
+      await upload(
+        user.token,
+        'profile_image',
+        await buildPng(),
+        'again.png',
+      ).expect(201);
+    });
+
+    // Of the files being deleted, only the uploader's recent releases count: a
+    // file a resource let go of, an upload that was refused, and a release
+    // from over an hour ago that storage keeps failing to delete never hold
+    // the uploader's slots.
+    it('counts only recent releases among the files being deleted', async () => {
+      const user = await createRegularUser(app, 'reworker@example.com');
+      const expiresAt = new Date(Date.now() + 60_000);
+      const row = (index: string) => ({
+        uploadedBy: user.id,
+        purpose: 'profile_image',
+        storageKey: `files/profile-images/rework-${index}.png`,
+        kind: 'image',
+        contentType: 'image/png',
+        fileName: 'x.png',
+      });
+      await prisma.fileAsset.createMany({
+        data: [
+          ...Array.from(
+            { length: MAX_UNATTACHED_FILES_PER_USER - 1 },
+            (_, index) => ({
+              ...row(`held-${index}`),
+              status: FileAssetStatus.READY,
+              sizeBytes: 1,
+              expiresAt,
+            }),
+          ),
+          // Replaced or removed from what showed it.
+          {
+            ...row('detached'),
+            status: FileAssetStatus.DELETING,
+            sizeBytes: 1,
+            attachedAt: new Date(),
+          },
+          // Refused before it was ever stored.
+          { ...row('refused'), status: FileAssetStatus.DELETING },
+          // Released, uploaded over an hour ago, with storage
+          // still refusing to delete it.
+          {
+            ...row('stuck'),
+            status: FileAssetStatus.DELETING,
+            sizeBytes: 1,
+            deleteAttempts: 1,
+            createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+          },
+        ],
+      });
+
+      await upload(
+        user.token,
+        'profile_image',
+        await buildPng(),
+        'twentieth.png',
+      ).expect(201);
     });
   });
 

@@ -1,6 +1,11 @@
 import {
   Body,
   Controller,
+  Delete,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
   Post,
   UploadedFile,
   UseInterceptors,
@@ -11,6 +16,7 @@ import {
   ApiBody,
   ApiConsumes,
   ApiCreatedResponse,
+  ApiNoContentResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -67,5 +73,30 @@ export class FilesController {
       currentUser.id,
     );
     return new UploadedFileResponseDto(row);
+  }
+
+  /**
+   * Gives back an upload the caller will not attach — a replaced pick, an
+   * attach that was refused. It still counts toward the limit of unattached
+   * uploads until the cleanup job deletes it, within minutes. Releasing it
+   * again is safe. Someone else's file, an unknown id, or one already deleted
+   * is 404; the caller's own file that is attached (or still being processed)
+   * is 409 `FILE_NOT_RELEASABLE`: remove it from what shows it instead.
+   */
+  @Delete(':id')
+  @AuthenticatedOnly()
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiNoContentResponse({
+    description:
+      'Released, or already released. The file is deleted within minutes.',
+  })
+  async release(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ): Promise<void> {
+    // `@AuthenticatedOnly` for the same reason as the upload: only the
+    // uploader's own files match, and the ownership check is the query itself.
+    await this.filesService.releaseUnattached(id, currentUser.id);
   }
 }

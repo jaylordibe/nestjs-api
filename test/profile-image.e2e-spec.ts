@@ -299,6 +299,72 @@ describe('Profile image (e2e)', () => {
       expect(await fileStatus(fileId)).toBe(FileAssetStatus.ATTACHED);
     });
 
+    // The same interleaving for `DELETE /files/:id`: the uploader's release
+    // arrives while their own attach holds the row. It must wait, re-check
+    // after the commit and refuse — never leave an attached file `deleting`,
+    // whose bytes the cleanup job would then delete.
+    it('a release waits for an open attach of the same file and then refuses it', async () => {
+      const user = await createRegularUser(app, 'release-open@example.com');
+      const fileId = await uploadFile(user.token);
+
+      const paused = pauseAfter(app.get(FilesService), 'claimForAttachment');
+      try {
+        const attach = Promise.allSettled([
+          setProfileImage(user.token, fileId),
+        ]);
+        await paused.reached;
+        const release = request(app.getHttpServer())
+          .delete(`/api/files/${fileId}`)
+          .set('Authorization', `Bearer ${user.token}`)
+          .then((response) => response);
+        await waitForLockWaiter();
+        paused.release();
+        const [[attachResult], releaseResult] = await Promise.all([
+          attach,
+          release,
+        ]);
+        expect(
+          (attachResult as PromiseFulfilledResult<request.Response>).value
+            .status,
+        ).toBe(200);
+        expect(releaseResult.status).toBe(409);
+        expect(releaseResult.body.errorCode).toBe('FILE_NOT_RELEASABLE');
+      } finally {
+        paused.restore();
+      }
+      expect(await fileStatus(fileId)).toBe(FileAssetStatus.ATTACHED);
+    });
+
+    // The release commits first: the attach that read the file as usable must
+    // then find nothing to claim.
+    it('an attach after a release of the same file refuses it', async () => {
+      const user = await createRegularUser(app, 'release-first@example.com');
+      const fileId = await uploadFile(user.token);
+
+      const paused = pauseBefore(app.get(FilesService), 'claimForAttachment');
+      const outcome = await runRace(
+        setProfileImage(user.token, fileId).then((response) => response),
+        paused,
+        async () =>
+          request(app.getHttpServer())
+            .delete(`/api/files/${fileId}`)
+            .set('Authorization', `Bearer ${user.token}`)
+            .expect(204),
+      );
+
+      expect(outcome.racer.status).toBe('fulfilled');
+      const response = (
+        outcome.paused as PromiseFulfilledResult<request.Response>
+      ).value;
+      expect(response.status).toBe(409);
+      expect(response.body.errorCode).toBe('FILE_NOT_ATTACHABLE');
+      expect(await fileStatus(fileId)).toBe(FileAssetStatus.DELETING);
+      const row = await prisma.user.findUniqueOrThrow({
+        where: { id: user.id },
+      });
+      expect(row.profileImageFileId).toBeNull();
+    });
+
     // The attach commits first; a cleanup run that read the file as expiring
     // must not undo it.
     it('cleanup never releases a file an attach already claimed', async () => {

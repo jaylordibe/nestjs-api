@@ -237,6 +237,12 @@ export const Errors = {
       message:
         'This file can no longer be attached. It expired or was already used; upload it again.',
     }),
+  fileNotReleasable: (): ConflictException =>
+    new ConflictException({
+      errorCode: ErrorCode.FILE_NOT_RELEASABLE,
+      message:
+        'This file is in use, so it cannot be removed this way. Remove it from what shows it instead.',
+    }),
 
   // ── 422 ────────────────────────────────────────────────────────────
   // The message names the reason (does not decode, too many pixels); it is
