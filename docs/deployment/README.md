@@ -354,31 +354,85 @@ The first case above, made concrete for a Compute Engine VM using `gcs`.
 Nothing goes in `.env` for credentials: Application Default Credentials read
 the attached service account from the VM's metadata server.
 
+Each step below gives the console path and the terminal command; either does
+it. Run the commands as a project owner in Cloud Shell or on a machine signed
+in with `gcloud auth login`, never on the VM (its account cannot grant itself
+roles). `PROJECT_ID` is the VM's project, `SA_EMAIL` the service account,
+`BUCKET` this environment's bucket (`STORAGE_GCS_BUCKET`), `VM` and `ZONE` the
+instance.
+
 1. **Create a dedicated service account** for this environment (one for prod,
    one for staging) and attach it to the VM when creating it.
 2. **Set the VM's access scope to "Allow full access to all Cloud APIs"**
    (`cloud-platform`). Scopes cap what the attached account may do regardless
    of its roles. Changing a scope needs the VM stopped.
+   - Console: Compute Engine → VM instances → the VM → Stop → Edit → API and
+     identity management → Access scopes: "Allow full access to all Cloud
+     APIs" → Save → Start.
+   - Terminal:
+     ```
+     gcloud compute instances stop VM --zone ZONE
+     gcloud compute instances set-service-account VM --zone ZONE \
+       --service-account SA_EMAIL --scopes cloud-platform
+     gcloud compute instances start VM --zone ZONE
+     ```
+   - Check: the VM's details page, "API and identity management", shows the
+     account and "Allow full access to all Cloud APIs".
 3. **Enable the IAM Service Account Credentials API**
    (`iamcredentials.googleapis.com`) in the VM's project, when anything calls
-   `createSignedReadUrl`:
-   `gcloud services enable iamcredentials.googleapis.com --project PROJECT_ID`.
-   With no key file the SDK signs through its `signBlob` call, and the API is
-   off in a new project; without it every signed URL fails with "IAM Service
-   Account Credentials API has not been used in project … or it is disabled".
+   `createSignedReadUrl`. With no key file the SDK signs through its `signBlob`
+   call, and the API is off in a new project; without it every signed URL
+   fails with "IAM Service Account Credentials API has not been used in
+   project … or it is disabled".
+   - Console: APIs & Services → Library → "IAM Service Account Credentials
+     API"
+     (`https://console.cloud.google.com/apis/library/iamcredentials.googleapis.com?project=PROJECT_ID`)
+     → Enable.
+   - Terminal:
+     ```
+     gcloud services enable iamcredentials.googleapis.com --project PROJECT_ID
+     ```
+   - Check: the API's page shows "Status: Enabled", or
+     `gcloud services list --enabled --project PROJECT_ID | grep iamcredentials`
+     prints it.
 4. **Grant the service account:**
-   - `roles/storage.objectAdmin` on this environment's bucket only;
+   - `roles/storage.objectAdmin` on this environment's bucket only — uploads
+     write objects and the cleanup job deletes them. Without it every
+     `POST /api/files` answers 503 `EXTERNAL_SERVICE_UNAVAILABLE` and the api
+     logs `does not have storage.objects.create access`.
+     - Console: Cloud Storage → Buckets → the bucket → Permissions → Grant
+       access → New principals: `SA_EMAIL` → Role: Cloud Storage → Storage
+       Object Admin → Save. Grant it on the bucket, not on the project's IAM
+       page, which would reach every bucket in the project.
+     - Terminal:
+       ```
+       gcloud storage buckets add-iam-policy-binding gs://BUCKET \
+         --member="serviceAccount:SA_EMAIL" \
+         --role="roles/storage.objectAdmin"
+       ```
+     - Check: the bucket's Permissions tab lists `SA_EMAIL` with Storage
+       Object Admin, or
+       `gcloud storage buckets get-iam-policy gs://BUCKET | grep -B3 SA_EMAIL`.
    - `roles/iam.serviceAccountTokenCreator` on **itself**, when anything signs
-     URLs. Grant it on the service account (IAM & Admin → Service Accounts →
-     the account → Principals with access → Grant access, with the account's
-     own email as the principal), not on the project, which would let it sign
-     as every account there. The project `Editor` role does not include
-     `signBlob`, so the default Compute Engine account needs this too:
-     ```
-     gcloud iam service-accounts add-iam-policy-binding SA_EMAIL \
-       --member="serviceAccount:SA_EMAIL" \
-       --role="roles/iam.serviceAccountTokenCreator"
-     ```
+     URLs. Grant it on the service account, not on the project, which would
+     let it sign as every account there. The project `Editor` role does not
+     include `signBlob`, so the default Compute Engine account needs this too.
+     Without it every signed URL fails with "Permission
+     'iam.serviceAccounts.signBlob' denied".
+     - Console: IAM & Admin → Service Accounts → the account → Principals
+       with access → Grant access → New principals: the account's own
+       `SA_EMAIL` → Role: Service Accounts → Service Account Token Creator →
+       Save. A row inherited from the project for another account does not
+       count.
+     - Terminal:
+       ```
+       gcloud iam service-accounts add-iam-policy-binding SA_EMAIL \
+         --member="serviceAccount:SA_EMAIL" \
+         --role="roles/iam.serviceAccountTokenCreator"
+       ```
+     - Check: Principals with access lists `SA_EMAIL` with Service Account
+       Token Creator and no inheritance, or
+       `gcloud iam service-accounts get-iam-policy SA_EMAIL | grep -A2 serviceAccountTokenCreator`.
 5. **In `.env`:** `STORAGE_PROVIDER="gcs"`, `STORAGE_GCS_BUCKET`, and leave
    `STORAGE_GCS_PROJECT_ID` empty.
 
