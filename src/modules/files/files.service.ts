@@ -6,6 +6,7 @@ import { FileKind } from '../../common/enums/file-kind.enum';
 import { FilePurpose } from '../../common/enums/file-purpose.enum';
 import { Errors } from '../../common/errors/errors';
 import { FileStorageService } from '../../common/storage/file-storage.service';
+import { SignedReadUrlCacheService } from '../../common/storage/signed-read-url-cache.service';
 import { buildContentDisposition } from '../../common/util/content-disposition.util';
 import { formatErrorMessage } from '../../common/util/error-message.util';
 import { sanitizeFileName } from '../../common/util/file-name.util';
@@ -101,6 +102,7 @@ export class FilesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: FileStorageService,
+    private readonly signedReadUrls: SignedReadUrlCacheService,
     private readonly processor: FileProcessor,
     configService: ConfigService,
   ) {
@@ -331,7 +333,11 @@ export class FilesService {
   }
 
   /**
-   * Response shapes for attached files, by id, each with a fresh signed URL.
+   * Response shapes for attached files, by id, each with a signed URL — from
+   * the shared cache (`SignedReadUrlCacheService`), so a page showing many
+   * pictures does not sign each one on every view. Only files still
+   * `attached` are looked up, so a replaced or released file's cached URL is
+   * never served.
    *
    * **Call only for files belonging to records the caller was authorized to
    * read** — each URL is a bearer credential. Only `attached` files are
@@ -365,7 +371,7 @@ export class FilesService {
     await Promise.all(
       files.map(async (file) => {
         try {
-          const { url, expiresAt } = await this.storage.createSignedReadUrl(
+          const { url, expiresAt } = await this.signedReadUrls.signedReadUrlFor(
             file.storageKey,
           );
           responses.set(

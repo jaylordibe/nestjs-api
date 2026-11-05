@@ -15,7 +15,7 @@ Resource endpoints stay JSON. A file reaches one in two steps:
    size, dimensions, a display-safe `fileName`, and `expiresAt`.
 2. **Reference the `id`** in the JSON create or update of the resource, before
    `expiresAt` (default 24 h, `FILE_UPLOAD_TTL_SECONDS`). Today:
-   `PATCH /api/users/me { "profileImageFileId": "<id>" }`.
+   `PUT /api/users/me/profile-image { "fileId": "<id>" }` (`DELETE` removes it).
 
 Several files are several `POST /api/files` calls, in parallel; each succeeds or
 fails on its own. The same two steps work from a browser, a mobile app, n8n or
@@ -121,9 +121,8 @@ calls `FilesService` inside its own transaction. Take every parent lock first:
 
 **One file** (like the profile picture): a nullable, unique `<name>FileId`
 column with a `RESTRICT` foreign key to `file_assets`. Copy
-`UsersService.applyProfileImageChange`: lock the parent row, return early on
-omitted or unchanged, `claimForAttachment` the new id, `markDeleting` the old
-one.
+`UsersService.setProfileImage`: lock the parent row, return early when
+unchanged, `claimForAttachment` the new id, `markDeleting` the old one.
 
 **Several files** (a gallery): a mapping table owned by the domain, e.g.
 

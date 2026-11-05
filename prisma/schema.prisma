@@ -55,7 +55,7 @@ model User {
   gender                String?
   // The stored file shown as this person's picture. Unique: an attached file
   // belongs to exactly one reference (see `FileAsset`). Set only through
-  // `PATCH /users/me` with the id `POST /files` returned.
+  // `PUT`/`DELETE /users/me/profile-image` with the id `POST /files` returned.
   profileImageFileId    String?   @unique @map("profile_image_file_id") @db.Uuid
   birthday              DateTime? @db.Date
   timezone              String?

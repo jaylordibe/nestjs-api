@@ -3,6 +3,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { FileAssetStatus } from '../src/common/enums/file-asset-status.enum';
 import { FILE_STORAGE_ADAPTER } from '../src/common/storage/adapters/file-storage-adapter.interface';
+import { RefreshTokenService } from '../src/modules/auth/refresh-token.service';
 import { FileCleanupHandler } from '../src/modules/files/file-cleanup.handler';
 import { FilesService } from '../src/modules/files/files.service';
 import { UsersService } from '../src/modules/users/users.service';
@@ -16,7 +17,10 @@ import {
   seedRbacCatalog,
   TEST_PASSWORD,
 } from './setup/rbac';
-import { RecordingStorageAdapter } from './setup/recording-storage';
+import {
+  RecordingStorageAdapter,
+  startSignOutage,
+} from './setup/recording-storage';
 import { createTestApp } from './setup/test-app';
 
 interface ProfileImageBody {
@@ -29,7 +33,8 @@ interface ProfileImageBody {
 }
 
 // The single-file attribute end to end: upload with `POST /files`, attach with
-// `PATCH /users/me { profileImageFileId }`, read it back signed.
+// `PUT /users/me/profile-image { fileId }` (or remove it with `DELETE`), read
+// it back signed.
 describe('Profile image (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
@@ -66,19 +71,27 @@ describe('Profile image (e2e)', () => {
     return (res.body as { id: string }).id;
   }
 
-  function setProfileImage(
+  // `null` removes the picture; an id sets or replaces it.
+  function setProfileImage(token: string, fileId: string | null): request.Test {
+    const server = request(app.getHttpServer());
+    return fileId === null
+      ? server
+          .delete('/api/users/me/profile-image')
+          .set('Authorization', `Bearer ${token}`)
+      : server
+          .put('/api/users/me/profile-image')
+          .set('Authorization', `Bearer ${token}`)
+          .send({ fileId });
+  }
+
+  function editProfile(
     token: string,
-    profileImageFileId: string | null | undefined,
-    extra: Record<string, unknown> = {},
+    body: Record<string, unknown>,
   ): request.Test {
     return request(app.getHttpServer())
       .patch('/api/users/me')
       .set('Authorization', `Bearer ${token}`)
-      .send(
-        profileImageFileId === undefined
-          ? extra
-          : { profileImageFileId, ...extra },
-      );
+      .send(body);
   }
 
   // Resolves once some backend in this worker's database is waiting on a row
@@ -126,16 +139,63 @@ describe('Profile image (e2e)', () => {
     expect((me.body.profileImage as ProfileImageBody).id).toBe(fileId);
   });
 
-  it('leaves the picture alone when the field is omitted', async () => {
+  it('a profile edit leaves the picture alone', async () => {
     const user = await createRegularUser(app, 'omit@example.com');
     const fileId = await uploadFile(user.token);
     await setProfileImage(user.token, fileId).expect(200);
 
-    const res = await setProfileImage(user.token, undefined, {
+    const res = await editProfile(user.token, {
       firstName: 'Renamed',
     }).expect(200);
     expect(res.body.firstName).toBe('Renamed');
     expect((res.body.profileImage as ProfileImageBody).id).toBe(fileId);
+  });
+
+  // The picture saves on its own, so the profile form no longer carries it:
+  // one way to change it.
+  it('refuses profileImageFileId on the profile edit with 400 and changes nothing', async () => {
+    const user = await createRegularUser(app, 'patch-pic@example.com');
+    const currentId = await uploadFile(user.token);
+    const nextId = await uploadFile(user.token);
+    await setProfileImage(user.token, currentId).expect(200);
+
+    const res = await editProfile(user.token, {
+      firstName: 'Renamed',
+      profileImageFileId: nextId,
+    }).expect(400);
+    expect(res.body.errorCode).toBe('VALIDATION_FAILED');
+
+    const row = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(row.profileImageFileId).toBe(currentId);
+    expect(row.firstName).not.toBe('Renamed');
+    expect(await fileStatus(nextId)).toBe(FileAssetStatus.READY);
+  });
+
+  it('changes no other profile field when the picture is set (AC1)', async () => {
+    const user = await createRegularUser(app, 'only-pic@example.com');
+    await editProfile(user.token, {
+      firstName: 'Kept',
+      middleName: 'Middle',
+      lastName: 'Name',
+      gender: 'female',
+      birthday: '1990-04-02',
+      timezone: 'Asia/Manila',
+    }).expect(200);
+    const fileId = await uploadFile(user.token);
+    const before = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+    });
+
+    await setProfileImage(user.token, fileId).expect(200);
+    const after = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+    });
+    // Everything as it was, but the picture and the row's own write stamp.
+    expect(after).toEqual({
+      ...before,
+      profileImageFileId: fileId,
+      updatedAt: after.updatedAt,
+    });
   });
 
   it('replaces the picture and releases the old file', async () => {
@@ -154,7 +214,7 @@ describe('Profile image (e2e)', () => {
     expect(await fileStatus(secondId)).toBe(FileAssetStatus.ATTACHED);
   });
 
-  it('removes the picture on null and releases the file', async () => {
+  it('removes the picture and releases the file', async () => {
     const user = await createRegularUser(app, 'remove@example.com');
     const fileId = await uploadFile(user.token);
     await setProfileImage(user.token, fileId).expect(200);
@@ -162,16 +222,55 @@ describe('Profile image (e2e)', () => {
     const res = await setProfileImage(user.token, null).expect(200);
     expect(res.body.profileImage).toBeNull();
     expect(await fileStatus(fileId)).toBe(FileAssetStatus.DELETING);
+
+    // Removing again finds nothing to remove and writes nothing.
+    const before = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+    });
+    const again = await setProfileImage(user.token, null).expect(200);
+    expect(again.body.profileImage).toBeNull();
+    const after = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+    });
+    expect(after.updatedAt).toEqual(before.updatedAt);
   });
 
-  // A client that lost the first response and sends the same request again.
+  // A client that lost the first response and sends the same request again:
+  // nothing is written, not even the row's update time.
   it('treats a retry with the current picture as a no-op', async () => {
     const user = await createRegularUser(app, 'retry@example.com');
     const fileId = await uploadFile(user.token);
     await setProfileImage(user.token, fileId).expect(200);
+    const before = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+    });
 
     const res = await setProfileImage(user.token, fileId).expect(200);
     expect((res.body.profileImage as ProfileImageBody).id).toBe(fileId);
+    expect(await fileStatus(fileId)).toBe(FileAssetStatus.ATTACHED);
+    const after = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+    });
+    expect(after.updatedAt).toEqual(before.updatedAt);
+  });
+
+  // A uuid means the same file in any case; the database spells it in lower.
+  it('treats the current picture sent in upper case as the same picture', async () => {
+    const user = await createRegularUser(app, 'retry-case@example.com');
+    const fileId = await uploadFile(user.token);
+    await setProfileImage(user.token, fileId).expect(200);
+    const before = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+    });
+
+    const res = await setProfileImage(user.token, fileId.toUpperCase()).expect(
+      200,
+    );
+    expect((res.body.profileImage as ProfileImageBody).id).toBe(fileId);
+    const after = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+    });
+    expect(after.updatedAt).toEqual(before.updatedAt);
     expect(await fileStatus(fileId)).toBe(FileAssetStatus.ATTACHED);
   });
 
@@ -206,10 +305,18 @@ describe('Profile image (e2e)', () => {
     const owner = await createRegularUser(app, 'owner@example.com');
     const thief = await createRegularUser(app, 'thief@example.com');
     const fileId = await uploadFile(owner.token);
+    const thiefPicture = await uploadFile(thief.token);
+    await setProfileImage(thief.token, thiefPicture).expect(200);
 
     const res = await setProfileImage(thief.token, fileId).expect(404);
     expect(res.body.errorCode).toBe('RESOURCE_NOT_FOUND');
     expect(await fileStatus(fileId)).toBe(FileAssetStatus.READY);
+    // The refused change left the current picture as it was (AC2).
+    const row = await prisma.user.findUniqueOrThrow({
+      where: { id: thief.id },
+    });
+    expect(row.profileImageFileId).toBe(thiefPicture);
+    expect(await fileStatus(thiefPicture)).toBe(FileAssetStatus.ATTACHED);
 
     // Indistinguishable from an id that does not exist at all.
     const unknown = await setProfileImage(
@@ -221,17 +328,39 @@ describe('Profile image (e2e)', () => {
 
   it('refuses a file uploaded for another purpose with 404', async () => {
     const user = await createRegularUser(app, 'purpose@example.com');
+    const pictureId = await uploadFile(user.token);
+    await setProfileImage(user.token, pictureId).expect(200);
     const documentId = await uploadFile(user.token, 'document', buildPdf());
 
     const res = await setProfileImage(user.token, documentId).expect(404);
     expect(res.body.errorCode).toBe('RESOURCE_NOT_FOUND');
     expect(await fileStatus(documentId)).toBe(FileAssetStatus.READY);
+    const row = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(row.profileImageFileId).toBe(pictureId);
+    expect(await fileStatus(pictureId)).toBe(FileAssetStatus.ATTACHED);
   });
 
-  it('refuses a profileImageFileId that is not a uuid with 400', async () => {
+  it('refuses a fileId that is missing or not a uuid with 400', async () => {
     const user = await createRegularUser(app, 'baduuid@example.com');
     const res = await setProfileImage(user.token, 'not-a-uuid').expect(400);
     expect(res.body.errorCode).toBe('VALIDATION_FAILED');
+
+    const empty = await request(app.getHttpServer())
+      .put('/api/users/me/profile-image')
+      .set('Authorization', `Bearer ${user.token}`)
+      .send({})
+      .expect(400);
+    expect(empty.body.errorCode).toBe('VALIDATION_FAILED');
+  });
+
+  it('refuses setting or removing a picture when signed out', async () => {
+    await request(app.getHttpServer())
+      .put('/api/users/me/profile-image')
+      .send({ fileId: '00000000-0000-4000-8000-000000000000' })
+      .expect(401);
+    await request(app.getHttpServer())
+      .delete('/api/users/me/profile-image')
+      .expect(401);
   });
 
   describe('races', () => {
@@ -447,7 +576,7 @@ describe('Profile image (e2e)', () => {
     const user = await createRegularUser(app, 'sign-outage@example.com');
     const fileId = await uploadFile(user.token);
     await setProfileImage(user.token, fileId).expect(200);
-    storage.isSignFailing = true;
+    await startSignOutage(app, storage);
 
     const login = await request(app.getHttpServer())
       .post('/api/auth/login')
@@ -473,7 +602,7 @@ describe('Profile image (e2e)', () => {
     const user = await createRegularUser(app, 'pw-sign@example.com');
     const fileId = await uploadFile(user.token);
     await setProfileImage(user.token, fileId).expect(200);
-    storage.isSignFailing = true;
+    await startSignOutage(app, storage);
 
     const res = await request(app.getHttpServer())
       .patch('/api/users/me/password')
@@ -535,7 +664,7 @@ describe('Profile image (e2e)', () => {
     const paused = pauseBefore(app.get(UsersService), 'findById');
     try {
       const edit = Promise.allSettled([
-        setProfileImage(user.token, undefined, { firstName: 'Restored' }),
+        editProfile(user.token, { firstName: 'Restored' }),
       ]);
       await paused.reached;
       await request(app.getHttpServer())
@@ -553,6 +682,44 @@ describe('Profile image (e2e)', () => {
     }
     const row = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
     expect(row.firstName).toBe('Deleted');
+  });
+
+  // The same for a picture change, truly interleaved: the erasure holds the
+  // user row when the change arrives, so the change waits on the lock, and
+  // once the erasure commits its re-read under the lock finds the account
+  // gone. A change that read before locking would attach a picture to the
+  // anonymised row.
+  it('refuses a picture change that waited on an erasure', async () => {
+    const user = await createRegularUser(app, 'erase-pic-race@example.com');
+    const fileId = await uploadFile(user.token);
+    // Inside the erasure's transaction, after it locked the user row.
+    const paused = pauseBefore(
+      app.get(RefreshTokenService),
+      'endAllSessionsInTransaction',
+    );
+    try {
+      const erase = request(app.getHttpServer())
+        .post('/api/users/me/gdpr-erase')
+        .set('Authorization', `Bearer ${user.token}`)
+        .send({ currentPassword: TEST_PASSWORD })
+        .then((response) => response);
+      await paused.reached;
+      const change = Promise.allSettled([setProfileImage(user.token, fileId)]);
+      // The change is provably parked on the erasure's user row lock.
+      await waitForLockWaiter();
+      paused.release();
+      const [eraseResult, [changeResult]] = await Promise.all([erase, change]);
+      expect(eraseResult.status).toBe(204);
+      expect(
+        (changeResult as PromiseFulfilledResult<request.Response>).value.status,
+      ).toBe(404);
+    } finally {
+      paused.restore();
+    }
+    const row = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(row.profileImageFileId).toBeNull();
+    // Erasure released every unattached upload, this one included.
+    expect(await fileStatus(fileId)).toBe(FileAssetStatus.DELETING);
   });
 
   it('GDPR erase releases the picture and every unattached upload', async () => {

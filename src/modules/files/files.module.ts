@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MulterModule } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
+import { SignedReadUrlCacheModule } from '../../common/storage/signed-read-url-cache.module';
 import { FileCleanupHandler } from './file-cleanup.handler';
 import { FileProcessor } from './file-processor';
 import { FilesController } from './files.controller';
@@ -9,6 +10,8 @@ import { FilesService } from './files.service';
 
 @Module({
   imports: [
+    // Pictures are signed for every page that shows them.
+    SignedReadUrlCacheModule,
     // Applies to every `FileInterceptor` in this module. The limits are what
     // stop a request from costing more than one bounded file: multer aborts
     // the stream the moment any is exceeded, before the rest is read.

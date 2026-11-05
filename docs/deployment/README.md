@@ -467,7 +467,8 @@ recovers most of that 80 MB.
 | `gcs`, `azure` | **Construction only.** The selection switch and the client options are covered; `save`, `delete` and `createSignedReadUrl` have never executed against Google or Azure. Verify against a real bucket before relying on either — particularly `createSignedReadUrl`, which needs `roles/iam.serviceAccountTokenCreator` and the IAM Service Account Credentials API on GCS ("Google Cloud VM" in the object storage contract above) and `Storage Blob Data Contributor` on Azure. |
 | `stub` | Fully covered; persists nothing. |
 
-Every provider's calls are bounded by `STORAGE_REQUEST_TIMEOUT_MS` (default 15s).
+Every provider's calls, signing a read URL included, are bounded by
+`STORAGE_REQUEST_TIMEOUT_MS` (default 15s; boot refuses a value outside 1s–120s).
 The failure that bounds is a SLOW backend rather than a dead one: an upload
 awaiting a hung request keeps its Postgres connection checked out, so a stalled
 bucket would otherwise saturate `DATABASE_POOL_MAX` and fail requests that never

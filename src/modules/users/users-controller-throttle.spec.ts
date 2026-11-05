@@ -26,6 +26,15 @@ describe('UsersController throttles', () => {
     },
   );
 
+  // Each replace releases the old picture, which the cleanup job then deletes
+  // from storage: the same ceiling as the upload that precedes it.
+  it.each(['setAuthUserProfileImage', 'removeAuthUserProfileImage'] as const)(
+    '%s allows 30 calls a minute, like POST /files',
+    (handlerName) => {
+      expect(limitOf(handlerName)).toBe(30);
+    },
+  );
+
   it.each(['create', 'updatePassword'] as const)(
     '%s hashes a password and allows 20 calls a minute',
     (handlerName) => {

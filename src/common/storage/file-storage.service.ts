@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { withTimeout } from '../util/promise-timeout.util';
 import { resolveSignedUrlTtlSeconds } from '../util/signed-url-ttl.util';
 import { buildObjectName } from '../util/storage-object-name.util';
 import {
@@ -35,6 +36,7 @@ export interface SignedReadUrl {
 @Injectable()
 export class FileStorageService {
   private readonly defaultSignedUrlTtlSeconds: number;
+  private readonly requestTimeoutMs: number;
 
   constructor(
     @Inject(FILE_STORAGE_ADAPTER) private readonly adapter: FileStorageAdapter,
@@ -42,6 +44,9 @@ export class FileStorageService {
   ) {
     this.defaultSignedUrlTtlSeconds = configService.getOrThrow<number>(
       'storage.signedUrlTtlSeconds',
+    );
+    this.requestTimeoutMs = configService.getOrThrow<number>(
+      'storage.requestTimeoutMs',
     );
   }
 
@@ -76,6 +81,11 @@ export class FileStorageService {
    * The lifetime is clamped centrally (`resolveSignedUrlTtlSeconds`), so a call
    * site cannot mint a long-lived one by passing a large number. `expiresAt`
    * tells the client when to ask again.
+   *
+   * Bounded by `storage.requestTimeoutMs`, like every other storage call: on
+   * GCS a signature is a remote IAM `signBlob` request that the SDK sends with
+   * no timeout of its own, and a slow (not dead) IAM must cost a missing
+   * picture, not a hung page.
    */
   async createSignedReadUrl(
     storageKey: string,
@@ -88,9 +98,10 @@ export class FileStorageService {
     // Stamped BEFORE signing, so the reported expiry is never later than the
     // signature's own — a client refreshing at `expiresAt` is never late.
     const expiresAt = new Date(Date.now() + effectiveTtlSeconds * 1000);
-    const url = await this.adapter.createSignedReadUrl(
-      storageKey,
-      effectiveTtlSeconds,
+    const url = await withTimeout(
+      this.adapter.createSignedReadUrl(storageKey, effectiveTtlSeconds),
+      this.requestTimeoutMs,
+      `Signing a read URL timed out after ${this.requestTimeoutMs} ms`,
     );
     return { url, expiresAt };
   }

@@ -5,11 +5,11 @@ import { FileKind } from '../../../common/enums/file-kind.enum';
 import { FilePurpose } from '../../../common/enums/file-purpose.enum';
 
 /**
- * A file just uploaded. Reference `id` in a JSON create or update request to
- * attach it, before `expiresAt`.
+ * A file just uploaded. Reference `id` in a JSON request to attach it, before
+ * `expiresAt`.
  */
 export class UploadedFileResponseDto {
-  /** Send this id to attach the file (e.g. `profileImageFileId`). */
+  /** Send this id to attach the file (e.g. `fileId` on `PUT /users/me/profile-image`). */
   id!: string;
   @ApiProperty({ enum: FilePurpose })
   purpose!: FilePurpose;

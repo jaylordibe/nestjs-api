@@ -1,3 +1,6 @@
+import type { INestApplication } from '@nestjs/common';
+import { RedisService } from '../../src/common/redis/redis.service';
+import { SIGNED_READ_URL_CACHE_PREFIX } from '../../src/common/storage/signed-read-url-cache.service';
 import type {
   FileStorageAdapter,
   ObjectContent,
@@ -51,4 +54,17 @@ export class RecordingStorageAdapter implements FileStorageAdapter {
     this.isDeleteFailing = false;
     this.isSignFailing = false;
   }
+}
+
+// A storage outage as a request first meets it: signing fails, and no URL
+// signed before the outage is still cached (`SignedReadUrlCacheService`), so
+// every picture in the next response has to be signed — and fails.
+export async function startSignOutage(
+  app: INestApplication,
+  storage: RecordingStorageAdapter,
+): Promise<void> {
+  storage.isSignFailing = true;
+  const redis = app.get(RedisService).client;
+  const cached = await redis.keys(`${SIGNED_READ_URL_CACHE_PREFIX}*`);
+  if (cached.length > 0) await redis.del(...cached);
 }

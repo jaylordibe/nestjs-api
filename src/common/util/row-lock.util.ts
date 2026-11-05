@@ -88,7 +88,7 @@ import type { Prisma } from '@prisma/client';
  * `workspace_memberships` under the workspace lock and never touch invitations.
  *
  * `file_assets` rows are locked **last**, after every parent lock the attach
- * or release takes: the user row (`UsersService.updateInfo`; `gdprErase`, after
+ * or release takes: the user row (`UsersService.setProfileImage`; `gdprErase`, after
  * its workspace locks), or the record a fork attaches files to (a gallery under
  * its parent's lock). Nothing that holds a file row goes on to request a
  * parent, so an erasure and an attach under a workspace lock cannot wait on

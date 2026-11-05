@@ -843,12 +843,9 @@ export class UsersService {
   ): Promise<User> {
     await this.findById(userId);
     return this.prisma.$transaction(async (transaction) => {
-      // The user row first (`row-lock.util.ts` order): two concurrent picture
-      // changes must not both read the same "current" file — the loser's
-      // replacement would never be released.
-      await lockUserRow(transaction, userId);
-      // Re-read under the lock: an erasure that committed while this request
+      // Lock, then re-read: an erasure that committed while this request
       // waited must not have its anonymised row written back over.
+      await lockUserRow(transaction, userId);
       const lockedUser = await transaction.user.findFirst({
         where: { id: userId, deletedAt: null },
         select: { id: true },
@@ -856,12 +853,6 @@ export class UsersService {
       if (!lockedUser) {
         throw Errors.resourceNotFound('User');
       }
-      const profileImageChange = await this.applyProfileImageChange(
-        transaction,
-        userId,
-        dto.profileImageFileId,
-        actorId,
-      );
       return transaction.user.update({
         where: { id: userId },
         data: {
@@ -872,46 +863,62 @@ export class UsersService {
           gender: dto.gender,
           birthday: dto.birthday,
           timezone: dto.timezone,
-          ...profileImageChange,
           updatedBy: actorId,
         },
       });
     });
   }
 
-  // Omitted → no change. The current id again → no change (a client retrying
-  // a request that already succeeded). Otherwise claim the new file — which
-  // must be the actor's own unattached `profile_image` upload — and release
-  // the one it replaces, in the caller's transaction.
-  private async applyProfileImageChange(
-    transaction: Prisma.TransactionClient,
+  /**
+   * Sets (`fileId`), replaces, or removes (`null`) the person's picture, and
+   * nothing else on their profile. The new file must be the actor's own
+   * unattached `profile_image` upload; the one it replaces is released in the
+   * same transaction, so no replaced file stays attached. The current picture
+   * again — including no picture when there is none — writes nothing at all (a
+   * client retrying a request that already succeeded).
+   */
+  async setProfileImage(
     userId: string,
-    requestedFileId: string | null | undefined,
+    fileId: string | null,
     actorId: string,
-  ): Promise<{ profileImageFileId?: string | null }> {
-    if (requestedFileId === undefined) return {};
-    const { profileImageFileId: currentFileId } =
-      await transaction.user.findUniqueOrThrow({
-        where: { id: userId },
-        select: { profileImageFileId: true },
+  ): Promise<User> {
+    return this.prisma.$transaction(async (transaction) => {
+      // The user row first (`row-lock.util.ts` order): two concurrent changes
+      // must not both read the same "current" file — the loser's replacement
+      // would never be released. Then re-read under the lock: an erasure that
+      // committed while this request waited must not get a picture attached.
+      await lockUserRow(transaction, userId);
+      const lockedUser = await transaction.user.findFirst({
+        where: { id: userId, deletedAt: null },
       });
-    if (requestedFileId === currentFileId) return {};
+      if (!lockedUser) {
+        throw Errors.resourceNotFound('User');
+      }
+      const currentFileId = lockedUser.profileImageFileId;
+      // Postgres returns a uuid in lower case; a client may send it in any.
+      const requestedFileId = fileId?.toLowerCase() ?? null;
+      if (requestedFileId === currentFileId) return lockedUser;
 
-    if (requestedFileId !== null) {
-      await this.filesService.claimForAttachment(transaction, {
-        fileId: requestedFileId,
-        actorId,
-        purpose: FilePurpose.PROFILE_IMAGE,
+      if (requestedFileId !== null) {
+        await this.filesService.claimForAttachment(transaction, {
+          fileId: requestedFileId,
+          actorId,
+          purpose: FilePurpose.PROFILE_IMAGE,
+        });
+      }
+      if (currentFileId) {
+        await this.filesService.markDeleting(transaction, [currentFileId]);
+      }
+      return transaction.user.update({
+        where: { id: userId },
+        data: { profileImageFileId: requestedFileId, updatedBy: actorId },
       });
-    }
-    if (currentFileId) {
-      await this.filesService.markDeleting(transaction, [currentFileId]);
-    }
-    return { profileImageFileId: requestedFileId };
+    });
   }
 
   /**
-   * The API shape of a user, with a freshly signed profile-picture URL.
+   * The API shape of a user, with a signed profile-picture URL
+   * (`FilesService.findAttachedResponses`).
    * **Only for a user the caller was authorized to read** — the URL is a
    * bearer credential for the picture. Never fails for a storage problem: the
    * picture is then null (see `FilesService.findAttachedResponses`).

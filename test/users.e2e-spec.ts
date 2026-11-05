@@ -466,9 +466,9 @@ describe('Users (e2e)', () => {
     });
 
     // Profile images are uploaded files now (`POST /files`, then
-    // `PATCH /users/me { profileImageFileId }`). The URL route and field are
-    // gone, and a client still sending them gets a clear refusal rather than a
-    // silently ignored field.
+    // `PUT /users/me/profile-image { fileId }`). The old URL-taking PATCH on
+    // that path is gone, and a client still sending it gets a clear refusal
+    // rather than a silently ignored field.
     it('no longer serves PATCH /api/users/me/profile-image', async () => {
       const { token } = await registerVerifiedUser(app);
       await request(app.getHttpServer())

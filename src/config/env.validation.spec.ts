@@ -516,6 +516,19 @@ describe('env.validation cross-field rules', () => {
       const { value } = validate({}) as { value: Record<string, unknown> };
       expect(value.STORAGE_SIGNED_URL_TTL_SECONDS).toBe(300);
     });
+
+    // It bounds every storage call, signing included: a value read as a few
+    // milliseconds ("15s" parses as 15) would fail nearly every picture.
+    it('bounds the storage request timeout', () => {
+      for (const value of ['abc', 500, 600_000]) {
+        expect(
+          validate({ STORAGE_REQUEST_TIMEOUT_MS: value }).error?.message,
+        ).toContain('STORAGE_REQUEST_TIMEOUT_MS');
+      }
+
+      const { value } = validate({}) as { value: Record<string, unknown> };
+      expect(value.STORAGE_REQUEST_TIMEOUT_MS).toBe(15_000);
+    });
   });
 
   describe('test environment', () => {

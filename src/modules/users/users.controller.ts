@@ -9,6 +9,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   Req,
 } from '@nestjs/common';
@@ -36,6 +37,7 @@ import { GdprEraseDto } from './dto/gdpr-erase.dto';
 import { RequestPasswordResetDto } from './dto/request-password-reset.dto';
 import { RequestPhoneVerificationDto } from './dto/request-phone-verification.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { SetProfileImageDto } from './dto/set-profile-image.dto';
 import { UpdateAuthUserEmailDto } from './dto/update-auth-user-email.dto';
 import { UpdateAuthUserInfoDto } from './dto/update-auth-user-info.dto';
 import { UpdateAuthUserPasswordDto } from './dto/update-auth-user-password.dto';
@@ -118,6 +120,42 @@ export class UsersController {
     const user = await this.usersService.updateInfo(
       currentUser.id,
       dto,
+      currentUser.id,
+    );
+    return this.usersService.toResponse(user);
+  }
+
+  // The picture saves on its own, never with the profile form. Each change
+  // releases the picture it replaces, which the cleanup job deletes from
+  // storage, so it gets the same ceiling as the upload before it (`POST
+  // /files`) — per user (UserAwareThrottlerGuard).
+  @Put('me/profile-image')
+  @RequirePermission('update', 'User')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @ApiOkResponse({ type: UserResponseDto })
+  async setAuthUserProfileImage(
+    @Body() dto: SetProfileImageDto,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ): Promise<UserResponseDto> {
+    const user = await this.usersService.setProfileImage(
+      currentUser.id,
+      dto.fileId,
+      currentUser.id,
+    );
+    return this.usersService.toResponse(user);
+  }
+
+  // Answers the person with no picture, whether or not they had one.
+  @Delete('me/profile-image')
+  @RequirePermission('update', 'User')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @ApiOkResponse({ type: UserResponseDto })
+  async removeAuthUserProfileImage(
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ): Promise<UserResponseDto> {
+    const user = await this.usersService.setProfileImage(
+      currentUser.id,
+      null,
       currentUser.id,
     );
     return this.usersService.toResponse(user);

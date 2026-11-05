@@ -1,7 +1,9 @@
 import { PickType } from '@nestjs/swagger';
-import { IsOptional, IsUUID } from 'class-validator';
 import { UpdateUserDto } from './update-user.dto';
 
+// The profile picture is not here: it saves on its own, through
+// `PUT`/`DELETE /users/me/profile-image`, so an unsaved profile form never
+// holds back or loses a picture change.
 export class UpdateAuthUserInfoDto extends PickType(UpdateUserDto, [
   'firstName',
   'middleName',
@@ -10,14 +12,4 @@ export class UpdateAuthUserInfoDto extends PickType(UpdateUserDto, [
   'gender',
   'birthday',
   'timezone',
-] as const) {
-  /**
-   * The profile picture, as the `id` returned by `POST /files` with
-   * `purpose: profile_image`. Omit to leave it unchanged, send `null` to remove
-   * it, send an id to set or replace it. The file must be your own upload and
-   * not yet attached; re-sending the id of the current picture changes nothing.
-   */
-  @IsOptional()
-  @IsUUID()
-  profileImageFileId?: string | null;
-}
+] as const) {}

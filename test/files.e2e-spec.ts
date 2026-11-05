@@ -570,9 +570,9 @@ describe('Files (e2e)', () => {
       const user = await createRegularUser(app, 'attached@example.com');
       const fileId = await uploaded(user.token);
       await request(app.getHttpServer())
-        .patch('/api/users/me')
+        .put('/api/users/me/profile-image')
         .set('Authorization', `Bearer ${user.token}`)
-        .send({ profileImageFileId: fileId })
+        .send({ fileId: fileId })
         .expect(200);
 
       const res = await release(user.token, fileId).expect(409);
@@ -609,9 +609,9 @@ describe('Files (e2e)', () => {
       const ready = await uploaded(owner.token);
       const attached = await uploaded(owner.token);
       await request(app.getHttpServer())
-        .patch('/api/users/me')
+        .put('/api/users/me/profile-image')
         .set('Authorization', `Bearer ${owner.token}`)
-        .send({ profileImageFileId: attached })
+        .send({ fileId: attached })
         .expect(200);
       const released = await uploaded(owner.token);
       await release(owner.token, released).expect(204);

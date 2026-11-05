@@ -502,6 +502,16 @@ export const envValidationSchema = Joi.object({
     .max(3600)
     .default(300),
 
+  // The ceiling on every storage call — an upload, a delete, a signature. At
+  // least a second ("15s" would parse as 15 ms and fail nearly every call), at
+  // most two minutes (an upload waits inside it holding a database
+  // connection).
+  STORAGE_REQUEST_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .max(120_000)
+    .default(15_000),
+
   // S3 and S3-compatible (AWS S3, Cloudflare R2, DigitalOcean Spaces, MinIO).
   STORAGE_S3_BUCKET: Joi.string().when('STORAGE_PROVIDER', {
     is: 's3',
