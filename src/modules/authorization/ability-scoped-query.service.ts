@@ -106,7 +106,7 @@ export class AbilityScopedQueryService {
   }
 
   /**
-   * `buildWhere` for endpoints marked `@RequirePermission(..., { denyAsNotFound: true })`:
+   * `buildWhere` for endpoints marked `@RequirePermission(..., { isDeniedAsNotFound: true })`:
    * holding no grant yields a filter that matches nothing, rather than a 403.
    * A list returns `200 []`; a record lookup returns 404.
    *
@@ -138,7 +138,7 @@ export class AbilityScopedQueryService {
   /**
    * For a workspace-level collection reached by `:workspaceId` with no record
    * to load first — a list, a create: 404 unless the ability's `action` on
-   * `subject` reaches that workspace. The guard, under `denyAsNotFound`, lets
+   * `subject` reaches that workspace. The guard, under `isDeniedAsNotFound`, lets
    * an outsider through to here precisely so the answer is "no such
    * workspace" rather than a 403 that confirms it.
    *

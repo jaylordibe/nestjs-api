@@ -61,11 +61,13 @@ export class WorkspaceMembershipsController {
     );
   }
 
-  // `denyAsNotFound`: a caller with no readable membership here gets an empty
+  // `isDeniedAsNotFound`: a caller with no readable membership here gets an empty
   // page rather than a 403, so the response cannot be used to probe which
   // workspaces exist.
   @Get()
-  @RequirePermission('read', 'WorkspaceMembership', { denyAsNotFound: true })
+  @RequirePermission('read', 'WorkspaceMembership', {
+    isDeniedAsNotFound: true,
+  })
   @ApiPaginatedResponse(WorkspaceMembershipResponseDto)
   async findPaginated(
     @Param('workspaceId', ParseUUIDPipe) workspaceId: string,
@@ -84,7 +86,9 @@ export class WorkspaceMembershipsController {
   }
 
   @Get(':membershipId')
-  @RequirePermission('read', 'WorkspaceMembership', { denyAsNotFound: true })
+  @RequirePermission('read', 'WorkspaceMembership', {
+    isDeniedAsNotFound: true,
+  })
   @ApiOkResponse({ type: WorkspaceMembershipResponseDto })
   async findById(
     @Param('workspaceId', ParseUUIDPipe) workspaceId: string,

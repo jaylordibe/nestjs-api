@@ -1,7 +1,6 @@
--- Stored files (`file_assets`) and the user's profile image as a reference to one.
--- AlterTable
-ALTER TABLE "users" ADD COLUMN     "profile_image_file_id" UUID;
-
+-- `file_assets`. Stored files, and the foreign key from the user's profile
+-- image (`users.profile_image_file_asset_id`, declared in the users migration)
+-- to one, added here because this table is created after `users`.
 -- CreateTable
 CREATE TABLE "file_assets" (
     "id" UUID NOT NULL,
@@ -33,11 +32,8 @@ CREATE INDEX "file_assets_status_expires_at_idx" ON "file_assets"("status", "exp
 -- CreateIndex
 CREATE INDEX "file_assets_uploaded_by_status_idx" ON "file_assets"("uploaded_by", "status");
 
--- CreateIndex
-CREATE UNIQUE INDEX "users_profile_image_file_id_key" ON "users"("profile_image_file_id");
-
 -- AddForeignKey
-ALTER TABLE "users" ADD CONSTRAINT "users_profile_image_file_id_fkey" FOREIGN KEY ("profile_image_file_id") REFERENCES "file_assets"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "users" ADD CONSTRAINT "users_profile_image_file_asset_id_fkey" FOREIGN KEY ("profile_image_file_asset_id") REFERENCES "file_assets"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "file_assets" ADD CONSTRAINT "file_assets_uploaded_by_fkey" FOREIGN KEY ("uploaded_by") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

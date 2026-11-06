@@ -163,7 +163,7 @@ All are read-only and idempotent. `tools/list` returns them in this order.
 |---|---|---|
 | `ping` | none | `{ "success": true, "message": "pong" }` |
 | `echo` | `{ "message": string }` — 1–1000 chars, not only whitespace, no other keys | `{ "success": true, "message": <same string> }` |
-| `get_server_info` | none | `{ "name": <package.json name>, "mcp": true, "status": "ready", "version": <package.json version> }` |
+| `get_server_info` | none | `{ "name": <package.json name>, "isMcpEnabled": true, "status": "ready", "version": <package.json version> }` |
 | `get_current_user` | none | `{ "id": <user id>, "email": <email>, "roles": [<platform role names>] }` — the signed-in user |
 
 Each result also carries the same JSON as a text `content` block. Invalid

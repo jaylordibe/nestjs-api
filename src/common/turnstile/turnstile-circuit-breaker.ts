@@ -48,7 +48,7 @@ export interface ProviderFailureOutcome {
   readonly isBypassActive: boolean;
   // This failure opened the breaker — announce the episode once, not on every
   // bypassed request.
-  readonly hasJustOpened: boolean;
+  readonly isNewlyOpened: boolean;
 }
 
 export class TurnstileCircuitBreaker {
@@ -82,7 +82,7 @@ export class TurnstileCircuitBreaker {
     this.consecutiveProviderFailures += 1;
 
     if (this.consecutiveProviderFailures < PROVIDER_FAILURE_THRESHOLD) {
-      return { isBypassActive: false, hasJustOpened: false };
+      return { isBypassActive: false, isNewlyOpened: false };
     }
 
     this.openUntilMilliseconds = nowMilliseconds + OPEN_WINDOW_MILLISECONDS;
@@ -91,7 +91,7 @@ export class TurnstileCircuitBreaker {
       // Exactly at the threshold starts an episode. A failed half-open probe
       // re-opens the breaker but keeps counting up, so a long outage announces
       // once; `recordProviderSuccess` resets the count for the next episode.
-      hasJustOpened:
+      isNewlyOpened:
         this.consecutiveProviderFailures === PROVIDER_FAILURE_THRESHOLD,
     };
   }

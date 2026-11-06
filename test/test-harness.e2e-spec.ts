@@ -49,7 +49,7 @@ describe('E2E harness invariants', () => {
   // claim are asserted against real Redis in `queue.e2e-spec.ts`.
   it('runs no queue worker, so nothing consumes jobs mid-assertion', () => {
     expect(
-      app.get(ConfigService).getOrThrow<boolean>('queue.workerEnabled'),
+      app.get(ConfigService).getOrThrow<boolean>('queue.isWorkerEnabled'),
     ).toBe(false);
   });
 });

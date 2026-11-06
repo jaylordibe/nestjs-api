@@ -34,7 +34,7 @@ describe('TurnstileCircuitBreaker', () => {
     ) {
       expect(breaker.recordProviderFailure(startMilliseconds)).toEqual({
         isBypassActive: false,
-        hasJustOpened: false,
+        isNewlyOpened: false,
       });
     }
     expect(breaker.shouldBypass(startMilliseconds)).toBe(false);
@@ -46,11 +46,11 @@ describe('TurnstileCircuitBreaker', () => {
 
     expect(breaker.recordProviderFailure(startMilliseconds)).toEqual({
       isBypassActive: true,
-      hasJustOpened: true,
+      isNewlyOpened: true,
     });
     expect(breaker.recordProviderFailure(startMilliseconds + 1_000)).toEqual({
       isBypassActive: true,
-      hasJustOpened: false,
+      isNewlyOpened: false,
     });
   });
 
@@ -96,7 +96,7 @@ describe('TurnstileCircuitBreaker', () => {
       FAILURE_MEMORY_MILLISECONDS;
     expect(breaker.recordProviderFailure(lateProbe)).toEqual({
       isBypassActive: true,
-      hasJustOpened: false,
+      isNewlyOpened: false,
     });
   });
 
@@ -137,7 +137,7 @@ describe('TurnstileCircuitBreaker', () => {
     recordFailures(breaker, PROVIDER_FAILURE_THRESHOLD - 2, hoursLater);
     expect(breaker.recordProviderFailure(hoursLater)).toEqual({
       isBypassActive: true,
-      hasJustOpened: true,
+      isNewlyOpened: true,
     });
   });
 
@@ -148,7 +148,7 @@ describe('TurnstileCircuitBreaker', () => {
 
     expect(breaker.recordProviderFailure(probeMilliseconds)).toEqual({
       isBypassActive: true,
-      hasJustOpened: false,
+      isNewlyOpened: false,
     });
     expect(
       breaker.shouldBypass(probeMilliseconds + OPEN_WINDOW_MILLISECONDS - 1),

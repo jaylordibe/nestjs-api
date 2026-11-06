@@ -232,7 +232,7 @@ export class TurnstileService {
       throw Errors.externalServiceUnavailable(UNAVAILABLE_MESSAGE);
     }
 
-    if (outcome.hasJustOpened) {
+    if (outcome.isNewlyOpened) {
       this.logger.error(
         `Turnstile DEGRADED: ${PROVIDER_FAILURE_THRESHOLD} consecutive no-answers ` +
           `(${reason}). Skipping verification of token-bearing requests until ` +

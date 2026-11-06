@@ -117,7 +117,7 @@ describe('FileStorageModule provider selection', () => {
       'storage.s3.bucket': 'uploads',
       'storage.s3.region': 'us-east-1',
       'storage.s3.endpoint': 'http://minio:9000',
-      'storage.s3.forcePathStyle': true,
+      'storage.s3.isPathStyleForced': true,
     });
 
     expect(service.providerName).toBe('s3');

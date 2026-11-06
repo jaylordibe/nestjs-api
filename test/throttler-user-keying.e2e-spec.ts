@@ -33,14 +33,14 @@ const REQUEST_LIMIT = 2;
 @Controller('probe')
 class ProbeController {
   @Get()
-  ping(): { ok: true } {
-    return { ok: true };
+  ping(): { isOk: true } {
+    return { isOk: true };
   }
 
   @Public()
   @Get('public')
-  publicPing(): { ok: true } {
-    return { ok: true };
+  publicPing(): { isOk: true } {
+    return { isOk: true };
   }
 }
 

@@ -123,7 +123,7 @@ export class WorkspacesService {
 
   // Lists only the workspaces the caller may `read`: their own memberships,
   // or every workspace for a platform admin (`manage all` widens the filter to
-  // nothing). No `@RequirePermission(..., { administrative: true })` needed —
+  // nothing). No `@RequirePermission(..., { isAdministrative: true })` needed —
   // the query does the scoping.
   async findPaginated(
     query: MetaQueryDto,

@@ -44,14 +44,14 @@ export class QueueAdminController {
   constructor(private readonly service: QueueAdminService) {}
 
   @Get()
-  @RequirePermission('read', 'QueueJob', { administrative: true })
+  @RequirePermission('read', 'QueueJob', { isAdministrative: true })
   @ApiOkResponse({ type: [QueueSummaryDto] })
   async summarize(): Promise<QueueSummaryDto[]> {
     return this.service.summarize();
   }
 
   @Get(':queue/jobs/:jobId')
-  @RequirePermission('read', 'QueueJob', { administrative: true })
+  @RequirePermission('read', 'QueueJob', { isAdministrative: true })
   @ApiOkResponse({ type: QueueJobResponseDto })
   async findById(
     @Param('queue', new ParseEnumPipe(QueueName)) queue: QueueName,
@@ -62,7 +62,7 @@ export class QueueAdminController {
   }
 
   @Post(':queue/jobs/:jobId/retry')
-  @RequirePermission('retry', 'QueueJob', { administrative: true })
+  @RequirePermission('retry', 'QueueJob', { isAdministrative: true })
   @HttpCode(HttpStatus.NO_CONTENT)
   async retry(
     @Param('queue', new ParseEnumPipe(QueueName)) queue: QueueName,
@@ -73,7 +73,7 @@ export class QueueAdminController {
   }
 
   @Delete(':queue/jobs/:jobId')
-  @RequirePermission('cancel', 'QueueJob', { administrative: true })
+  @RequirePermission('cancel', 'QueueJob', { isAdministrative: true })
   @HttpCode(HttpStatus.NO_CONTENT)
   async cancel(
     @Param('queue', new ParseEnumPipe(QueueName)) queue: QueueName,

@@ -47,7 +47,7 @@ export interface AppConfig {
       // Whether to dial over TLS. Must agree with REDIS_URL's scheme — see
       // `common/redis/redis-connection.ts`, which refuses a disagreement rather
       // than picking a winner.
-      enabled: boolean;
+      isEnabled: boolean;
       // PEM-encoded CA bundle. Required for a managed Redis whose server
       // certificate is signed by a private or per-instance CA; omit when the
       // certificate chains to a publicly-trusted root. Certificate
@@ -61,7 +61,7 @@ export interface AppConfig {
     // a process that does consume. That is what lets one image run as an
     // API-only instance, a worker-only instance, or both at once locally.
     // Producing is never gated; only consuming.
-    workerEnabled: boolean;
+    isWorkerEnabled: boolean;
     // Jobs a worker runs at once, per queue. The ops lever for queue backlog —
     // raise it when jobs pile up, lower it when they crowd out HTTP traffic in
     // a combined API+worker process. A queue may pin its own value in
@@ -95,7 +95,7 @@ export interface AppConfig {
     // `audit_logs` — the table an incident responder trusts. Enable ONLY when
     // the origin is provably unreachable except through Cloudflare (an edge or
     // firewall that admits only Cloudflare's ranges).
-    trustHeaders: boolean;
+    isHeaderTrustEnabled: boolean;
   };
   turnstile: {
     // Cloudflare Turnstile secret keys, one per widget: `web` for the website,
@@ -169,7 +169,7 @@ export interface AppConfig {
       endpoint: string | undefined;
       // Path-style addressing (`https://endpoint/bucket/key`). Required by some
       // self-hosted S3-compatible servers.
-      forcePathStyle: boolean;
+      isPathStyleForced: boolean;
     };
     gcs: {
       bucket: string | undefined;
@@ -205,7 +205,7 @@ export interface AppConfig {
     // exists because staging used to be protected by Basic Auth at the reverse
     // proxy, and a staging service on a platform with no proxy in front of it
     // has no such protection — so the switch has to live in the application.
-    enabled: boolean;
+    isEnabled: boolean;
   };
   cors: {
     origin: string;
@@ -313,10 +313,10 @@ export default (): AppConfig => ({
     url: process.env.REDIS_URL!,
     tls: {
       // Trimmed and lowercased rather than compared to a bare 'true', for the
-      // same reason as `queue.workerEnabled` below: Joi's coerced boolean does
+      // same reason as `queue.isWorkerEnabled` below: Joi's coerced boolean does
       // not necessarily reach `process.env`, so the RAW string is what arrives
       // here and ` True ` must not read as false.
-      enabled:
+      isEnabled:
         (process.env.REDIS_TLS_ENABLED ?? 'false').trim().toLowerCase() ===
         'true',
       certificateAuthority: process.env.REDIS_TLS_CA || undefined,
@@ -332,7 +332,7 @@ export default (): AppConfig => ({
     // happily accepts `False` / ` false ` — which an exact `!== 'false'`
     // would read as TRUE, silently starting a worker on an instance meant to
     // be a pure producer.
-    workerEnabled:
+    isWorkerEnabled:
       (process.env.QUEUE_WORKER_ENABLED ?? 'true').trim().toLowerCase() !==
       'false',
     workerConcurrency: parseInt(
@@ -355,7 +355,7 @@ export default (): AppConfig => ({
     ),
   },
   cloudflare: {
-    trustHeaders: process.env.TRUST_CLOUDFLARE_HEADERS === 'true',
+    isHeaderTrustEnabled: process.env.TRUST_CLOUDFLARE_HEADERS === 'true',
   },
   turnstile: {
     webSecretKey: process.env.TURNSTILE_WEB_SECRET?.trim() || undefined,
@@ -407,7 +407,7 @@ export default (): AppConfig => ({
       bucket: process.env.STORAGE_S3_BUCKET || undefined,
       region: process.env.STORAGE_S3_REGION || undefined,
       endpoint: process.env.STORAGE_S3_ENDPOINT || undefined,
-      forcePathStyle:
+      isPathStyleForced:
         (process.env.STORAGE_S3_FORCE_PATH_STYLE ?? 'false')
           .trim()
           .toLowerCase() === 'true',
@@ -441,7 +441,7 @@ export default (): AppConfig => ({
   swagger: {
     // Two independent conditions, and the production one is not a default that
     // can be overridden — it is a floor. An operator can only ever narrow this.
-    enabled:
+    isEnabled:
       (process.env.NODE_ENV ?? 'development') !== 'production' &&
       (process.env.SWAGGER_ENABLED ?? 'true').trim().toLowerCase() !== 'false',
   },

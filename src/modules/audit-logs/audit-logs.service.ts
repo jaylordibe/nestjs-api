@@ -17,7 +17,7 @@ const AUDIT_LOG_SORTABLE_COLUMNS = ['createdAt', 'action'] as const;
 // The composite indexes this relies on — (actorId, createdAt),
 // (targetUserId, createdAt), (action, createdAt), (createdAt) — plus the
 // trigram GIN index on `metadata::text` that backs `?search=`, are all declared
-// in the init migration.
+// in the audit_logs migration.
 @Injectable()
 export class AuditLogsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -87,10 +87,11 @@ export class AuditLogsService {
     }
 
     // Roles ride along on the SAME query as a nested select, not a second
-    // round trip. No `scope` filter is needed: a CHECK constraint in the init
-    // migration makes it impossible for `user_roles` to reference anything but
-    // a PLATFORM role, so filtering here would be re-stating a database
-    // guarantee. Workspace memberships live in `workspace_memberships` and are
+    // round trip. No `scope` filter is needed: `user_roles` only ever holds a
+    // PLATFORM role — `UserRolesService.loadPlatformRole` refuses any other on
+    // the write path, and `AbilityFactory` refuses to compile one that arrives
+    // through it (see the user_roles migration for why this is code, not a
+    // CHECK). Workspace memberships live in `workspace_memberships` and are
     // deliberately not surfaced — a tenant-local role name means nothing
     // without saying which workspace it belongs to.
     const users = await this.prisma.user.findMany({
@@ -193,8 +194,8 @@ export class AuditLogsService {
   // Raw SQL pre-query finding audit-log ids whose serialized metadata contains
   // `term`, case-insensitively.
   //
-  // This is what the pg_trgm GIN index on `(metadata::text)` in the init
-  // migration is FOR. Prisma's own `{ metadata: { string_contains } }` is a
+  // This is what the pg_trgm GIN index on `(metadata::text)` in the
+  // audit_logs migration is FOR. Prisma's own `{ metadata: { string_contains } }` is a
   // JSON-path filter — it tests whether the JSON value at a path is a string
   // containing the term, so against an object-valued `metadata` column it
   // matches nothing at all and never touches the index.

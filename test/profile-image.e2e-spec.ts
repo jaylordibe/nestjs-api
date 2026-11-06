@@ -128,7 +128,7 @@ describe('Profile image (e2e)', () => {
     expect(image.url).toContain('signature=');
     expect(new Date(image.urlExpiresAt).getTime()).toBeGreaterThan(Date.now());
     expect(JSON.stringify(res.body)).not.toMatch(
-      /profileImageFileId|storageKey/,
+      /profileImageFileAssetId|storageKey/,
     );
     expect(await fileStatus(fileId)).toBe(FileAssetStatus.ATTACHED);
 
@@ -153,7 +153,7 @@ describe('Profile image (e2e)', () => {
 
   // The picture saves on its own, so the profile form no longer carries it:
   // one way to change it.
-  it('refuses profileImageFileId on the profile edit with 400 and changes nothing', async () => {
+  it('refuses profileImageFileAssetId on the profile edit with 400 and changes nothing', async () => {
     const user = await createRegularUser(app, 'patch-pic@example.com');
     const currentId = await uploadFile(user.token);
     const nextId = await uploadFile(user.token);
@@ -161,12 +161,12 @@ describe('Profile image (e2e)', () => {
 
     const res = await editProfile(user.token, {
       firstName: 'Renamed',
-      profileImageFileId: nextId,
+      profileImageFileAssetId: nextId,
     }).expect(400);
     expect(res.body.errorCode).toBe('VALIDATION_FAILED');
 
     const row = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
-    expect(row.profileImageFileId).toBe(currentId);
+    expect(row.profileImageFileAssetId).toBe(currentId);
     expect(row.firstName).not.toBe('Renamed');
     expect(await fileStatus(nextId)).toBe(FileAssetStatus.READY);
   });
@@ -193,7 +193,7 @@ describe('Profile image (e2e)', () => {
     // Everything as it was, but the picture and the row's own write stamp.
     expect(after).toEqual({
       ...before,
-      profileImageFileId: fileId,
+      profileImageFileAssetId: fileId,
       updatedAt: after.updatedAt,
     });
   });
@@ -315,7 +315,7 @@ describe('Profile image (e2e)', () => {
     const row = await prisma.user.findUniqueOrThrow({
       where: { id: thief.id },
     });
-    expect(row.profileImageFileId).toBe(thiefPicture);
+    expect(row.profileImageFileAssetId).toBe(thiefPicture);
     expect(await fileStatus(thiefPicture)).toBe(FileAssetStatus.ATTACHED);
 
     // Indistinguishable from an id that does not exist at all.
@@ -336,7 +336,7 @@ describe('Profile image (e2e)', () => {
     expect(res.body.errorCode).toBe('RESOURCE_NOT_FOUND');
     expect(await fileStatus(documentId)).toBe(FileAssetStatus.READY);
     const row = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
-    expect(row.profileImageFileId).toBe(pictureId);
+    expect(row.profileImageFileAssetId).toBe(pictureId);
     expect(await fileStatus(pictureId)).toBe(FileAssetStatus.ATTACHED);
   });
 
@@ -390,7 +390,7 @@ describe('Profile image (e2e)', () => {
       const row = await prisma.user.findUniqueOrThrow({
         where: { id: user.id },
       });
-      expect(row.profileImageFileId).toBeNull();
+      expect(row.profileImageFileAssetId).toBeNull();
       expect(await fileStatus(fileId)).toBeUndefined();
     });
 
@@ -491,7 +491,7 @@ describe('Profile image (e2e)', () => {
       const row = await prisma.user.findUniqueOrThrow({
         where: { id: user.id },
       });
-      expect(row.profileImageFileId).toBeNull();
+      expect(row.profileImageFileAssetId).toBeNull();
     });
 
     // The attach commits first; a cleanup run that read the file as expiring
@@ -515,7 +515,7 @@ describe('Profile image (e2e)', () => {
       const row = await prisma.user.findUniqueOrThrow({
         where: { id: user.id },
       });
-      expect(row.profileImageFileId).toBe(fileId);
+      expect(row.profileImageFileAssetId).toBe(fileId);
     });
 
     // Two pictures set at once. The first request is held after it took the
@@ -563,7 +563,7 @@ describe('Profile image (e2e)', () => {
       const row = await prisma.user.findUniqueOrThrow({
         where: { id: user.id },
       });
-      expect(row.profileImageFileId).toBe(secondId);
+      expect(row.profileImageFileAssetId).toBe(secondId);
       expect(await fileStatus(secondId)).toBe(FileAssetStatus.ATTACHED);
       expect(await fileStatus(firstId)).toBe(FileAssetStatus.DELETING);
     });
@@ -615,7 +615,7 @@ describe('Profile image (e2e)', () => {
 
   // Only the person attaches their own picture: the admin update body does
   // not carry the field at all.
-  it('refuses profileImageFileId on the admin update', async () => {
+  it('refuses profileImageFileAssetId on the admin update', async () => {
     const admin = await createPlatformAdmin(app);
     const user = await createRegularUser(app, 'admin-pic@example.com');
     const fileId = await uploadFile(admin.token);
@@ -623,7 +623,7 @@ describe('Profile image (e2e)', () => {
     const res = await request(app.getHttpServer())
       .patch(`/api/users/${user.id}`)
       .set('Authorization', `Bearer ${admin.token}`)
-      .send({ profileImageFileId: fileId })
+      .send({ profileImageFileAssetId: fileId })
       .expect(400);
     expect(res.body.errorCode).toBe('VALIDATION_FAILED');
   });
@@ -717,7 +717,7 @@ describe('Profile image (e2e)', () => {
       paused.restore();
     }
     const row = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
-    expect(row.profileImageFileId).toBeNull();
+    expect(row.profileImageFileAssetId).toBeNull();
     // Erasure released every unattached upload, this one included.
     expect(await fileStatus(fileId)).toBe(FileAssetStatus.DELETING);
   });
@@ -735,7 +735,7 @@ describe('Profile image (e2e)', () => {
       .expect(204);
 
     const row = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
-    expect(row.profileImageFileId).toBeNull();
+    expect(row.profileImageFileAssetId).toBeNull();
     expect(await fileStatus(pictureId)).toBe(FileAssetStatus.DELETING);
     expect(await fileStatus(pendingId)).toBe(FileAssetStatus.DELETING);
 

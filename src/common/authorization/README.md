@@ -113,7 +113,7 @@ boot-time route audit and the application refuses to start.
 cannot be documented as open. Its arguments are typed, so a typo is a **compile
 error**, not a runtime 403.
 
-### `options.administrative`
+### `options.isAdministrative`
 
 Marks a route that acts on records the caller does not own.
 
@@ -124,7 +124,7 @@ condition. With it, the guard demands a granting rule that is **not**
 owner-conditioned. Tenant-conditioned rules still qualify: a `WORKSPACE_ADMIN`
 administers a roster it does not personally own.
 
-### `options.denyAsNotFound`
+### `options.isDeniedAsNotFound`
 
 Answer a caller holding **no** grant on this subject as though the resource does
 not exist — empty page for a list, 404 for a record — rather than 403.

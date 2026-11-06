@@ -22,7 +22,7 @@ export function registerGetServerInfoTool(
         'Identifies the connected application: its name, release version and MCP status.',
       outputSchema: z.object({
         name: z.string(),
-        mcp: z.literal(true),
+        isMcpEnabled: z.literal(true),
         status: z.literal('ready'),
         version: z.string(),
       }),
@@ -35,7 +35,7 @@ export function registerGetServerInfoTool(
     () =>
       structuredResult({
         name: identity.name,
-        mcp: true as const,
+        isMcpEnabled: true as const,
         status: 'ready' as const,
         version: identity.version,
       }),

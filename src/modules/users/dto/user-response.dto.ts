@@ -43,7 +43,7 @@ export class UserResponseDto {
   @ApiHideProperty() @Exclude() otpHash!: string | null;
   @ApiHideProperty() @Exclude() otpPurpose!: string | null;
   @ApiHideProperty() @Exclude() otpExpiresAt!: Date | null;
-  @ApiHideProperty() @Exclude() profileImageFileId!: string | null;
+  @ApiHideProperty() @Exclude() profileImageFileAssetId!: string | null;
 
   // `profileImage` is required, not defaulted: a call site that forgot it
   // would report every picture as removed. Build through

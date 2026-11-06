@@ -101,7 +101,7 @@ export class PermissionsGuard implements CanActivate {
       throw Errors.permissionDenied('unknown');
     }
 
-    const { action, subject, administrative, denyAsNotFound } = required;
+    const { action, subject, isAdministrative, isDeniedAsNotFound } = required;
 
     // Administrative routes act on records the caller does not own, so an
     // ownership-scoped grant must not unlock them. CASL's type-level check
@@ -112,7 +112,7 @@ export class PermissionsGuard implements CanActivate {
     // roster it does not personally own, and the tenant boundary is enforced
     // in the query.
     if (
-      administrative &&
+      isAdministrative &&
       !this.hasNonOwnerScopedRule(ability, action, subject)
     ) {
       throw Errors.permissionDenied(action, subject);
@@ -154,7 +154,7 @@ export class PermissionsGuard implements CanActivate {
       // only decides which refusal they receive. Without this, the same
       // request would 403 for a user with no workspaces and 404 for a user
       // with one.
-      if (denyAsNotFound) return true;
+      if (isDeniedAsNotFound) return true;
       throw Errors.permissionDenied(action, subject);
     }
     return true;

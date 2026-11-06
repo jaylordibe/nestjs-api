@@ -105,7 +105,7 @@ import { UsersModule } from './modules/users/users.module';
         // Cloudflare's ranges records the IP Express actually saw, rather
         // than one the caller chose for it.
         const trustCloudflareHeaders = configService.getOrThrow<boolean>(
-          'cloudflare.trustHeaders',
+          'cloudflare.isHeaderTrustEnabled',
         );
         return {
           middleware: {

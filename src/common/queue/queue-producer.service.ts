@@ -44,7 +44,7 @@ export interface RescheduleOptions extends EnqueueOptions {
 
 export interface RescheduleResult {
   readonly jobId: string;
-  readonly previousJobRemoved: boolean;
+  readonly isPreviousJobRemoved: boolean;
 }
 
 // The states in which a job has not started and can still be pulled back.
@@ -284,7 +284,7 @@ export class QueueProducerService {
     }
 
     const jobId = await this.enqueueAt(jobName, payload, runAt, options);
-    const previousJobRemoved = await this.cancelPending(
+    const isPreviousJobRemoved = await this.cancelPending(
       jobName,
       options.previousJobId,
     );
@@ -299,12 +299,12 @@ export class QueueProducerService {
       scheduleVersion: payload.scheduleVersion,
       scheduledAt: runAt.toISOString(),
       correlationId: payload.correlationId,
-      reason: previousJobRemoved
+      reason: isPreviousJobRemoved
         ? `superseded ${options.previousJobId}`
         : `could not remove ${options.previousJobId} — it is active, already ran, or is gone; the handler must detect the stale schedule`,
     });
 
-    return { jobId, previousJobRemoved };
+    return { jobId, isPreviousJobRemoved };
   }
 
   private requireJobId(jobId: string | undefined, jobName: JobName): string {

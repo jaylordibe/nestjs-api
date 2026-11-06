@@ -27,9 +27,9 @@ export class OrdersController {
     return new OrderResponseDto(await this.ordersService.create(dto, currentUser.id));
   }
 
-  // `denyAsNotFound`: no grant → an empty page (list) or 404 (record), never 403.
+  // `isDeniedAsNotFound`: no grant → an empty page (list) or 404 (record), never 403.
   @Get()
-  @RequirePermission('read', 'Order', { denyAsNotFound: true })
+  @RequirePermission('read', 'Order', { isDeniedAsNotFound: true })
   @ApiPaginatedResponse(OrderResponseDto)
   async findPaginated(
     @Query() query: MetaQueryDto,
@@ -40,7 +40,7 @@ export class OrdersController {
   }
 
   @Get(':id')
-  @RequirePermission('read', 'Order', { denyAsNotFound: true })
+  @RequirePermission('read', 'Order', { isDeniedAsNotFound: true })
   @ApiOkResponse({ type: OrderResponseDto })
   async findById(
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -50,7 +50,7 @@ export class OrdersController {
   }
 
   @Patch(':id')
-  @RequirePermission('update', 'Order', { denyAsNotFound: true })
+  @RequirePermission('update', 'Order', { isDeniedAsNotFound: true })
   @ApiOkResponse({ type: OrderResponseDto })
   async update(
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -62,7 +62,7 @@ export class OrdersController {
   }
 
   @Delete(':id')
-  @RequirePermission('delete', 'Order', { denyAsNotFound: true })
+  @RequirePermission('delete', 'Order', { isDeniedAsNotFound: true })
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(
     @Param('id', new ParseUUIDPipe()) id: string,

@@ -67,10 +67,10 @@ export class UsersController {
   @ApiOkResponse({ type: OperationAcknowledgementDto })
   async requestPasswordReset(
     @Body() dto: RequestPasswordResetDto,
-  ): Promise<{ ok: true }> {
+  ): Promise<{ isOk: true }> {
     await this.usersService.requestPasswordReset(dto.email);
     // Same answer whether or not the address is registered.
-    return { ok: true };
+    return { isOk: true };
   }
 
   @Post('reset-password')
@@ -78,9 +78,9 @@ export class UsersController {
   @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @ApiOkResponse({ type: OperationAcknowledgementDto })
-  async resetPassword(@Body() dto: ResetPasswordDto): Promise<{ ok: true }> {
+  async resetPassword(@Body() dto: ResetPasswordDto): Promise<{ isOk: true }> {
     await this.usersService.resetPassword(dto);
-    return { ok: true };
+    return { isOk: true };
   }
 
   // Email verification lives on POST /auth/verify-email (link-based) and
@@ -272,13 +272,13 @@ export class UsersController {
   async requestPhoneVerification(
     @Body() dto: RequestPhoneVerificationDto,
     @CurrentUser() currentUser: AuthenticatedUser,
-  ): Promise<{ ok: true }> {
+  ): Promise<{ isOk: true }> {
     await this.usersService.requestPhoneVerification(
       currentUser.id,
       dto.currentPassword,
       dto.phoneNumber,
     );
-    return { ok: true };
+    return { isOk: true };
   }
 
   // Step 2 of the verified-phone flow — verify the OTP and apply the new
@@ -320,7 +320,7 @@ export class UsersController {
   }
 
   @Post()
-  @RequirePermission('create', 'User', { administrative: true })
+  @RequirePermission('create', 'User', { isAdministrative: true })
   // Hashes a password (bcrypt cost 12): bounded so a compromised admin
   // token cannot pin the CPU, loose enough for routine administration.
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
@@ -334,7 +334,7 @@ export class UsersController {
   }
 
   @Get()
-  @RequirePermission('read', 'User', { administrative: true })
+  @RequirePermission('read', 'User', { isAdministrative: true })
   @ApiPaginatedResponse(UserResponseDto)
   async findPaginated(
     @Query() query: MetaQueryDto,
@@ -347,7 +347,7 @@ export class UsersController {
   }
 
   @Get(':id')
-  @RequirePermission('read', 'User', { administrative: true })
+  @RequirePermission('read', 'User', { isAdministrative: true })
   @ApiOkResponse({ type: UserResponseDto })
   async findById(
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -357,7 +357,7 @@ export class UsersController {
   }
 
   @Patch(':id')
-  @RequirePermission('update', 'User', { administrative: true })
+  @RequirePermission('update', 'User', { isAdministrative: true })
   @ApiOkResponse({ type: UserResponseDto })
   async update(
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -369,7 +369,7 @@ export class UsersController {
   }
 
   @Patch(':id/password')
-  @RequirePermission('resetPassword', 'User', { administrative: true })
+  @RequirePermission('resetPassword', 'User', { isAdministrative: true })
   // Hashes a password (bcrypt cost 12): bounded so a compromised admin
   // token cannot pin the CPU, loose enough for routine administration.
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
@@ -388,7 +388,7 @@ export class UsersController {
   }
 
   @Delete(':id')
-  @RequirePermission('delete', 'User', { administrative: true })
+  @RequirePermission('delete', 'User', { isAdministrative: true })
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -403,7 +403,7 @@ export class UsersController {
   // email.
 
   @Post(':id/revoke-sessions')
-  @RequirePermission('revokeSession', 'User', { administrative: true })
+  @RequirePermission('revokeSession', 'User', { isAdministrative: true })
   @HttpCode(HttpStatus.NO_CONTENT)
   async revokeSessions(
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -417,13 +417,13 @@ export class UsersController {
   // called by staff who can already see the account — so it reports honestly.
   @Post(':id/resend-verification')
   @HttpCode(HttpStatus.OK)
-  @RequirePermission('resendVerification', 'User', { administrative: true })
+  @RequirePermission('resendVerification', 'User', { isAdministrative: true })
   @ApiOkResponse({ type: OperationAcknowledgementDto })
   async resendVerification(
     @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() currentUser: AuthenticatedUser,
   ): Promise<OperationAcknowledgementDto> {
     await this.usersService.resendVerificationForUser(id, currentUser.id);
-    return { ok: true };
+    return { isOk: true };
   }
 }

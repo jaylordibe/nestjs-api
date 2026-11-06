@@ -31,7 +31,7 @@ export class UserRolesController {
   constructor(private readonly userRolesService: UserRolesService) {}
 
   @Post()
-  @RequirePermission('assignRole', 'User', { administrative: true })
+  @RequirePermission('assignRole', 'User', { isAdministrative: true })
   @HttpCode(HttpStatus.NO_CONTENT)
   async assign(
     @Param('userId', new ParseUUIDPipe()) userId: string,
@@ -48,7 +48,7 @@ export class UserRolesController {
   }
 
   @Delete(':roleId')
-  @RequirePermission('assignRole', 'User', { administrative: true })
+  @RequirePermission('assignRole', 'User', { isAdministrative: true })
   @HttpCode(HttpStatus.NO_CONTENT)
   async revoke(
     @Param('userId', new ParseUUIDPipe()) userId: string,

@@ -16,10 +16,10 @@ export interface RequiredPermission {
   subject: AuthorizationSubject;
   // When true, an ownership-scoped grant is NOT sufficient: the caller must
   // hold a rule that is not conditioned on owning the record. See below.
-  administrative: boolean;
+  isAdministrative: boolean;
   // When true, holding no grant at all is answered as "does not exist"
   // (empty page / 404) rather than 403. See below.
-  denyAsNotFound: boolean;
+  isDeniedAsNotFound: boolean;
 }
 
 export interface RequirePermissionOptions {
@@ -31,13 +31,13 @@ export interface RequirePermissionOptions {
   // that question ignores conditions. Without this flag, the intrinsic
   // `update User (own)` that EVERY authenticated caller holds would pass the
   // guard on `PATCH /users/:id`, because a rule does exist. Setting
-  // `administrative: true` makes the guard demand a rule that is not
+  // `isAdministrative: true` makes the guard demand a rule that is not
   // owner-conditioned, so self-service grants cannot unlock admin routes.
   //
   // Tenant-conditioned rules still qualify: a WORKSPACE_ADMIN's
   // `update WorkspaceMembership { workspaceId }` is administrative *within* its
   // workspace, and the tenant boundary is enforced by the query.
-  administrative?: boolean;
+  isAdministrative?: boolean;
 
   // Answer a caller who holds NO grant on this subject as though the resource
   // simply does not exist: an empty page for a list, 404 for a record — never
@@ -59,7 +59,7 @@ export interface RequirePermissionOptions {
   // changes which refusal the caller sees. Pair with the `…OrEmpty` builders on
   // `AbilityScopedQueryService`, which yield a provably-empty filter instead of
   // throwing.
-  denyAsNotFound?: boolean;
+  isDeniedAsNotFound?: boolean;
 }
 
 // Declares the authorization a handler needs. `PermissionsGuard` reads the
@@ -80,15 +80,15 @@ export const RequirePermission = (
     SetMetadata(REQUIRE_PERMISSION_KEY, {
       action,
       subject,
-      administrative: options.administrative ?? false,
-      denyAsNotFound: options.denyAsNotFound ?? false,
+      isAdministrative: options.isAdministrative ?? false,
+      isDeniedAsNotFound: options.isDeniedAsNotFound ?? false,
     } satisfies RequiredPermission),
     ApiBearerAuth(),
     ApiUnauthorizedResponse({
       description: 'Missing, invalid, expired, or revoked access token',
     }),
     ApiForbiddenResponse({
-      description: options.administrative
+      description: options.isAdministrative
         ? `Requires \`${action}\` on \`${subject}\` beyond your own records`
         : `Authenticated, but no permission grants \`${action}\` on \`${subject}\``,
     }),

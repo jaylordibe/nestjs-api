@@ -90,7 +90,7 @@ export function configureHttpApp(app: NestExpressApplication): void {
   // that is where integration partners and admins actually use Try-it-out, and
   // can be turned off with SWAGGER_ENABLED=false. The resolution of both lives
   // in `configuration.ts` so the production floor is stated once.
-  if (configService.getOrThrow<boolean>('swagger.enabled')) {
+  if (configService.getOrThrow<boolean>('swagger.isEnabled')) {
     // Stamp the commit hash into the Swagger doc's `version` so the
     // docs page shows which build it's describing. Mismatch with the
     // live API means a stale image is serving — pair with the health

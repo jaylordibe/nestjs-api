@@ -39,7 +39,7 @@ export class AppVersionsController {
   constructor(private readonly appVersionsService: AppVersionsService) {}
 
   @Post()
-  @RequirePermission('create', 'AppVersion', { administrative: true })
+  @RequirePermission('create', 'AppVersion', { isAdministrative: true })
   @ApiCreatedResponse({ type: AppVersionResponseDto })
   async create(
     @Body() dto: CreateAppVersionDto,
@@ -90,7 +90,7 @@ export class AppVersionsController {
   }
 
   @Patch(':id')
-  @RequirePermission('update', 'AppVersion', { administrative: true })
+  @RequirePermission('update', 'AppVersion', { isAdministrative: true })
   @ApiOkResponse({ type: AppVersionResponseDto })
   async update(
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -102,7 +102,7 @@ export class AppVersionsController {
   }
 
   @Delete(':id')
-  @RequirePermission('delete', 'AppVersion', { administrative: true })
+  @RequirePermission('delete', 'AppVersion', { isAdministrative: true })
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(
     @Param('id', new ParseUUIDPipe()) id: string,

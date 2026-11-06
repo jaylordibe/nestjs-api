@@ -41,7 +41,7 @@ export class QueueWorkerRegistrar implements OnApplicationBootstrap {
   ) {}
 
   onApplicationBootstrap(): void {
-    if (!this.configService.getOrThrow<boolean>('queue.workerEnabled')) {
+    if (!this.configService.getOrThrow<boolean>('queue.isWorkerEnabled')) {
       this.logger.log(
         'Worker disabled by configuration — this process enqueues jobs and constructs no BullMQ worker at all',
       );

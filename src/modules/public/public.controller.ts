@@ -35,6 +35,6 @@ export class PublicController {
   @Public()
   @ApiOkResponse({ type: PingResponseDto })
   ping(): PingResponseDto {
-    return { ok: true, timestamp: new Date().toISOString() };
+    return { isOk: true, timestamp: new Date().toISOString() };
   }
 }

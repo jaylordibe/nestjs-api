@@ -117,7 +117,7 @@ export class AuthController {
     @Body() dto: VerifyEmailDto,
   ): Promise<EmailVerificationResponseDto> {
     await this.usersService.verifyEmailByToken(dto.token);
-    return { verified: true };
+    return { isVerified: true };
   }
 
   // GET form — for direct clicks on the email link. Verifies the token
@@ -165,9 +165,9 @@ export class AuthController {
   @ApiOkResponse({ type: OperationAcknowledgementDto })
   async resendVerification(
     @Body() dto: ResendVerificationDto,
-  ): Promise<{ ok: true }> {
+  ): Promise<{ isOk: true }> {
     await this.usersService.resendEmailVerification(dto.email);
-    return { ok: true };
+    return { isOk: true };
   }
 
   // Ends THIS device's session: blocklists the access token this request

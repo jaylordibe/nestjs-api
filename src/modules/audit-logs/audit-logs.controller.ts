@@ -8,7 +8,7 @@ import { AuditLogQueryDto } from './dto/audit-log-query.dto';
 import { AuditLogResponseDto } from './dto/audit-log-response.dto';
 
 // The audit trail is platform-wide and reveals who did what to whom, so it is
-// strictly administrative: every platform staff role holds `read AuditLog`, and
+// strictly isAdministrative: every platform staff role holds `read AuditLog`, and
 // nobody else does. No self-service view — a user's own audit rows still name
 // other actors.
 @ApiTags('Audit Logs')
@@ -17,7 +17,7 @@ export class AuditLogsController {
   constructor(private readonly auditLogsService: AuditLogsService) {}
 
   @Get()
-  @RequirePermission('read', 'AuditLog', { administrative: true })
+  @RequirePermission('read', 'AuditLog', { isAdministrative: true })
   @ApiPaginatedResponse(AuditLogResponseDto)
   async findPaginated(
     @Query() query: AuditLogQueryDto,
@@ -27,7 +27,7 @@ export class AuditLogsController {
   }
 
   @Get(':id')
-  @RequirePermission('read', 'AuditLog', { administrative: true })
+  @RequirePermission('read', 'AuditLog', { isAdministrative: true })
   @ApiOkResponse({ type: AuditLogResponseDto })
   async findById(
     @Param('id', new ParseUUIDPipe()) id: string,

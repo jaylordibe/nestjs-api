@@ -95,7 +95,7 @@ export function buildRedisConnectionOptions(
   return buildRedisTransportOptions(
     configService.getOrThrow<string>('redis.url'),
     {
-      isEnabled: configService.getOrThrow<boolean>('redis.tls.enabled'),
+      isEnabled: configService.getOrThrow<boolean>('redis.tls.isEnabled'),
       certificateAuthority: configService.get<string>(
         'redis.tls.certificateAuthority',
       ),

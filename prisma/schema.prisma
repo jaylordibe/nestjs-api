@@ -7,18 +7,18 @@ datasource db {
 }
 
 model User {
-  id                    String    @id @default(uuid()) @db.Uuid
-  createdAt             DateTime  @default(now()) @map("created_at")
-  updatedAt             DateTime  @updatedAt @map("updated_at")
-  createdBy             String?   @map("created_by") @db.Uuid
-  updatedBy             String?   @map("updated_by") @db.Uuid
-  deletedAt             DateTime? @map("deleted_at")
-  deletedBy             String?   @map("deleted_by") @db.Uuid
-  isActive              Boolean   @default(true) @map("is_active")
-  firstName             String    @map("first_name")
-  middleName            String?   @map("middle_name")
-  lastName              String    @map("last_name")
-  // Unique among LIVE rows only, via partial indexes declared in the init
+  id                      String    @id @default(uuid()) @db.Uuid
+  createdAt               DateTime  @default(now()) @map("created_at")
+  updatedAt               DateTime  @updatedAt @map("updated_at")
+  createdBy               String?   @map("created_by") @db.Uuid
+  updatedBy               String?   @map("updated_by") @db.Uuid
+  deletedAt               DateTime? @map("deleted_at")
+  deletedBy               String?   @map("deleted_by") @db.Uuid
+  isActive                Boolean   @default(true) @map("is_active")
+  firstName               String    @map("first_name")
+  middleName              String?   @map("middle_name")
+  lastName                String    @map("last_name")
+  // Unique among LIVE rows only, via partial indexes declared in the users
   // migration (`WHERE deleted_at IS NULL`). A plain @unique would let a
   // soft-deleted account hold its email/username hostage forever. Prisma
   // cannot express a partial unique index, so these must NOT carry @unique
@@ -36,31 +36,31 @@ model User {
   // is an index scan on the partial index (3 buffers over 20k rows). It is the
   // same plan `findUnique` would produce. Dropping the `deletedAt` predicate —
   // i.e. using the raw client — is what turns it into a seq scan.
-  username              String?
-  email                 String
-  password              String
-  passwordChangedAt     DateTime? @map("password_changed_at")
-  otpHash               String?   @map("otp_hash")
-  otpPurpose            String?   @map("otp_purpose")
-  otpExpiresAt          DateTime? @map("otp_expires_at")
-  emailVerifiedAt       DateTime? @map("email_verified_at")
+  username                String?
+  email                   String
+  password                String
+  passwordChangedAt       DateTime? @map("password_changed_at")
+  otpHash                 String?   @map("otp_hash")
+  otpPurpose              String?   @map("otp_purpose")
+  otpExpiresAt            DateTime? @map("otp_expires_at")
+  emailVerifiedAt         DateTime? @map("email_verified_at")
   // `phoneNumber` may be set without verification (e.g. via admin
   // create or `PATCH /users/me/phone`); `phoneNumberVerifiedAt` is
   // stamped only when the OTP flow completes (POST
   // /users/me/request-phone-verification → PATCH /users/me/verify-phone).
   // Plain phone updates clear the verifiedAt — the new number hasn't
   // been proven owned, so any prior verified state is no longer valid.
-  phoneNumber           String?   @map("phone_number")
-  phoneNumberVerifiedAt DateTime? @map("phone_number_verified_at")
-  gender                String?
+  phoneNumber             String?   @map("phone_number")
+  phoneNumberVerifiedAt   DateTime? @map("phone_number_verified_at")
+  gender                  String?
   // The stored file shown as this person's picture. Unique: an attached file
   // belongs to exactly one reference (see `FileAsset`). Set only through
   // `PUT`/`DELETE /users/me/profile-image` with the id `POST /files` returned.
-  profileImageFileId    String?   @unique @map("profile_image_file_id") @db.Uuid
-  birthday              DateTime? @db.Date
-  timezone              String?
+  profileImageFileAssetId String?   @unique @map("profile_image_file_asset_id") @db.Uuid
+  birthday                DateTime? @db.Date
+  timezone                String?
 
-  deviceTokens        DeviceToken[]
+  deviceTokens          DeviceToken[]
   // PLATFORM-scope role assignments. WORKSPACE-scope roles live on
   // `workspaceMemberships` instead; `AbilityFactory` refuses to compile a
   // permission that arrives through the wrong one.
@@ -69,21 +69,21 @@ model User {
   // functioning account: their self-service capabilities come from
   // AUTHENTICATED_USER_PERMISSIONS, which the ability factory injects for
   // every authenticated caller rather than from a row in this table.
-  userRoles           UserRole[]
+  userRoles             UserRole[]
   // Every workspace this person belongs to, in any role, active or ended. One
   // row per workspace, forever.
-  memberships         WorkspaceMembership[]
+  memberships           WorkspaceMembership[]
   // Invitations this person sent. Distinct from `memberships` because an
   // inviter is not necessarily still a member by the time it is accepted.
-  sentInvitations     WorkspaceMembership[] @relation("WorkspaceMembershipInviter")
+  sentInvitations       WorkspaceMembership[] @relation("WorkspaceMembershipInviter")
   // Invitations addressed to this person, resolved when the invite was raised.
-  receivedInvitations WorkspaceInvitation[] @relation("WorkspaceInvitationInvitee")
-  refreshTokens       RefreshToken[]
+  receivedInvitations   WorkspaceInvitation[] @relation("WorkspaceInvitationInvitee")
+  refreshTokens         RefreshToken[]
   /// RESTRICT, not SetNull: the file ROW cannot be deleted while this column
   /// points at it. Its object is protected by `FilesService.markDeleting`'s
   /// contract instead — the release clears this column in the same transaction.
-  profileImageFile    FileAsset?            @relation("UserProfileImage", fields: [profileImageFileId], references: [id], onDelete: Restrict)
-  uploadedFiles       FileAsset[]           @relation("FileAssetUploader")
+  profileImageFileAsset FileAsset?            @relation("UserProfileImage", fields: [profileImageFileAssetId], references: [id], onDelete: Restrict)
+  uploadedFiles         FileAsset[]           @relation("FileAssetUploader")
 
   @@map("users")
 }
@@ -265,7 +265,7 @@ model Workspace {
   deletedBy   String?   @map("deleted_by") @db.Uuid
   name        String
   // Unique among live rows only, via a partial index (`WHERE deleted_at IS
-  // NULL`) declared in the init migration — Prisma cannot express a partial
+  // NULL`) declared in the workspaces migration — Prisma cannot express a partial
   // unique index, so it must NOT carry `@unique` here or migrate would try to
   // manage a conflicting full index. Look it up with `findFirst`, not
   // `findUnique`.
@@ -408,18 +408,18 @@ model UserRole {
 /// the union of the two — with no special case in application code. See
 /// SUBJECT_OWNER_KEY / SUBJECT_TENANT_KEY.
 model WorkspaceMembership {
-  id         String    @id @default(uuid()) @db.Uuid
-  createdAt  DateTime  @default(now()) @map("created_at")
-  updatedAt  DateTime  @updatedAt @map("updated_at")
-  createdBy  String?   @map("created_by") @db.Uuid
-  updatedBy  String?   @map("updated_by") @db.Uuid
+  id          String    @id @default(uuid()) @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  createdBy   String?   @map("created_by") @db.Uuid
+  updatedBy   String?   @map("updated_by") @db.Uuid
   workspaceId String    @map("workspace_id") @db.Uuid
-  userId     String    @map("user_id") @db.Uuid
-  roleId     String    @map("role_id") @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  roleId      String    @map("role_id") @db.Uuid
   /// `WorkspaceMembershipStatus`. A plain String, per the no-DB-enums rule —
   /// constrained by the TS enum and `@IsEnum`, so widening the lifecycle needs
   /// no migration.
-  status     String    @default("active")
+  status      String    @default("active")
   /// When the CURRENT tenure began. NOT NULL: a membership row exists only once
   /// somebody has actually joined.
   ///
@@ -428,26 +428,26 @@ model WorkspaceMembership {
   /// because the row describes the relationship as it stands now. It is not
   /// "first joined", and reporting that would be wrong for anyone on their
   /// second stint. The replaced value is audited; see the note on this model.
-  joinedAt   DateTime  @map("joined_at")
+  joinedAt    DateTime  @map("joined_at")
   /// When the current tenure ended. Set alongside `status = 'left'`, and cleared
   /// when they re-join on the same row — at which point the closed tenure exists
   /// only in `audit_logs`.
-  endedAt    DateTime? @map("ended_at")
-  invitedBy  String?   @map("invited_by") @db.Uuid
+  endedAt     DateTime? @map("ended_at")
+  invitedBy   String?   @map("invited_by") @db.Uuid
   /// Staff-visible annotation on the relationship (preferences, allergies…).
   /// Gated in the service: writable only by a caller who may `update` the
   /// membership, never by the member themselves.
-  notes      String?
+  notes       String?
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   /// Restrict, not Cascade: deleting a role must never silently strip access.
   /// Scope integrity lives in `AbilityFactory` and the service layer — see the
   /// note on `UserRole.role`.
-  role     Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  role      Role      @relation(fields: [roleId], references: [id], onDelete: Restrict)
   /// SetNull, not Cascade: deleting the inviter's account must not delete the
   /// membership they created.
-  inviter  User?    @relation("WorkspaceMembershipInviter", fields: [invitedBy], references: [id], onDelete: SetNull)
+  inviter   User?     @relation("WorkspaceMembershipInviter", fields: [invitedBy], references: [id], onDelete: SetNull)
 
   /// The tenancy invariant. Unconditional precisely because the row is never
   /// removed — one relationship per person per workspace, in any state.
@@ -476,20 +476,20 @@ model WorkspaceMembership {
 /// transaction that writes the membership, so two simultaneous redemptions of
 /// one token produce exactly one membership.
 model WorkspaceInvitation {
-  id         String    @id @default(uuid()) @db.Uuid
-  createdAt  DateTime  @default(now()) @map("created_at")
-  updatedAt  DateTime  @updatedAt @map("updated_at")
-  createdBy  String?   @map("created_by") @db.Uuid
-  updatedBy  String?   @map("updated_by") @db.Uuid
-  workspaceId String    @map("workspace_id") @db.Uuid
+  id            String    @id @default(uuid()) @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  createdBy     String?   @map("created_by") @db.Uuid
+  updatedBy     String?   @map("updated_by") @db.Uuid
+  workspaceId   String    @map("workspace_id") @db.Uuid
   /// Lowercased at the DTO boundary. Deliberately NOT a FK to `users`: the
   /// whole point is that the invitee may not exist yet.
   ///
-  /// Unique among PENDING rows only, via a partial index declared in the init
-  /// migration (`WHERE status = 'pending'`). Prisma cannot express that, so it
+  /// Unique among PENDING rows only, via a partial index declared in the
+  /// workspace_invitations migration (`WHERE status = 'pending'`). Prisma cannot express that, so it
   /// carries no `@@unique` here — look it up with `findFirst`, never
   /// `findUnique`.
-  email      String
+  email         String
   /// The account the address resolved to AT INVITE TIME, when it resolved to
   /// one at all. Null means the address had no account yet — the ordinary case
   /// for inviting a stranger.
@@ -498,28 +498,28 @@ model WorkspaceInvitation {
   /// which is mutable. Deriving it late meant a re-registered address inherited
   /// somebody else's invitation: the revoke deleted the wrong membership and
   /// attributed the audit event to the wrong person.
-  invitedUserId String? @map("invited_user_id") @db.Uuid
-  roleId     String    @map("role_id") @db.Uuid
+  invitedUserId String?   @map("invited_user_id") @db.Uuid
+  roleId        String    @map("role_id") @db.Uuid
   /// SHA-256 of the opaque token, hex-encoded — the same construction, and the
   /// same reasoning, as `RefreshToken.tokenHash`. The plaintext is emailed once
   /// and never stored.
-  tokenHash  String    @unique @map("token_hash")
+  tokenHash     String    @unique @map("token_hash")
   /// `WorkspaceInvitationStatus`.
-  status     String    @default("pending")
-  invitedBy  String?   @map("invited_by") @db.Uuid
+  status        String    @default("pending")
+  invitedBy     String?   @map("invited_by") @db.Uuid
   /// Expiry is a timestamp rather than a status, so an unattended invitation
   /// becomes unusable without any sweep having to run.
-  expiresAt  DateTime  @map("expires_at")
-  acceptedAt DateTime? @map("accepted_at")
-  acceptedBy String?   @map("accepted_by") @db.Uuid
-  revokedAt  DateTime? @map("revoked_at")
-  revokedBy  String?   @map("revoked_by") @db.Uuid
+  expiresAt     DateTime  @map("expires_at")
+  acceptedAt    DateTime? @map("accepted_at")
+  acceptedBy    String?   @map("accepted_by") @db.Uuid
+  revokedAt     DateTime? @map("revoked_at")
+  revokedBy     String?   @map("revoked_by") @db.Uuid
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  role     Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  role        Role      @relation(fields: [roleId], references: [id], onDelete: Restrict)
   /// SetNull, not Cascade: an erased account must not take the invitation
   /// history of a workspace with it. The address on the row is what remains.
-  invitedUser User? @relation("WorkspaceInvitationInvitee", fields: [invitedUserId], references: [id], onDelete: SetNull)
+  invitedUser User?     @relation("WorkspaceInvitationInvitee", fields: [invitedUserId], references: [id], onDelete: SetNull)
 
   @@index([workspaceId, status])
   /// "What is this person still expected to accept?" — and the index behind

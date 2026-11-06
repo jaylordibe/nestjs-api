@@ -59,7 +59,7 @@ export class S3FileStorageAdapter implements FileStorageAdapter {
       ...(region ? { region } : {}),
       ...(endpoint ? { endpoint } : {}),
       forcePathStyle:
-        configService.get<boolean>('storage.s3.forcePathStyle') ?? false,
+        configService.get<boolean>('storage.s3.isPathStyleForced') ?? false,
     });
   }
 

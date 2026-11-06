@@ -90,7 +90,7 @@ describe('Workspaces (e2e)', () => {
     expect(body.data[0]?.slug).toBe('alice-co');
   });
 
-  // `denyAsNotFound` — belonging to no workspace is not a refusal.
+  // `isDeniedAsNotFound` — belonging to no workspace is not a refusal.
   it('GET /api/workspaces returns an empty page for a user with no workspaces', async () => {
     const loner = await createRegularUser(app, 'loner@example.com');
     const response = await request(app.getHttpServer())

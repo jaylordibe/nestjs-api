@@ -44,10 +44,10 @@ export class WorkspacesController {
     return new WorkspaceResponseDto(workspace);
   }
 
-  // `denyAsNotFound` — a user who belongs to no workspace gets an empty page,
+  // `isDeniedAsNotFound` — a user who belongs to no workspace gets an empty page,
   // not a 403. The query scopes the result either way.
   @Get()
-  @RequirePermission('read', 'Workspace', { denyAsNotFound: true })
+  @RequirePermission('read', 'Workspace', { isDeniedAsNotFound: true })
   @ApiPaginatedResponse(WorkspaceResponseDto)
   async findPaginated(
     @Query() query: MetaQueryDto,
@@ -63,7 +63,7 @@ export class WorkspacesController {
   // A workspace the caller is not a member of returns 404, never 403 — a 403
   // would confirm it exists.
   @Get(':id')
-  @RequirePermission('read', 'Workspace', { denyAsNotFound: true })
+  @RequirePermission('read', 'Workspace', { isDeniedAsNotFound: true })
   @ApiOkResponse({ type: WorkspaceResponseDto })
   async findById(
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -74,7 +74,7 @@ export class WorkspacesController {
   }
 
   @Patch(':id')
-  @RequirePermission('update', 'Workspace', { denyAsNotFound: true })
+  @RequirePermission('update', 'Workspace', { isDeniedAsNotFound: true })
   @ApiOkResponse({ type: WorkspaceResponseDto })
   async update(
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -92,7 +92,7 @@ export class WorkspacesController {
   }
 
   @Delete(':id')
-  @RequirePermission('delete', 'Workspace', { denyAsNotFound: true })
+  @RequirePermission('delete', 'Workspace', { isDeniedAsNotFound: true })
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(
     @Param('id', new ParseUUIDPipe()) id: string,

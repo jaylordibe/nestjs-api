@@ -14,7 +14,7 @@ one-line rules are in `AGENTS.md` (Authorization, Tenant isolation).
 
 | You are… | README section |
 |---|---|
-| declaring access on a handler | Declaring authorization on a handler (incl. `administrative`, `denyAsNotFound`) |
+| declaring access on a handler | Declaring authorization on a handler (incl. `isAdministrative`, `isDeniedAsNotFound`) |
 | choosing 404 or 403 | 404 vs 403 — the rule; `PermissionCheckService` |
 | composing a scoped query | The Prisma empty-`OR` landmine |
 | adding a permission | Adding a permission |

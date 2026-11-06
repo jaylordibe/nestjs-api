@@ -190,7 +190,7 @@ describe('Audit logs (e2e)', () => {
     // Every one of these returned ZERO before the search was rewritten:
     // Prisma's `{ metadata: { string_contains } }` is a JSON-path filter, so
     // against an object-valued metadata column it matched nothing and never
-    // touched the pg_trgm GIN index the init migration ships for exactly this.
+    // touched the pg_trgm GIN index the audit_logs migration ships for exactly this.
     it('matches a value inside the metadata envelope', async () => {
       const owner = await createRegularUser(app, 'owner@example.com');
       await generateAuditRow(owner);

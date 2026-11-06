@@ -100,9 +100,8 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
   `T`/`K`/`V`.
 - **Booleans:** start with `is` everywhere — DB columns are `is_…`
   (`is_active`, `is_force_update`), request/response fields and TS
-  properties `is…` (`isActive`, `isForceUpdate`), with no exception
-  for columns. Response-only fields `verified` and `ok` keep their names
-  until a deliberate breaking change renames them.
+  properties `is…` (`isActive`, `isForceUpdate`) and config keys
+  (`isWorkerEnabled`), with no exception.
 - **Placement:** services hold behaviour. Static tables go to a co-located
   config module; pure helpers to `src/common/util/*.util.ts` with a spec.
   Delete what you replace; no parallel implementations.
@@ -122,7 +121,11 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
   enum (`src/common/enums/`) or constant, validated with `@IsEnum()`/`@IsIn()`,
   so a new value needs no migration. A `CHECK` states only an invariant: a
   range, a pairing, or a rule between columns. Every column `@map`s to
-  snake_case.
+  snake_case. A foreign key names the model it references in full:
+  `<model>_id` and `<model>Id` (`workspace_id`, `role_id`), never a short
+  stand-in (`member_id` for a `WorkspaceMembership`). A key that holds a row
+  in a role names the role, then the model (`invited_user_id`); audit actors
+  keep `…By`.
 - **Authorization:** `JwtAuthGuard` + `PermissionsGuard` are global. Every
   handler declares exactly one of `@Public()` / `@AuthenticatedOnly()` /
   `@RequirePermission()`, or boot fails. The permission catalog in

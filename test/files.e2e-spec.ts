@@ -821,7 +821,7 @@ describe('Files (e2e)', () => {
       const stuck = await seedFile(user.id, FileAssetStatus.DELETING);
       await prisma.user.update({
         where: { id: user.id },
-        data: { profileImageFileId: stuck.id },
+        data: { profileImageFileAssetId: stuck.id },
       });
       const other = await seedFile(user.id, FileAssetStatus.DELETING);
 

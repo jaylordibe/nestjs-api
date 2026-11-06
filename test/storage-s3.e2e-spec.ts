@@ -58,7 +58,7 @@ async function buildStorage(
     'storage.s3.bucket': BUCKET,
     'storage.s3.region': REGION,
     'storage.s3.endpoint': ENDPOINT,
-    'storage.s3.forcePathStyle': true,
+    'storage.s3.isPathStyleForced': true,
     'storage.signedUrlTtlSeconds': 300,
     'storage.requestTimeoutMs': 15_000,
     ...overrides,

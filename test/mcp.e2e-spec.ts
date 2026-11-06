@@ -190,7 +190,7 @@ describe('MCP endpoint (e2e)', () => {
       expect(result.isError).toBeFalsy();
       expect(result.structuredContent).toEqual({
         name: PACKAGE.name,
-        mcp: true,
+        isMcpEnabled: true,
         status: 'ready',
         version: PACKAGE.version,
       });

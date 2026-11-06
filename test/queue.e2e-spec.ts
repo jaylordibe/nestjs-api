@@ -586,7 +586,7 @@ describe('Queue infrastructure (e2e)', () => {
           { previousJobId, jobId: replacementJobId },
         );
 
-        expect(result.previousJobRemoved).toBe(true);
+        expect(result.isPreviousJobRemoved).toBe(true);
         expect(result.jobId).toBe(replacementJobId);
         expect(await queue.getJob(previousJobId)).toBeUndefined();
 

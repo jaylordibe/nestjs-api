@@ -24,7 +24,7 @@ import { RolesService } from './roles.service';
  * operator who can add `platform.all.manage` to a role they already hold has
  * made themselves an admin without anyone approving a diff.
  *
- * Guarding such an endpoint with `administrative: true` alone would permit
+ * Guarding such an endpoint with `isAdministrative: true` alone would permit
  * exactly that. It also could not work: the boot-time
  * `PermissionCatalogIntegrityService` fails startup when the database and the
  * catalog disagree, so a custom role's grants are reverted by the next seed

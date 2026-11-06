@@ -49,7 +49,7 @@ async function bootstrapWorker(): Promise<void> {
   applicationContext.useLogger(logger);
 
   const configService = applicationContext.get(ConfigService);
-  if (!configService.getOrThrow<boolean>('queue.workerEnabled')) {
+  if (!configService.getOrThrow<boolean>('queue.isWorkerEnabled')) {
     logger.error(
       'QUEUE_WORKER_ENABLED is false — a worker process with consumption disabled would do nothing. Set it to true, or run the API entrypoint instead.',
       'Worker',

@@ -464,7 +464,7 @@ export class WorkspaceMembershipsService {
       to: WorkspaceMembershipStatus.SUSPENDED,
       // Suspending the last owner leaves the workspace with nobody who can
       // administer it — the same outcome as removing them, so the same refusal.
-      protectsLastOwner: true,
+      isLastOwnerProtected: true,
       data: {},
     });
   }
@@ -480,7 +480,7 @@ export class WorkspaceMembershipsService {
       requiredAction: 'suspend',
       from: WorkspaceMembershipStatus.SUSPENDED,
       to: WorkspaceMembershipStatus.ACTIVE,
-      protectsLastOwner: false,
+      isLastOwnerProtected: false,
       data: {},
     });
   }
@@ -514,7 +514,7 @@ export class WorkspaceMembershipsService {
       // a membership that has already ended.
       from: null,
       to: WorkspaceMembershipStatus.LEFT,
-      protectsLastOwner: true,
+      isLastOwnerProtected: true,
       data: { endedAt: new Date() },
     });
   }
@@ -666,7 +666,7 @@ export class WorkspaceMembershipsService {
       requiredAction: 'suspend' | 'delete';
       from: WorkspaceMembershipStatus | null;
       to: WorkspaceMembershipStatus;
-      protectsLastOwner: boolean;
+      isLastOwnerProtected: boolean;
       data: Prisma.WorkspaceMembershipUpdateInput;
     },
   ): Promise<WorkspaceMembershipRow> {
@@ -728,7 +728,7 @@ export class WorkspaceMembershipsService {
         (existing.role.name as SeededRoleName) ===
           SeededRoleName.WORKSPACE_OWNER &&
         currentStatus === WorkspaceMembershipStatus.ACTIVE;
-      if (options.protectsLastOwner && isActiveOwner) {
+      if (options.isLastOwnerProtected && isActiveOwner) {
         await this.workspaceOwnershipPolicy.assertAnotherActiveOwnerExists(
           transaction,
           workspaceId,

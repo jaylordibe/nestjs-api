@@ -99,15 +99,15 @@ export class QueueInspectionService {
   async retryFailedJob(
     queueName: QueueName,
     jobId: string,
-  ): Promise<{ retried: boolean; state: string | null }> {
+  ): Promise<{ isRetried: boolean; state: string | null }> {
     const job = await this.loadJob(queueName, jobId);
-    if (!job) return { retried: false, state: null };
+    if (!job) return { isRetried: false, state: null };
 
     const state = await job.getState();
-    if (state !== 'failed') return { retried: false, state };
+    if (state !== 'failed') return { isRetried: false, state };
 
     await job.retry();
-    return { retried: true, state };
+    return { isRetried: true, state };
   }
 
   /**
@@ -120,15 +120,15 @@ export class QueueInspectionService {
   async cancelJob(
     queueName: QueueName,
     jobId: string,
-  ): Promise<{ cancelled: boolean; state: string | null }> {
+  ): Promise<{ isCancelled: boolean; state: string | null }> {
     const job = await this.loadJob(queueName, jobId);
-    if (!job) return { cancelled: false, state: null };
+    if (!job) return { isCancelled: false, state: null };
 
     const state = await job.getState();
-    if (state === 'active') return { cancelled: false, state };
+    if (state === 'active') return { isCancelled: false, state };
 
     await job.remove();
-    return { cancelled: true, state };
+    return { isCancelled: true, state };
   }
 
   private async loadJob(

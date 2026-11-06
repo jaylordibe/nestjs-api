@@ -735,12 +735,14 @@ export class UsersService {
         // locked last (`row-lock.util.ts`).
         // A fork that attaches files to shared records (a workspace's gallery)
         // decides here whether those leave with the uploader or stay.
-        const { profileImageFileId } = await transaction.user.findUniqueOrThrow(
-          { where: { id: userId }, select: { profileImageFileId: true } },
-        );
-        if (profileImageFileId) {
+        const { profileImageFileAssetId } =
+          await transaction.user.findUniqueOrThrow({
+            where: { id: userId },
+            select: { profileImageFileAssetId: true },
+          });
+        if (profileImageFileAssetId) {
           await this.filesService.markDeleting(transaction, [
-            profileImageFileId,
+            profileImageFileAssetId,
           ]);
         }
         await this.filesService.markUnattachedDeleting(transaction, userId);
@@ -763,7 +765,7 @@ export class UsersService {
             gender: null,
             birthday: null,
             timezone: null,
-            profileImageFile: { disconnect: true },
+            profileImageFileAsset: { disconnect: true },
             otpHash: null,
             otpPurpose: null,
             otpExpiresAt: null,
@@ -894,7 +896,7 @@ export class UsersService {
       if (!lockedUser) {
         throw Errors.resourceNotFound('User');
       }
-      const currentFileId = lockedUser.profileImageFileId;
+      const currentFileId = lockedUser.profileImageFileAssetId;
       // Postgres returns a uuid in lower case; a client may send it in any.
       const requestedFileId = fileId?.toLowerCase() ?? null;
       if (requestedFileId === currentFileId) return lockedUser;
@@ -911,7 +913,7 @@ export class UsersService {
       }
       return transaction.user.update({
         where: { id: userId },
-        data: { profileImageFileId: requestedFileId, updatedBy: actorId },
+        data: { profileImageFileAssetId: requestedFileId, updatedBy: actorId },
       });
     });
   }
@@ -931,14 +933,15 @@ export class UsersService {
   async toResponses(users: User[]): Promise<UserResponseDto[]> {
     const pictures = await this.filesService.findAttachedResponses(
       users
-        .map((user) => user.profileImageFileId)
+        .map((user) => user.profileImageFileAssetId)
         .filter((fileId): fileId is string => fileId !== null),
     );
     return users.map(
       (user) =>
         new UserResponseDto(
           user,
-          (user.profileImageFileId && pictures.get(user.profileImageFileId)) ||
+          (user.profileImageFileAssetId &&
+            pictures.get(user.profileImageFileAssetId)) ||
             null,
         ),
     );

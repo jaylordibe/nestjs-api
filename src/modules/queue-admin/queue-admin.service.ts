@@ -72,14 +72,12 @@ export class QueueAdminService {
     jobId: string,
     actorId: string,
   ): Promise<void> {
-    const { retried, state } = await this.queueInspectionService.retryFailedJob(
-      queueName,
-      jobId,
-    );
+    const { isRetried, state } =
+      await this.queueInspectionService.retryFailedJob(queueName, jobId);
     if (state === null) {
       throw Errors.resourceNotFound('Queue job');
     }
-    if (!retried) {
+    if (!isRetried) {
       throw Errors.resourceConflict(
         `Only a failed job can be retried; this one is "${state}"`,
       );
@@ -100,14 +98,14 @@ export class QueueAdminService {
     jobId: string,
     actorId: string,
   ): Promise<void> {
-    const { cancelled, state } = await this.queueInspectionService.cancelJob(
+    const { isCancelled, state } = await this.queueInspectionService.cancelJob(
       queueName,
       jobId,
     );
     if (state === null) {
       throw Errors.resourceNotFound('Queue job');
     }
-    if (!cancelled) {
+    if (!isCancelled) {
       throw Errors.resourceConflict(
         'That job is currently running and cannot be cancelled',
       );

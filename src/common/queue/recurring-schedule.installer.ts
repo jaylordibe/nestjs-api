@@ -74,7 +74,7 @@ export class RecurringScheduleInstaller
   }
 
   onApplicationBootstrap(): void {
-    if (!this.configService.getOrThrow<boolean>('queue.workerEnabled')) {
+    if (!this.configService.getOrThrow<boolean>('queue.isWorkerEnabled')) {
       this.logger.log(
         'Worker disabled by configuration — this process enqueues jobs but does not install or reconcile recurring schedules. The worker runtime owns them.',
       );

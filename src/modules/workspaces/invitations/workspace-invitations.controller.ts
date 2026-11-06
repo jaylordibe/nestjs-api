@@ -63,7 +63,9 @@ export class WorkspaceInvitationsController {
   }
 
   @Get()
-  @RequirePermission('read', 'WorkspaceInvitation', { denyAsNotFound: true })
+  @RequirePermission('read', 'WorkspaceInvitation', {
+    isDeniedAsNotFound: true,
+  })
   @ApiPaginatedResponse(WorkspaceInvitationResponseDto)
   async findPaginated(
     @Param('workspaceId', ParseUUIDPipe) workspaceId: string,
