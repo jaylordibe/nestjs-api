@@ -216,6 +216,7 @@ test/            e2e specs + setup/ (global DB setup, worker isolation)
   add a new one. In the template itself nothing is applied — a project copies
   it once and never syncs back — so fold a schema change into the migration
   that owns the table and keep no upgrade path for existing projects.
+  A migration's folder is `YYYYMMDDHHMMSS_<what_it_does>`, never a ticket key.
 - **Storage adapters are `require`d lazily**; don't convert to static imports.
   No adapter accepts a long-lived cloud credential.
 - **`.claude/settings.json` is the only enforcement layer.** Mirror every
