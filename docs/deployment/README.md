@@ -628,8 +628,8 @@ That resolved address (`request.ip`) is the only client address the API uses:
   is limited per address (IPv6 per /64); a caller with a valid access token is
   limited per user, so people sharing one address do not share one quota —
   and one user's quota is shared by all of their devices and clients.
-  Password sign-in is the exception: it is limited per identifier and
-  address, and has no per-address limit of its own
+  Password sign-in is limited twice: per identifier and address, and per
+  address alone across every identifier
   (`src/common/util/login-throttle.util.ts`);
 - **sessions** — every refresh token records it, with the `User-Agent`;
 - **the audit trail** — every audit row's request envelope records it.

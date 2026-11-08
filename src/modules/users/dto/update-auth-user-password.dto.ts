@@ -1,10 +1,8 @@
-import { IsString, MaxLength, MinLength } from 'class-validator';
 import { IsAccountPassword } from '../../../common/decorators/is-account-password.decorator';
+import { IsCheckedPassword } from '../../../common/decorators/is-checked-password.decorator';
 
 export class UpdateAuthUserPasswordDto {
-  @IsString()
-  @MinLength(8)
-  @MaxLength(72)
+  @IsCheckedPassword()
   currentPassword!: string;
 
   @IsAccountPassword()

@@ -1,4 +1,5 @@
 import { IsString, MaxLength, MinLength } from 'class-validator';
+import { IsCheckedPassword } from '../../../common/decorators/is-checked-password.decorator';
 
 export class LoginDto {
   // Email address OR username — both are accepted. Usernames can never
@@ -9,7 +10,6 @@ export class LoginDto {
   @MaxLength(254)
   identifier!: string;
 
-  @IsString()
-  @MinLength(8)
+  @IsCheckedPassword()
   password!: string;
 }

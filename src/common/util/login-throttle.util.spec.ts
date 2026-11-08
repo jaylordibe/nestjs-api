@@ -1,5 +1,9 @@
+import type { ExecutionContext } from '@nestjs/common';
 import {
+  IS_SIGN_IN_ATTEMPT_KEY,
+  SIGN_IN_ADDRESS_THROTTLER,
   loginThrottleTracker,
+  signInAddressThrottler,
   passwordSignInThrottleKey,
 } from './login-throttle.util';
 
@@ -76,5 +80,36 @@ describe('passwordSignInThrottleKey', () => {
     expect(passwordSignInThrottleKey(null, 'a@b.c|1.2.3.4', 'other')).not.toBe(
       key,
     );
+  });
+});
+
+describe('signInAddressThrottler', () => {
+  function contextFor(isSignInAttempt: boolean): ExecutionContext {
+    const handler = (): void => undefined;
+    if (isSignInAttempt) {
+      Reflect.defineMetadata(IS_SIGN_IN_ATTEMPT_KEY, true, handler);
+    }
+    return { getHandler: () => handler } as unknown as ExecutionContext;
+  }
+
+  it('allows 30 sign-in attempts a minute per address, in the shared sign-in key', () => {
+    const throttler = signInAddressThrottler(false);
+    expect(throttler).toMatchObject({
+      name: SIGN_IN_ADDRESS_THROTTLER,
+      limit: 30,
+      ttl: 60_000,
+      generateKey: passwordSignInThrottleKey,
+    });
+  });
+
+  it('counts only routes marked as sign-in attempts', () => {
+    const { skipIf } = signInAddressThrottler(false);
+    expect(skipIf?.(contextFor(true))).toBe(false);
+    expect(skipIf?.(contextFor(false))).toBe(true);
+  });
+
+  it('skips everything under test, like the module-wide skip it replaces', () => {
+    const { skipIf } = signInAddressThrottler(true);
+    expect(skipIf?.(contextFor(true))).toBe(true);
   });
 });

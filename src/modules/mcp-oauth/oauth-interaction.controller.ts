@@ -14,10 +14,7 @@ import type { InteractionResults } from 'oidc-provider';
 import { Public } from '../../common/decorators/public.decorator';
 import { RequireTurnstile } from '../../common/decorators/require-turnstile.decorator';
 import { ErrorCode } from '../../common/errors/error-code.enum';
-import {
-  loginThrottleTracker,
-  passwordSignInThrottleKey,
-} from '../../common/util/login-throttle.util';
+import { ThrottleSignIn } from '../../common/decorators/throttle-sign-in.decorator';
 import { AuthService } from '../auth/auth.service';
 import { MCP_OAUTH_PATHS, MCP_OAUTH_THROTTLE } from './mcp-oauth.config';
 import { McpOAuthProviderService } from './mcp-oauth-provider.service';
@@ -85,14 +82,7 @@ export class OAuthInteractionController {
 
   @Post(':uid/login')
   @RequireTurnstile()
-  @Throttle({
-    default: {
-      limit: 5,
-      ttl: 60_000,
-      getTracker: loginThrottleTracker,
-      generateKey: passwordSignInThrottleKey,
-    },
-  })
+  @ThrottleSignIn()
   async login(
     @Param('uid') uid: string,
     @Req() request: Request,

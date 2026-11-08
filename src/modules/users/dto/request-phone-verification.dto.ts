@@ -1,9 +1,10 @@
-import { IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsString, Matches, MaxLength } from 'class-validator';
 import {
   E164_PHONE_MAX_LENGTH,
   E164_PHONE_MESSAGE,
   E164_PHONE_PATTERN,
 } from './create-user.dto';
+import { IsCheckedPassword } from '../../../common/decorators/is-checked-password.decorator';
 
 // Body for `POST /users/me/request-phone-verification`. Sends a one-time
 // code via SMS to the supplied number; consumed by
@@ -20,8 +21,6 @@ export class RequestPhoneVerificationDto {
   @Matches(E164_PHONE_PATTERN, { message: E164_PHONE_MESSAGE })
   phoneNumber!: string;
 
-  @IsString()
-  @MinLength(8)
-  @MaxLength(72)
+  @IsCheckedPassword()
   currentPassword!: string;
 }

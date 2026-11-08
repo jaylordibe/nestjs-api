@@ -1,6 +1,8 @@
 import {
   accountPasswordMessage,
+  checkedPasswordMessage,
   isAccountPassword,
+  isWithinAccountPasswordBounds,
 } from './account-password.util';
 
 describe('isAccountPassword', () => {
@@ -37,6 +39,24 @@ describe('accountPasswordMessage', () => {
   it('names the field and the rule', () => {
     expect(accountPasswordMessage('newPassword')).toBe(
       'newPassword must be at least 8 characters and at most 72 bytes, and contain a letter and a digit',
+    );
+  });
+});
+
+describe('isWithinAccountPasswordBounds', () => {
+  it.each([
+    ['8 characters, no digit', 'abcdefgh', true],
+    ['exactly 72 bytes', `${'ñ'.repeat(35)}a1`, true],
+    ['over 72 bytes', `${'ñ'.repeat(36)}a1`, false],
+    ['too short', 'abc1', false],
+    ['not a string', 12345678, false],
+  ])('%s → %s', (_label, value, expected) => {
+    expect(isWithinAccountPasswordBounds(value)).toBe(expected);
+  });
+
+  it('names the field and the bounds', () => {
+    expect(checkedPasswordMessage('currentPassword')).toBe(
+      'currentPassword must be at least 8 characters and at most 72 bytes',
     );
   });
 });

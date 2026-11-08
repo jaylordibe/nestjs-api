@@ -17,9 +17,22 @@ export function accountPasswordMessage(field: string): string {
 
 export function isAccountPassword(value: unknown): value is string {
   return (
+    isWithinAccountPasswordBounds(value) && ACCOUNT_PASSWORD_PATTERN.test(value)
+  );
+}
+
+// The bounds alone, for a password being CHECKED rather than set (sign-in, a
+// `currentPassword` field): every stored password passed `isAccountPassword`,
+// so one outside them can never match, and is refused before it reaches the
+// account lookup or bcrypt. `@IsCheckedPassword()` applies it.
+export function checkedPasswordMessage(field: string): string {
+  return `${field} must be at least ${ACCOUNT_PASSWORD_MIN_LENGTH} characters and at most ${ACCOUNT_PASSWORD_MAX_BYTES} bytes`;
+}
+
+export function isWithinAccountPasswordBounds(value: unknown): value is string {
+  return (
     typeof value === 'string' &&
     value.length >= ACCOUNT_PASSWORD_MIN_LENGTH &&
-    Buffer.byteLength(value, 'utf8') <= ACCOUNT_PASSWORD_MAX_BYTES &&
-    ACCOUNT_PASSWORD_PATTERN.test(value)
+    Buffer.byteLength(value, 'utf8') <= ACCOUNT_PASSWORD_MAX_BYTES
   );
 }

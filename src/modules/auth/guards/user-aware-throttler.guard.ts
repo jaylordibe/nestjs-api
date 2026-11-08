@@ -10,6 +10,7 @@ import {
 // Type-only: both appear in a decorated constructor signature, which
 // `isolatedModules` requires be imported as types (see AGENTS.md).
 import type {
+  ThrottlerLimitDetail,
   ThrottlerModuleOptions,
   ThrottlerStorage,
 } from '@nestjs/throttler';
@@ -99,6 +100,22 @@ export class UserAwareThrottlerGuard extends ThrottlerGuard {
         context.getClass(),
       ]) === true
     );
+  }
+
+  // Every 429 carries the standard `Retry-After` (RFC 9110, seconds). The
+  // library sets it only when the `default` throttler blocks; a named one
+  // (`sign-in-address`) sends just `Retry-After-<name>`, which no client reads.
+  protected override async throwThrottlingException(
+    context: ExecutionContext,
+    throttlerLimitDetail: ThrottlerLimitDetail,
+  ): Promise<void> {
+    const { res: response } = this.getRequestResponse(context);
+    this.setResponseHeader(
+      response,
+      'Retry-After',
+      throttlerLimitDetail.timeToBlockExpire,
+    );
+    return super.throwThrottlingException(context, throttlerLimitDetail);
   }
 
   // Returns the caller's user id when the request carries a VALID access token,

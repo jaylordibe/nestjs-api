@@ -1,11 +1,10 @@
-import { IsEmail, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsEmail } from 'class-validator';
+import { IsCheckedPassword } from '../../../common/decorators/is-checked-password.decorator';
 
 export class UpdateAuthUserEmailDto {
   @IsEmail()
   newEmail!: string;
 
-  @IsString()
-  @MinLength(8)
-  @MaxLength(72)
+  @IsCheckedPassword()
   currentPassword!: string;
 }

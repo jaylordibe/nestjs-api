@@ -427,6 +427,21 @@ describe('Users (e2e)', () => {
         .expect(401);
     });
 
+    // A current password over 72 bytes can never match a stored one: refused
+    // as input, before bcrypt, on every route that checks one.
+    it('PATCH /api/users/me/password refuses a current password over 72 bytes', async () => {
+      const { token } = await registerVerifiedUser(app, 'pw-bytes@example.com');
+      const res = await request(app.getHttpServer())
+        .patch('/api/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          currentPassword: `${'ñ'.repeat(36)}a1`,
+          newPassword: 'new-password-1',
+        })
+        .expect(400);
+      expect(res.body.errorCode).toBe('VALIDATION_FAILED');
+    });
+
     it('PATCH /api/users/me/password requires current password and keeps the caller signed in', async () => {
       const { token } = await registerVerifiedUser(app, 'pw@example.com');
       await request(app.getHttpServer())

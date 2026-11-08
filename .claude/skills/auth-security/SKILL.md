@@ -86,9 +86,13 @@ Permissions, roles, scope, ownership and 403-versus-404 belong to the
 
 ## Throttling authentication routes
 
-The global throttle is **not sufficient** for these. `POST /auth/login` is keyed
-by lower-cased identifier + IP (`loginThrottleTracker`, 5/min); there is no
-account lockout. Registration, login, refresh, verify-email, resend
+The global throttle is **not sufficient** for these. Every password sign-in
+form (`POST /auth/login`, the MCP OAuth sign-in) carries `@ThrottleSignIn()`:
+5/min per lower-cased identifier + IP (`loginThrottleTracker`) and 30/min per
+IP across identifiers (`signInAddressThrottler`), one budget shared by both
+forms; there is no account lockout. A password being checked rather than set
+takes `@IsCheckedPassword()` (8 characters to 72 bytes), one being set
+`@IsAccountPassword()`. Registration, login, refresh, verify-email, resend
 verification, request/reset password, and phone OTP request/verify each carry
 their own `@Throttle({ default: { limit, ttl } })`. So does every route that
 checks `currentPassword` (`/users/me/password`, `/users/me/email`,

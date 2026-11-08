@@ -429,15 +429,29 @@ describe('Auth (e2e)', () => {
         .expect(401);
     });
 
-    // The byte limit applies where a password is set, never where one is
-    // checked: a long multi-byte password still reaches the credential check.
-    it('checks a long multi-byte password rather than refusing it', async () => {
+    // Every stored password is at most 72 bytes, so a longer one can never
+    // match: refused as input, before the account lookup or bcrypt.
+    it('refuses a password over 72 bytes before checking it', async () => {
       await markVerified(app, 'bob@example.com');
       const res = await request(app.getHttpServer())
         .post('/api/auth/login')
         .send({
           identifier: 'bob@example.com',
-          password: `${'ñ'.repeat(70)}a1`,
+          // 38 characters, 74 bytes.
+          password: `${'ñ'.repeat(36)}a1`,
+        })
+        .expect(400);
+      expect(res.body.errorCode).toBe('VALIDATION_FAILED');
+    });
+
+    it('checks a password of exactly 72 bytes', async () => {
+      await markVerified(app, 'bob@example.com');
+      const res = await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({
+          identifier: 'bob@example.com',
+          // 35 × 2 bytes + 2 = 72 bytes.
+          password: `${'ñ'.repeat(35)}a1`,
         })
         .expect(401);
       expect(res.body.errorCode).toBe('INVALID_CREDENTIALS');
