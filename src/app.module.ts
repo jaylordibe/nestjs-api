@@ -16,6 +16,7 @@ import { TurnstileModule } from './common/turnstile/turnstile.module';
 import { Errors } from './common/errors/errors';
 import { flattenValidationErrors } from './common/errors/flatten-validation-errors';
 import { buildPinoHttpOptions } from './common/logging/pino-http-options';
+import { THROTTLE_IPV6_SUBNET_PREFIX } from './common/util/login-throttle.util';
 import { redactUrlSecrets } from './common/util/redact-url-secrets.util';
 // Still used by the CLS middleware's idGenerator below; the logger's own copy
 // moved into buildPinoHttpOptions, and both call this same memoised resolver so
@@ -229,6 +230,7 @@ import { UsersModule } from './modules/users/users.module';
               limit: configService.getOrThrow<number>('throttle.limit'),
             },
           ],
+          ipv6SubnetPrefix: THROTTLE_IPV6_SUBNET_PREFIX,
           skipIf: () => isTest,
           // Test env keeps in-memory storage (the @nestjs/throttler default)
           // so e2e runs don't depend on a live Redis. Dev/staging/prod share

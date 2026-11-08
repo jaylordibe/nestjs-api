@@ -321,6 +321,26 @@ describe('Auth (e2e)', () => {
         .expect(400);
     });
 
+    // 38 characters but 74 UTF-8 bytes: bcrypt would ignore the letter and
+    // digit past byte 72, so the password is measured in bytes when it is set.
+    it('rejects a password over 72 bytes with 400 and creates no user', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/api/auth/register')
+        .send({
+          email: 'bytes@example.com',
+          password: `${'ñ'.repeat(36)}a1`,
+          firstName: 'X',
+          lastName: 'Y',
+        })
+        .expect(400);
+      expect(res.body.errorCode).toBe('VALIDATION_FAILED');
+      expect(
+        await app
+          .get(PrismaService)
+          .user.count({ where: { email: 'bytes@example.com' } }),
+      ).toBe(0);
+    });
+
     it('rejects extraneous fields with 400 (whitelist)', async () => {
       await request(app.getHttpServer())
         .post('/api/auth/register')
@@ -407,6 +427,20 @@ describe('Auth (e2e)', () => {
         .post('/api/auth/login')
         .send({ identifier: 'nope@example.com', password: VALID_PASSWORD })
         .expect(401);
+    });
+
+    // The byte limit applies where a password is set, never where one is
+    // checked: a long multi-byte password still reaches the credential check.
+    it('checks a long multi-byte password rather than refusing it', async () => {
+      await markVerified(app, 'bob@example.com');
+      const res = await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({
+          identifier: 'bob@example.com',
+          password: `${'ñ'.repeat(70)}a1`,
+        })
+        .expect(401);
+      expect(res.body.errorCode).toBe('INVALID_CREDENTIALS');
     });
 
     it('does not lock the account after repeated failures', async () => {
@@ -552,6 +586,48 @@ describe('Auth (e2e)', () => {
       });
       expect(user.emailVerifiedAt).toBeNull();
     });
+
+    // A link verifies only under the keys this service signs with: HS256, and
+    // this service as issuer and audience. Another service sharing the secret,
+    // or another algorithm, verifies nothing.
+    it.each([
+      ['another audience', 'audience', { audience: 'another-service' }],
+      ['another issuer', 'issuer', { issuer: 'another-service' }],
+      [
+        'another algorithm (HS512)',
+        'algorithm',
+        { algorithm: 'HS512' as const },
+      ],
+    ])(
+      'refuses a link signed with %s (400 INVALID_LINK)',
+      async (_label, key, signOptions) => {
+        const email = `foreign-${key}@example.com`;
+        await request(app.getHttpServer()).post('/api/auth/register').send({
+          email,
+          password: VALID_PASSWORD,
+          firstName: 'Foreign',
+          lastName: 'Link',
+        });
+        const userId = await getUserIdByEmail(app, email);
+        const token = app
+          .get(JwtService)
+          .sign(
+            { sub: userId, purpose: 'email_verify', email },
+            { expiresIn: '10m', ...signOptions },
+          );
+
+        const res = await request(app.getHttpServer())
+          .post('/api/auth/verify-email')
+          .send({ token })
+          .expect(400);
+
+        expect(res.body.errorCode).toBe('INVALID_LINK');
+        const row = await app
+          .get(PrismaService)
+          .user.findUniqueOrThrow({ where: { id: userId } });
+        expect(row.emailVerifiedAt).toBeNull();
+      },
+    );
 
     // A link minted without the address (e.g. before links were bound to one)
     // proves nothing about the current address.
@@ -824,6 +900,45 @@ describe('Auth (e2e)', () => {
         .set('Authorization', `Bearer ${loginC.body.accessToken}`)
         .expect(200);
     });
+  });
+
+  describe('access token verification', () => {
+    async function verifiedUserId(email: string): Promise<string> {
+      await request(app.getHttpServer()).post('/api/auth/register').send({
+        email,
+        password: VALID_PASSWORD,
+        firstName: 'Token',
+        lastName: 'Check',
+      });
+      await markVerified(app, email);
+      return getUserIdByEmail(app, email);
+    }
+
+    const signAccessToken = (userId: string, options: object = {}): string =>
+      app.get(JwtService).sign({ sub: userId }, options);
+
+    it('accepts an access token signed as this service signs them', async () => {
+      const id = await verifiedUserId('hs256@example.com');
+      await request(app.getHttpServer())
+        .get('/api/users/me')
+        .set('Authorization', `Bearer ${signAccessToken(id)}`)
+        .expect(200);
+    });
+
+    // Signed with the real secret, issuer and audience — only the algorithm
+    // differs. Only HS256 is ever minted here, so nothing else is accepted.
+    it.each(['HS384', 'HS512'] as const)(
+      'refuses an access token signed %s (401)',
+      async (algorithm) => {
+        const id = await verifiedUserId(
+          `${algorithm.toLowerCase()}@example.com`,
+        );
+        await request(app.getHttpServer())
+          .get('/api/users/me')
+          .set('Authorization', `Bearer ${signAccessToken(id, { algorithm })}`)
+          .expect(401);
+      },
+    );
   });
 
   describe('GET /api/users/me', () => {

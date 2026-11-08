@@ -308,6 +308,30 @@ describe('External exposure (e2e)', () => {
       expect((await resendVerification('203.0.113.8')).status).toBe(200);
     });
 
+    // Password sign-in's per-identifier limit through the real AppModule:
+    // the route's tracker and the module's IPv6 prefix together give every
+    // address in one /64 one allowance. Each request omits the password:
+    // validation runs AFTER the throttler, so every request counts and no
+    // password is checked.
+    it('limits password sign-in per identifier across an IPv6 /64', async () => {
+      const signIn = (clientAddress: string) =>
+        request(app.getHttpServer())
+          .post('/api/auth/login')
+          .set('X-Forwarded-For', clientAddress)
+          .send({ identifier: 'sixty-four@example.test' });
+
+      // The route allows 5 per minute per identifier and address.
+      for (let attempt = 0; attempt < 5; attempt++) {
+        expect((await signIn(`2001:db8:40:1::${attempt + 1}`)).status).toBe(
+          400,
+        );
+      }
+      const refused = await signIn('2001:db8:40:1:ffff::1');
+      expect(refused.status).toBe(429);
+      expect(refused.body.errorCode).toBe('RATE_LIMITED');
+      expect((await signIn('2001:db8:40:2::1')).status).toBe(400);
+    });
+
     // The real AppModule's global guard, not a rig: two signed-in users behind
     // one address must not share a budget. The route allows 5 per minute; an
     // empty body fails validation, which runs AFTER the throttler, so every

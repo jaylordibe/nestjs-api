@@ -5,6 +5,7 @@ import { PassportModule } from '@nestjs/passport';
 import { UsersModule } from '../users/users.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { JWT_ALGORITHM } from './jwt-algorithm';
 import { RefreshTokenRetentionHandler } from './refresh-token-retention.handler';
 import { RefreshTokenService } from './refresh-token.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
@@ -28,6 +29,17 @@ import { JwtStrategy } from './strategies/jwt.strategy';
             // any other service that happens to share the same JWT_SECRET.
             issuer: serviceName,
             audience: serviceName,
+            algorithm: JWT_ALGORITHM,
+          },
+          // Merged under every `JwtService.verify` call's own options (a
+          // call's own value wins), so a verify that passes none — the
+          // email-verification link, today — still refuses a token signed by
+          // another service or under another algorithm. passport-jwt never
+          // reads these: JwtStrategy pins its own.
+          verifyOptions: {
+            issuer: serviceName,
+            audience: serviceName,
+            algorithms: [JWT_ALGORITHM],
           },
         };
       },

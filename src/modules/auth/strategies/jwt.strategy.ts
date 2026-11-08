@@ -7,6 +7,7 @@ import { Errors } from '../../../common/errors/errors';
 import { isAccessTokenPayload } from '../../../common/util/access-token.util';
 import { RedisService } from '../../../common/redis/redis.service';
 import { UsersService } from '../../users/users.service';
+import { JWT_ALGORITHM } from '../jwt-algorithm';
 
 export interface JwtPayload {
   sub: string;
@@ -37,6 +38,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       secretOrKey: configService.getOrThrow<string>('jwt.secret'),
       issuer: serviceName,
       audience: serviceName,
+      algorithms: [JWT_ALGORITHM],
     });
   }
 

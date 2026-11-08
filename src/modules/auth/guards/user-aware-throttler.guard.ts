@@ -16,6 +16,7 @@ import type {
 import type { Request } from 'express';
 import { IS_PUBLIC_KEY } from '../../../common/decorators/public.decorator';
 import { isAccessTokenPayload } from '../../../common/util/access-token.util';
+import { JWT_ALGORITHM } from '../jwt-algorithm';
 
 // Rate-limit bucket key. The stock ThrottlerGuard keys purely on IP, which is
 // wrong wherever many people share one address — an office, a campus, a hotel
@@ -126,11 +127,7 @@ export class UserAwareThrottlerGuard extends ThrottlerGuard {
         secret: this.jwtSecret,
         issuer: this.jwtIssuerAndAudience,
         audience: this.jwtIssuerAndAudience,
-        // Pinned rather than inferred. jsonwebtoken@9 already derives
-        // HS-only from a string secret, so this changes nothing today — it
-        // is here so that swapping to an asymmetric key later cannot
-        // silently widen the accepted set and open HS/RS confusion.
-        algorithms: ['HS256'],
+        algorithms: [JWT_ALGORITHM],
       });
       // A verification-link token is signed with the same keys but is not an
       // access token: JwtStrategy refuses it, so it gets no private bucket.

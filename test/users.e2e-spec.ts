@@ -1,11 +1,16 @@
 import { INestApplication } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
+import { createHash } from 'crypto';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AuditService } from '../src/common/audit/audit.service';
 import { JobName } from '../src/common/queue/job-registry';
 import { QueueProducerService } from '../src/common/queue/queue-producer.service';
+import { DestinationSendLimitService } from '../src/common/send-limit/destination-send-limit.service';
+import { RefreshTokenService } from '../src/modules/auth/refresh-token.service';
+import { UsersService } from '../src/modules/users/users.service';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { pauseBefore, runRace } from './setup/barrier';
 import { createTestApp } from './setup/test-app';
 import { truncateAll } from './setup/db';
 import {
@@ -15,6 +20,7 @@ import {
 } from './setup/emails';
 import {
   createPlatformAdmin,
+  createRegularUser,
   registerVerifiedUser,
   seedRbacCatalog,
 } from './setup/rbac';
@@ -679,6 +685,20 @@ describe('Users (e2e)', () => {
           .expect(200);
       });
 
+      it('refuses a new password over 72 bytes and leaves the link usable', async () => {
+        await createRegularUser(app, 'reset-bytes@example.com');
+        const token = await requestResetToken('reset-bytes@example.com');
+
+        const refused = await resetPassword(
+          'reset-bytes@example.com',
+          token,
+          `${'ñ'.repeat(36)}a1`,
+        ).expect(400);
+        expect(refused.body.errorCode).toBe('VALIDATION_FAILED');
+
+        await resetPassword('reset-bytes@example.com', token).expect(200);
+      });
+
       it("rejects a wrong token or another account's email with 400 INVALID_LINK", async () => {
         await registerVerifiedUser(app, 'wrong-token@example.com');
         await registerVerifiedUser(app, 'other@example.com');
@@ -700,6 +720,411 @@ describe('Users (e2e)', () => {
           data: { otpExpiresAt: new Date(Date.now() - 1_000) },
         });
         await resetPassword('expired@example.com', token).expect(400);
+      });
+
+      function signInStatus(email: string, password: string): Promise<number> {
+        return request(app.getHttpServer())
+          .post('/api/auth/login')
+          .send({ identifier: email, password })
+          .then((response) => response.status);
+      }
+
+      // Single use must hold when two redemptions overlap, not only in
+      // sequence. The first request is parked after its token check and its
+      // password hash — just before it takes the account lock — while the
+      // second redeems the same link to completion.
+      it('redeems a link once when two redemptions race: the loser gets INVALID_LINK', async () => {
+        const { id } = await createRegularUser(app, 'race@example.com');
+        const token = await requestResetToken('race@example.com');
+
+        const paused = pauseBefore(
+          app.get(RefreshTokenService),
+          'lockSessions',
+        );
+        const outcome = await runRace(
+          resetPassword('race@example.com', token, 'first-racer-pw-1'),
+          paused,
+          () => resetPassword('race@example.com', token, 'second-racer-pw-2'),
+        );
+
+        expect(outcome.racer).toMatchObject({
+          status: 'fulfilled',
+          value: { status: 200 },
+        });
+        expect(outcome.paused).toMatchObject({
+          status: 'fulfilled',
+          value: { status: 400, body: { errorCode: 'INVALID_LINK' } },
+        });
+        expect(
+          await signInStatus('race@example.com', 'second-racer-pw-2'),
+        ).toBe(200);
+        expect(await signInStatus('race@example.com', 'first-racer-pw-1')).toBe(
+          401,
+        );
+        const prisma = app.get(PrismaService);
+        const row = await prisma.user.findUniqueOrThrow({ where: { id } });
+        expect(row).toMatchObject({
+          otpHash: null,
+          otpPurpose: null,
+          otpExpiresAt: null,
+        });
+        expect(
+          await prisma.auditLog.count({
+            where: { action: 'password.reset.completed', targetUserId: id },
+          }),
+        ).toBe(1);
+      });
+
+      it('refuses an older link once a newer one was sent while it was being redeemed', async () => {
+        const { id } = await createRegularUser(app, 'remint@example.com');
+        const oldToken = await requestResetToken('remint@example.com');
+        // The newer link, written as the reset worker writes it, so the test
+        // does not depend on the address's send budget for a second email.
+        const newToken = 'b'.repeat(64);
+        const prisma = app.get(PrismaService);
+
+        const paused = pauseBefore(
+          app.get(RefreshTokenService),
+          'lockSessions',
+        );
+        const outcome = await runRace(
+          resetPassword('remint@example.com', oldToken),
+          paused,
+          () =>
+            prisma.user.update({
+              where: { id },
+              data: {
+                otpHash: createHash('sha256').update(newToken).digest('hex'),
+                otpPurpose: 'password_reset',
+                otpExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+              },
+            }),
+        );
+
+        expect(outcome.paused).toMatchObject({
+          status: 'fulfilled',
+          value: { status: 400, body: { errorCode: 'INVALID_LINK' } },
+        });
+        await resetPassword('remint@example.com', newToken).expect(200);
+      });
+
+      it('cancels a pending link when the password is changed', async () => {
+        const { token: accessToken } = await createRegularUser(
+          app,
+          'changed-pw@example.com',
+        );
+        const token = await requestResetToken('changed-pw@example.com');
+
+        await request(app.getHttpServer())
+          .patch('/api/users/me/password')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .send({ currentPassword: PASSWORD, newPassword: 'changed-pw-2' })
+          .expect(200);
+
+        const refused = await resetPassword(
+          'changed-pw@example.com',
+          token,
+        ).expect(400);
+        expect(refused.body.errorCode).toBe('INVALID_LINK');
+      });
+
+      it('cancels a pending link when the email is changed, so the old mailbox cannot reset the new address', async () => {
+        const { token: accessToken } = await createRegularUser(
+          app,
+          'old-mailbox@example.com',
+        );
+        const token = await requestResetToken('old-mailbox@example.com');
+
+        await request(app.getHttpServer())
+          .patch('/api/users/me/email')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .send({
+            newEmail: 'new-mailbox@example.com',
+            currentPassword: PASSWORD,
+          })
+          .expect(200);
+
+        const refused = await resetPassword(
+          'new-mailbox@example.com',
+          token,
+        ).expect(400);
+        expect(refused.body.errorCode).toBe('INVALID_LINK');
+      });
+
+      it('cancels a pending link when an admin changes the email or sets the password', async () => {
+        const { token: adminToken } = await createPlatformAdmin(
+          app,
+          'reset-admin@example.com',
+        );
+        const moved = await createRegularUser(app, 'admin-moved@example.com');
+        const movedToken = await requestResetToken('admin-moved@example.com');
+        await request(app.getHttpServer())
+          .patch(`/api/users/${moved.id}`)
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send({ email: 'admin-moved-new@example.com' })
+          .expect(200);
+        const movedRefused = await resetPassword(
+          'admin-moved-new@example.com',
+          movedToken,
+        ).expect(400);
+        expect(movedRefused.body.errorCode).toBe('INVALID_LINK');
+
+        const reset = await createRegularUser(app, 'admin-set@example.com');
+        const resetToken = await requestResetToken('admin-set@example.com');
+        await request(app.getHttpServer())
+          .patch(`/api/users/${reset.id}/password`)
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send({ newPassword: 'admin-set-pw-1' })
+          .expect(200);
+        const setRefused = await resetPassword(
+          'admin-set@example.com',
+          resetToken,
+        ).expect(400);
+        expect(setRefused.body.errorCode).toBe('INVALID_LINK');
+      });
+
+      it('cancels a pending link when an admin moves the email while deactivating', async () => {
+        const { token: adminToken } = await createPlatformAdmin(
+          app,
+          'reset-admin-deactivate@example.com',
+        );
+        const moved = await createRegularUser(
+          app,
+          'deactivated-move@example.com',
+        );
+        const token = await requestResetToken('deactivated-move@example.com');
+
+        await request(app.getHttpServer())
+          .patch(`/api/users/${moved.id}`)
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send({ email: 'deactivated-move-new@example.com', isActive: false })
+          .expect(200);
+        await request(app.getHttpServer())
+          .patch(`/api/users/${moved.id}`)
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send({ isActive: true })
+          .expect(200);
+
+        const refused = await resetPassword(
+          'deactivated-move-new@example.com',
+          token,
+        ).expect(400);
+        expect(refused.body.errorCode).toBe('INVALID_LINK');
+      });
+
+      // An admin form that re-sends the address it already holds moves
+      // nothing, so it leaves the user's reset link alone.
+      it('keeps a pending link when an admin re-sends the same email', async () => {
+        const { token: adminToken } = await createPlatformAdmin(
+          app,
+          'reset-admin-same@example.com',
+        );
+        const kept = await createRegularUser(app, 'same-email@example.com');
+        const token = await requestResetToken('same-email@example.com');
+
+        await request(app.getHttpServer())
+          .patch(`/api/users/${kept.id}`)
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send({ email: 'same-email@example.com', firstName: 'Renamed' })
+          .expect(200);
+
+        await resetPassword('same-email@example.com', token).expect(200);
+      });
+
+      // A link that expires while its redemption is hashing the new password
+      // is refused under the lock, not honoured on the unlocked check.
+      it('refuses a link that expired while it was being redeemed', async () => {
+        const { id } = await createRegularUser(app, 'expiring@example.com');
+        const token = await requestResetToken('expiring@example.com');
+        const prisma = app.get(PrismaService);
+
+        const paused = pauseBefore(
+          app.get(RefreshTokenService),
+          'lockSessions',
+        );
+        const outcome = await runRace(
+          resetPassword('expiring@example.com', token),
+          paused,
+          () =>
+            prisma.user.update({
+              where: { id },
+              data: { otpExpiresAt: new Date(Date.now() - 1_000) },
+            }),
+        );
+
+        expect(outcome.paused).toMatchObject({
+          status: 'fulfilled',
+          value: { status: 400, body: { errorCode: 'INVALID_LINK' } },
+        });
+        expect(await signInStatus('expiring@example.com', PASSWORD)).toBe(200);
+      });
+
+      // The reset email job reads the account without a lock, then mints. An
+      // email change committing in between finds no link to cancel; the mint
+      // must then lose, or the old mailbox gets a link that resets the
+      // account at its new address.
+      it('mints no link when the email changes while the reset email is being prepared', async () => {
+        const { id, token: accessToken } = await createRegularUser(
+          app,
+          'mint-race@example.com',
+        );
+        await deliverQueuedEmails(app);
+        const emails = captureEmails(app);
+        try {
+          const paused = pauseBefore(
+            app.get(DestinationSendLimitService),
+            'sendWithinLimit',
+          );
+          const outcome = await runRace(
+            app.get(UsersService).deliverPasswordReset(id),
+            paused,
+            () =>
+              request(app.getHttpServer())
+                .patch('/api/users/me/email')
+                .set('Authorization', `Bearer ${accessToken}`)
+                .send({
+                  newEmail: 'mint-race-new@example.com',
+                  currentPassword: PASSWORD,
+                })
+                .then((response) => response.status),
+          );
+
+          expect(outcome.racer).toMatchObject({
+            status: 'fulfilled',
+            value: 200,
+          });
+          expect(outcome.paused).toMatchObject({
+            status: 'fulfilled',
+            value: 'nothing-to-send',
+          });
+          const row = await app
+            .get(PrismaService)
+            .user.findUniqueOrThrow({ where: { id } });
+          expect(row.otpPurpose).toBeNull();
+          expect(
+            emails.sent.filter(
+              (email) => email.template === 'password-reset-link',
+            ),
+          ).toEqual([]);
+        } finally {
+          emails.restore();
+        }
+      });
+
+      it('mints no link when the password changes while the reset email is being prepared', async () => {
+        const { id, token: accessToken } = await createRegularUser(
+          app,
+          'mint-pw-race@example.com',
+        );
+        await deliverQueuedEmails(app);
+        const emails = captureEmails(app);
+        try {
+          const paused = pauseBefore(
+            app.get(DestinationSendLimitService),
+            'sendWithinLimit',
+          );
+          const outcome = await runRace(
+            app.get(UsersService).deliverPasswordReset(id),
+            paused,
+            () =>
+              request(app.getHttpServer())
+                .patch('/api/users/me/password')
+                .set('Authorization', `Bearer ${accessToken}`)
+                .send({
+                  currentPassword: PASSWORD,
+                  newPassword: 'mint-race-pw-2',
+                })
+                .then((response) => response.status),
+          );
+
+          expect(outcome.racer).toMatchObject({
+            status: 'fulfilled',
+            value: 200,
+          });
+          expect(outcome.paused).toMatchObject({
+            status: 'fulfilled',
+            value: 'nothing-to-send',
+          });
+          const row = await app
+            .get(PrismaService)
+            .user.findUniqueOrThrow({ where: { id } });
+          expect(row.otpPurpose).toBeNull();
+          expect(
+            emails.sent.filter(
+              (email) => email.template === 'password-reset-link',
+            ),
+          ).toEqual([]);
+        } finally {
+          emails.restore();
+        }
+      });
+
+      // Signing out everywhere moves the session cutoff but changes neither
+      // the address nor the password: a reset requested just before must
+      // still be sent.
+      it('still sends the link when the account signs out everywhere meanwhile', async () => {
+        const { id, token: accessToken } = await createRegularUser(
+          app,
+          'logout-all-race@example.com',
+        );
+        await deliverQueuedEmails(app);
+        const emails = captureEmails(app);
+        try {
+          const paused = pauseBefore(
+            app.get(DestinationSendLimitService),
+            'sendWithinLimit',
+          );
+          const outcome = await runRace(
+            app.get(UsersService).deliverPasswordReset(id),
+            paused,
+            () =>
+              request(app.getHttpServer())
+                .post('/api/auth/logout-all')
+                .set('Authorization', `Bearer ${accessToken}`)
+                .then((response) => response.status),
+          );
+
+          expect(outcome.racer).toMatchObject({
+            status: 'fulfilled',
+            value: 204,
+          });
+          expect(outcome.paused).toMatchObject({
+            status: 'fulfilled',
+            value: 'sent',
+          });
+          expect(
+            emails.sent.filter(
+              (email) => email.template === 'password-reset-link',
+            ),
+          ).toHaveLength(1);
+        } finally {
+          emails.restore();
+        }
+      });
+
+      // The otp slot is shared; cancelling a reset link must not wipe a code
+      // issued for another purpose.
+      it('leaves a pending phone-verification code alone when the password is changed', async () => {
+        const { id, token: accessToken } = await createRegularUser(
+          app,
+          'phone-code@example.com',
+        );
+        const prisma = app.get(PrismaService);
+        const phoneCode = {
+          otpHash: 'c'.repeat(64),
+          otpPurpose: 'phone_verify',
+          otpExpiresAt: new Date(Date.now() + 10 * 60 * 1000),
+        };
+        await prisma.user.update({ where: { id }, data: phoneCode });
+
+        await request(app.getHttpServer())
+          .patch('/api/users/me/password')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .send({ currentPassword: PASSWORD, newPassword: 'changed-pw-3' })
+          .expect(200);
+
+        const row = await prisma.user.findUniqueOrThrow({ where: { id } });
+        expect(row).toMatchObject(phoneCode);
       });
     });
 

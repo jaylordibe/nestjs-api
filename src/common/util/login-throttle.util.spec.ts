@@ -33,6 +33,30 @@ describe('loginThrottleTracker', () => {
       loginThrottleTracker({ body: { identifier: 42 }, ip: '203.0.113.7' }),
     ).toBe('|203.0.113.7');
   });
+
+  // One IPv6 host holds a whole /64; keyed on the raw address it would get a
+  // fresh bucket for every address in it.
+  it('gives every address in one IPv6 /64 the same bucket', () => {
+    const first = loginThrottleTracker({
+      body: { identifier: 'alice' },
+      ip: '2001:db8:1:2:3:4:5:6',
+    });
+    const second = loginThrottleTracker({
+      body: { identifier: 'alice' },
+      ip: '2001:db8:1:2:ffff::1',
+    });
+    expect(first).toBe(second);
+    expect(first).toBe('alice|2001:db8:1:2::/64');
+  });
+
+  it('keys an IPv4-mapped IPv6 address as its IPv4 address', () => {
+    expect(
+      loginThrottleTracker({
+        body: { identifier: 'alice' },
+        ip: '::ffff:203.0.113.7',
+      }),
+    ).toBe('alice|203.0.113.7');
+  });
 });
 
 describe('passwordSignInThrottleKey', () => {

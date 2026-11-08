@@ -43,7 +43,7 @@ export class PasswordResetJobHandler implements QueueJobHandler<UserEmailJobPayl
   async handle(payload: UserEmailJobPayloadDto): Promise<JobOutcome> {
     return deliveryJobOutcome(
       await this.usersService.deliverPasswordReset(payload.userId),
-      'account gone or inactive',
+      'account gone, inactive or changed since the reset was requested',
     );
   }
 }

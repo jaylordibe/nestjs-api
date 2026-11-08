@@ -95,7 +95,7 @@ Raised before any handler runs, by Express's body parser (mapped by `fromBodyPar
 |---|---|---|
 | `VALIDATION_FAILED` | class-validator failure on a DTO; also `Errors.badRequest()` for malformed input class-validator cannot express. | `Array<{ field: string; constraints: string[] }>` (paths like `address.street`, `passengers[0].firstName`); `null` from `Errors.badRequest()` |
 | `INVALID_OTP` | Bad or expired phone-verification code. | `null` |
-| `INVALID_LINK` | Bad, expired or already-used link token (verify-email, password reset). | `null` |
+| `INVALID_LINK` | Bad, expired or already-used link token (verify-email, password reset). A password-reset link is also retired by a later password or email change on the account. | `null` |
 | `TURNSTILE_TOKEN_MISSING` | A route behind the Turnstile bot check was called without an `X-Turnstile-Token` header. Nothing was sent, created or checked. Send a token from the widget. | `null` |
 | `TURNSTILE_TOKEN_INVALID` | Cloudflare refused the token: bad, expired, already used, or from the other widget. Get a new token and retry. Cloudflare spends a token on every request that reaches it, whatever the request's own outcome, so fetch a fresh token for every submission. | `null` |
 | `EMAIL_DOMAIN_DISALLOWED` | Sign-up with a disposable / temporary email provider. | `{ domain: string }` |

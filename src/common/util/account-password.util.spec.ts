@@ -14,6 +14,9 @@ describe('isAccountPassword', () => {
   it.each([
     ['too short', 'abcdef1'],
     ['too long', `${'a'.repeat(72)}1`],
+    // 38 characters, 74 UTF-8 bytes: bcrypt would ignore the letter and digit
+    // past byte 72, so the password it stores is weaker than the one checked.
+    ['over 72 bytes in multi-byte characters', `${'ñ'.repeat(36)}a1`],
     ['no digit', 'abcdefgh'],
     ['no letter', '12345678'],
     ['not a string', 12345678],
@@ -23,10 +26,17 @@ describe('isAccountPassword', () => {
   });
 });
 
+describe('isAccountPassword byte limit', () => {
+  it('accepts a multi-byte password up to exactly 72 bytes', () => {
+    // 35 × 2 bytes + 2 = 72 bytes.
+    expect(isAccountPassword(`${'ñ'.repeat(35)}a1`)).toBe(true);
+  });
+});
+
 describe('accountPasswordMessage', () => {
   it('names the field and the rule', () => {
     expect(accountPasswordMessage('newPassword')).toBe(
-      'newPassword must be 8–72 characters and contain a letter and a digit',
+      'newPassword must be at least 8 characters and at most 72 bytes, and contain a letter and a digit',
     );
   });
 });

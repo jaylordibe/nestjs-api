@@ -246,18 +246,41 @@ export class UsersService {
     if (!user || !user.isActive) {
       return 'nothing-to-send';
     }
+    let isMinted = false;
     const sent = await this.destinationSendLimit.sendWithinLimit(
       SendPurpose.PASSWORD_RESET,
       canonicalEmailDestination(user.email),
-      () => this.mintAndSendPasswordReset(user),
+      async () => {
+        isMinted = await this.mintAndSendPasswordReset(user);
+      },
     );
-    return sent ? 'sent' : 'destination-limited';
+    if (!sent) return 'destination-limited';
+    return isMinted ? 'sent' : 'nothing-to-send';
   }
 
-  private async mintAndSendPasswordReset(user: User): Promise<void> {
+  /**
+   * Stores the link's hash and mails it — only while the account is still
+   * the one this job read: the same address, the same password, still live.
+   * The read above took no lock, so an email or password change can commit in
+   * between, and its cancel (`cancelPendingPasswordResetWithin`) then finds no
+   * link yet; minting by id alone would store one after it, mailed to the
+   * address the owner just left, that resets the account at its new one.
+   * Conditional, the mint loses that race and sends nothing. Returns whether
+   * a link was minted and sent.
+   */
+  private async mintAndSendPasswordReset(user: User): Promise<boolean> {
     const token = generateOpaqueToken();
-    await this.prisma.user.update({
-      where: { id: user.id },
+    const minted = await this.prisma.user.updateMany({
+      where: {
+        id: user.id,
+        email: user.email,
+        deletedAt: null,
+        isActive: true,
+        // The same password, by its hash: changed by every password set,
+        // reset or redemption and by nothing else (the session cutoff also
+        // moves on logout-everywhere, which must not drop a real request).
+        password: user.password,
+      },
       data: {
         otpHash: hashOpaqueToken(token),
         otpPurpose: OtpPurpose.PASSWORD_RESET,
@@ -266,6 +289,7 @@ export class UsersService {
         ),
       },
     });
+    if (minted.count !== 1) return false;
     const resetUrl = new URL(
       this.configService.getOrThrow<string>('passwordResetUrl'),
     );
@@ -277,6 +301,7 @@ export class UsersService {
       resetUrl.toString(),
       PASSWORD_RESET_EXPIRY_MINUTES,
     );
+    return true;
   }
 
   /** Worker side of `USER_PASSWORD_CHANGED_NOTICE_V1`. */
@@ -613,10 +638,28 @@ export class UsersService {
     // owner was deleted, and it needs the same refusal. It also has to end the
     // account's sessions: leaving live refresh rows behind means a later
     // reactivation silently resurrects every session that existed before.
+    //
+    // A new address also ends any pending reset link, as a self-service
+    // change does (`updateEmail`): it was mailed to the address being left —
+    // often the very one an admin moves an account away from because it is
+    // lost — and must not reset the account at its new one.
     const updated =
       dto.isActive === false && existing.isActive
-        ? await this.deactivate(id, updateData, actorId)
-        : await this.prisma.user.update({ where: { id }, data: updateData });
+        ? await this.deactivate(id, updateData, actorId, newEmail)
+        : newEmail !== undefined
+          ? await this.prisma.$transaction(async (transaction) => {
+              await this.refreshTokenService.lockSessions(transaction, id);
+              await this.cancelPendingPasswordResetOnEmailChangeWithin(
+                transaction,
+                id,
+                newEmail,
+              );
+              return transaction.user.update({
+                where: { id },
+                data: updateData,
+              });
+            })
+          : await this.prisma.user.update({ where: { id }, data: updateData });
 
     if (actorId && actorId !== id) {
       await this.auditService.record({
@@ -651,10 +694,18 @@ export class UsersService {
     userId: string,
     updateData: Prisma.UserUpdateInput,
     actorId: string | null,
+    newEmail: string | undefined,
   ): Promise<User> {
     const deactivated = await this.prisma.$transaction(async (transaction) => {
       // User row first, then workspaces — the order in `row-lock.util.ts`.
       await this.refreshTokenService.lockSessions(transaction, userId);
+      if (newEmail !== undefined) {
+        await this.cancelPendingPasswordResetOnEmailChangeWithin(
+          transaction,
+          userId,
+          newEmail,
+        );
+      }
       await this.workspaceOwnershipPolicy.assertUserIsNotASoleOwner(
         transaction,
         userId,
@@ -985,6 +1036,8 @@ export class UsersService {
    * Moves the account to a new address and emails a verification link there.
    * The address is the recovery channel, so every OTHER session ends; the
    * caller gets a fresh session (their current tokens die with the cutoff).
+   * A pending reset link ends too: it was sent to the address being left, and
+   * must not reset the account at its new one.
    */
   async updateEmail(
     userId: string,
@@ -1000,11 +1053,17 @@ export class UsersService {
       throw Errors.currentPasswordIncorrect();
     }
     const newEmail = dto.newEmail.toLowerCase();
-    const updated = await this.refreshTokenService.endAllSessions(
-      userId,
-      userId,
-      { email: newEmail, emailVerifiedAt: null },
-    );
+    const updated = await this.prisma.$transaction(async (transaction) => {
+      // User lock first, as in `applyPasswordChange`.
+      await this.refreshTokenService.lockSessions(transaction, userId);
+      await this.cancelPendingPasswordResetWithin(transaction, userId);
+      return this.refreshTokenService.endAllSessionsInTransaction(
+        transaction,
+        userId,
+        userId,
+        { email: newEmail, emailVerifiedAt: null },
+      );
+    });
     if (newEmail !== user.email) {
       await this.recordEmailChange(user, newEmail, userId);
     }
@@ -1020,13 +1079,17 @@ export class UsersService {
   /**
    * THE credential write: hash, cutoff bump and revocation of every refresh
    * family, in one transaction. There is no way to change a password without
-   * ending the account's sessions. `extraData` lands in the same row update.
+   * ending the account's sessions.
+   *
+   * A pending reset link always ends here too: redeemed, when this change IS
+   * that redemption (`redeemResetToken`), else cancelled — a link the owner
+   * retired by choosing a new password must not still open the account.
    */
   private async applyPasswordChange(
     userId: string,
     plaintextPassword: string,
     actorId: string | null,
-    extraData: Prisma.UserUpdateInput = {},
+    options: { redeemResetToken?: { tokenHash: string } } = {},
   ): Promise<User> {
     // Hashed BEFORE the transaction opens. bcrypt at 12 rounds costs ~250ms, and
     // holding a row lock across it would serialise every concurrent session
@@ -1038,12 +1101,92 @@ export class UsersService {
       // credential change and a concurrent rotation cannot deadlock, and a
       // rotation in flight cannot slip a replacement token past the revocation.
       await this.refreshTokenService.lockSessions(transaction, userId);
+      if (options.redeemResetToken) {
+        await this.redeemResetTokenWithin(
+          transaction,
+          userId,
+          options.redeemResetToken.tokenHash,
+        );
+      } else {
+        await this.cancelPendingPasswordResetWithin(transaction, userId);
+      }
       return this.refreshTokenService.endAllSessionsInTransaction(
         transaction,
         userId,
         actorId,
-        { ...extraData, password: passwordHash },
+        { password: passwordHash },
       );
+    });
+  }
+
+  /**
+   * Uses the reset link: matches and clears it in ONE conditional write, under
+   * the user lock the caller holds. `resetPassword`'s earlier check read the
+   * row unlocked, so it cannot be the only one — two redemptions of one link
+   * both pass it, and a link replaced since (a newer reset, a phone code in
+   * the shared slot) would still win. Here the write re-checks against the
+   * committed row: whoever comes second finds the slot cleared or replaced and
+   * gets INVALID_LINK, and the transaction writes nothing.
+   *
+   * After the lock, never before: an UPDATE first would take a weaker row lock
+   * that `lockSessions` would then have to upgrade — a deadlock against any
+   * transaction queued for the same lock.
+   */
+  private async redeemResetTokenWithin(
+    transaction: Prisma.TransactionClient,
+    userId: string,
+    tokenHash: string,
+  ): Promise<void> {
+    const redeemed = await transaction.user.updateMany({
+      where: {
+        id: userId,
+        // The transaction client is unscoped; soft-deleted is never reset.
+        deletedAt: null,
+        isActive: true,
+        otpPurpose: OtpPurpose.PASSWORD_RESET,
+        otpHash: tokenHash,
+        otpExpiresAt: { gt: new Date() },
+      },
+      data: { otpHash: null, otpPurpose: null, otpExpiresAt: null },
+    });
+    if (redeemed.count !== 1) {
+      throw Errors.invalidLink();
+    }
+  }
+
+  /**
+   * Cancels a pending reset link when `newEmail` moves the account to another
+   * address, under the user lock the caller holds. Decided from the row read
+   * under that lock, not from the caller's earlier unlocked read: an email
+   * change committed in between would make a stale "unchanged" wrong, and
+   * leave a link mailed to an address the account is leaving.
+   */
+  private async cancelPendingPasswordResetOnEmailChangeWithin(
+    transaction: Prisma.TransactionClient,
+    userId: string,
+    newEmail: string,
+  ): Promise<void> {
+    const current = await transaction.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { email: true },
+    });
+    if (current.email !== newEmail) {
+      await this.cancelPendingPasswordResetWithin(transaction, userId);
+    }
+  }
+
+  /**
+   * Cancels a pending reset link, under the user lock the caller holds. Only a
+   * reset link: the otp slot is shared, and a code issued for another purpose
+   * (a phone verification) is not this change's to end.
+   */
+  private async cancelPendingPasswordResetWithin(
+    transaction: Prisma.TransactionClient,
+    userId: string,
+  ): Promise<void> {
+    await transaction.user.updateMany({
+      where: { id: userId, otpPurpose: OtpPurpose.PASSWORD_RESET },
+      data: { otpHash: null, otpPurpose: null, otpExpiresAt: null },
     });
   }
 
@@ -1248,24 +1391,28 @@ export class UsersService {
   /**
    * Redeems a reset link: single use, 60-minute expiry, and every session the
    * account holds ends. Every failure is INVALID_LINK.
+   *
+   * The check below reads the row unlocked: it turns a wrong token away before
+   * it costs a password hash, and nothing more. The link is used — matched
+   * again and cleared — under the account lock (`redeemResetTokenWithin`), so
+   * two redemptions of one link cannot both succeed.
    */
   async resetPassword(dto: ResetPasswordDto): Promise<void> {
     const user = await this.findByEmail(dto.email);
+    const tokenHash = hashOpaqueToken(dto.token);
     if (
       !user ||
       !user.isActive ||
       !user.otpHash ||
       user.otpPurpose !== OtpPurpose.PASSWORD_RESET ||
       !user.otpExpiresAt ||
-      user.otpExpiresAt.getTime() < Date.now() ||
-      !isSameHash(hashOpaqueToken(dto.token), user.otpHash)
+      user.otpExpiresAt.getTime() <= Date.now() ||
+      !isSameHash(tokenHash, user.otpHash)
     ) {
       throw Errors.invalidLink();
     }
     await this.applyPasswordChange(user.id, dto.newPassword, user.id, {
-      otpHash: null,
-      otpPurpose: null,
-      otpExpiresAt: null,
+      redeemResetToken: { tokenHash },
     });
     await this.auditService.record({
       action: 'password.reset.completed',
