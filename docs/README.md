@@ -36,8 +36,11 @@ If you run it on **one server with no autoscaler**:
   is wrong the moment the API scales horizontally: every instance would then
   consume jobs and race to reconcile the same recurring schedules. Split the
   worker out first (`deployment/README.md`).
-- **`TRUST_PROXY` is the edge's one fixed address.** Behind Cloudflare, the edge,
-  not the application, turns `CF-Connecting-IP` into the client address.
+- **`TRUST_PROXY` lists every proxy hop's fixed address**: the edge's, and a
+  server-rendered web app's when it calls the API from its server and passes on
+  the visitor's `X-Forwarded-For` ([Client topologies](./deployment/README.md#client-topologies)).
+  Behind Cloudflare, the edge, not the application, turns `CF-Connecting-IP`
+  into the client address.
 - **Protect Swagger at the edge** on staging (for example basic auth on the one
   `/api/docs` subtree); the application turns it off in production.
 
