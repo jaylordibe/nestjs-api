@@ -24,6 +24,9 @@ lerna-debug.log*
 # Tests
 /coverage
 /.nyc_output
+# Written by CI's e2e shards for the shard planner (.github/workflows/test.yml)
+/e2e-results-*.json
+/.e2e-timings
 
 # IDEs and editors
 /.idea

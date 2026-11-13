@@ -35,16 +35,16 @@ permissions:
   contents: read
 
 jobs:
-  # Every job below is independent, with no `needs:` between them — the deploy
-  # gate is bounded by the SLOWEST job, not by their sum. (Stated without a
-  # count on purpose: a number here goes stale the moment a job is added.)
+  # The jobs run side by side — the deploy gate is bounded by the SLOWEST job,
+  # not by their sum. The one chain is the e2e suite's: `e2e-plan` (seconds)
+  # before the shards, and `e2e-timings` after them.
   #
   # This structure is deliberately sized for where a project GOES, not for
   # the handful of specs a fresh clone ships with. Retrofitting sharding into
   # a grown codebase means restructuring CI, re-measuring shard balance and
   # re-testing the harness under time pressure — once per project. Doing it
   # here means every project born from this template inherits a pipeline that
-  # already scales, and the only knob anyone has to touch is the shard count.
+  # already scales, with no shard count for anyone to maintain.
 
   # Everything that needs no database.
   quality:
@@ -123,29 +123,65 @@ jobs:
   # so 50% is 1 worker there and sharding does the real work in CI — the
   # in-runner parallelism is what keeps a developer's local full run fast.
   #
-  # SHARD COUNT is the knob. `--shard` splits by FILE, not by duration, so
-  # splits are lumpy and more shards is not monotonically better — a reshuffle
-  # can regroup the slow specs and make things worse. Re-measure instead of
-  # guessing when the suite grows:
+  # SHARDS ARE PLANNED, not configured. `e2e-plan` reads how long each spec
+  # took on the last recorded run, picks as many shards as keep each near its
+  # time budget, and deals the specs out longest first onto the lightest shard
+  # (scripts/e2e-shards.ts holds the budget, the cap and the reasoning). The
+  # suite growing adds a shard by itself; nobody edits a count. Jest's own
+  # `--shard` is not used: it splits by file, not duration, and one shard
+  # collected the slow specs and ran past the timeout while another finished
+  # in a third of the time.
   #
-  #   for s in 1 2 3 4; do yarn test:e2e --shard=$s/4 --listTests; done
-  #
-  # then weigh the slowest shard against ~2 min of per-shard install + build
-  # overhead. Four is a sane default here; a large suite may want more.
+  # The plan is made ONCE per run and handed to every shard as an explicit
+  # file list, so every spec runs on exactly one shard, and "Re-run failed
+  # jobs" reruns a shard with the same files (it reuses e2e-plan's output).
+  e2e-plan:
+    name: Plan E2E shards
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # No install: Node 24 runs the planner's TypeScript directly, and it
+      # imports nothing outside Node itself.
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # The newest timings any earlier run saved (see e2e-timings). The key
+      # never matches, so `restore-keys` picks the most recent entry. A miss is
+      # fine: the planner estimates every spec from its size.
+      - name: Restore spec timings
+        uses: actions/cache/restore@v6
+        with:
+          path: .e2e-timings
+          key: e2e-timings-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: e2e-timings-
+
+      - name: Plan shards
+        id: plan
+        run: node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON .github/scripts/e2e-shards.mjs plan --timings .e2e-timings/timings.json
+
   e2e:
     name: E2E (shard ${{ matrix.shard }}/${{ strategy.job-total }})
+    needs: e2e-plan
     runs-on: ubuntu-latest
-    # If a shard ever trips this, add a shard — don't raise the ceiling.
+    # A runaway-job guard, NOT a capacity knob: the plan keeps each shard well
+    # inside it, and grows the shard count as the suite grows. If a shard trips
+    # it, a spec got stuck or ran far past its recorded time — find out which
+    # rather than raising the number.
     timeout-minutes: 15
 
     strategy:
       # One shard failing must not cancel the others: a partial result turns
       # "which tests are broken?" into a second CI round-trip.
       fail-fast: false
-      # The divisor below is `strategy.job-total`, so changing this list is
-      # the ONLY edit needed to re-shard — the two can never disagree.
-      matrix:
-        shard: [1, 2, 3, 4]
+      matrix: ${{ fromJSON(needs.e2e-plan.outputs.matrix) }}
 
     steps:
       - name: Checkout
@@ -185,8 +221,28 @@ jobs:
       - name: Generate Prisma client
         run: yarn prisma:generate
 
+      # The file list goes through `env`, never `${{ }}` inside the script, and
+      # is left unquoted on purpose so the shell splits it into paths: the
+      # planner refuses any spec path holding a character the shell would
+      # split or expand. `--json` records each spec's time for e2e-timings; the
+      # file sits at the root because Jest does not create a missing directory
+      # for it, and fails the run after the tests pass.
       - name: E2E tests
-        run: yarn test:e2e --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+        env:
+          E2E_FILES: ${{ matrix.files }}
+          E2E_SHARD: ${{ matrix.shard }}
+        run: yarn test:e2e --runTestsByPath $E2E_FILES --json --outputFile="e2e-results-$E2E_SHARD.json"
+
+      # Uploaded on a test failure too: a failed spec's time is still a time.
+      # A shard that hits its timeout writes nothing, and keeps its last times.
+      - name: Upload spec timings
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-results-${{ matrix.shard }}
+          path: e2e-results-${{ matrix.shard }}.json
+          if-no-files-found: ignore
+          retention-days: 1
 
       # Container logs are the first thing you want when the failure is
       # "Postgres never came up" rather than "an assertion failed", and they
@@ -194,6 +250,52 @@ jobs:
       - name: Dump container logs on failure
         if: failure()
         run: docker compose --env-file .env.test logs --no-color --tail=200
+
+  # Saves this run's spec times for the next run's plan: this run's time for
+  # every spec that reported one, the previous time for any that did not, and
+  # nothing for a deleted spec. Never blocks the gate — losing a timings update
+  # only means the next plan uses older numbers.
+  e2e-timings:
+    name: Record E2E timings
+    needs: [e2e-plan, e2e]
+    if: ${{ !cancelled() && needs.e2e-plan.result == 'success' }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Restore spec timings
+        uses: actions/cache/restore@v6
+        with:
+          path: .e2e-timings
+          key: e2e-timings-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: e2e-timings-
+
+      - name: Download spec timings
+        uses: actions/download-artifact@v8
+        with:
+          pattern: e2e-results-*
+          path: e2e-results
+          merge-multiple: true
+
+      - name: Record timings
+        run: node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON .github/scripts/e2e-shards.mjs record --timings .e2e-timings/timings.json --results e2e-results
+
+      # A cache entry cannot be overwritten, so each run saves its own key and
+      # the next restore takes the newest by prefix.
+      - name: Save spec timings
+        uses: actions/cache/save@v6
+        with:
+          path: .e2e-timings
+          key: e2e-timings-${{ github.run_id }}-${{ github.run_attempt }}
 
   # The application refuses to boot when the permission catalog in the code
   # and the rows in the database disagree, so this runs on a throwaway
